@@ -1,5 +1,18 @@
 {
   "appId": "com.sahil.anilab",
   "appName": "AniLab",
-  "webDir": "dist"
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "server": {
+    "allowNavigation": [
+      "anilab-backend.onrender.com",
+      "*.burntburst45.store",
+      "*.echovideo.ru",
+      "aniwaves.ru"
+    ]
+  }
 }
