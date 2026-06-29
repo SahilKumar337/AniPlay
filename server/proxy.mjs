@@ -831,9 +831,11 @@ async function scrapeAniNeko(title, episode) {
  * Scrapes the raw .m3u8 playlist URL from GogoCDN/other player embed pages if available in plain-text.
  */
 async function resolveServerM3U8(videoUrl) {
+  const urlSnippet = videoUrl.slice(0, 70);
   try {
     const referer = new URL(videoUrl).origin;
-    const html = await xfetch(videoUrl, { referer, timeout: 15000 });
+    console.log(`[M3U8 Resolver] Resolving: ${urlSnippet}`);
+    const html = await xfetch(videoUrl, { referer, timeout: 3500 });
     const match =
       // Direct string assignment
       html.match(/const\s+src\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i)
@@ -849,10 +851,12 @@ async function resolveServerM3U8(videoUrl) {
       if (!m3u8Url.startsWith('http')) {
         m3u8Url = new URL(m3u8Url, videoUrl).href;
       }
+      console.log(`[M3U8 Resolver] Found m3u8 for: ${urlSnippet}`);
       return m3u8Url;
     }
+    console.log(`[M3U8 Resolver] No m3u8 pattern in: ${urlSnippet}`);
   } catch (e) {
-    console.warn(`[M3U8 Resolver] Failed for ${videoUrl}:`, e.message);
+    console.warn(`[M3U8 Resolver] Failed for ${urlSnippet}:`, e.message);
   }
   return null;
 }
