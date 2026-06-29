@@ -53,6 +53,8 @@ async function gql(query, variables = {}) {
 const MEDIA_FIELDS = `
   id idMal
   title { romaji english native }
+  synonyms
+  description
   coverImage { large extraLarge color }
   bannerImage
   genres averageScore episodes status format

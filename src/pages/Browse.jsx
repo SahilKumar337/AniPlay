@@ -8,6 +8,7 @@ import {
 } from '../api/anilist';
 import { useApp }       from '../context/AppContext';
 import { rankAnimeByKnn } from '../utils/knn';
+import { searchAndRankAnime } from '../utils/searchEngine';
 import { useDebounce }  from '../hooks/useDebounce';
 import Navbar from '../components/Navbar';
 
@@ -58,13 +59,36 @@ export default function Browse() {
   const doSearch = useCallback(async () => {
     setLoading(true);
     try {
-      // If user typed a search query or selected any filters, use searchAnime
       if (debounced || genre || format || status) {
-        const r = await searchAnime(
-          debounced || null, 1, 24,
+        // Fetch direct AniList search results
+        const searchResults = await searchAnime(
+          debounced || null, 1, 30,
           genre, format, status
         );
-        setResults(r);
+
+        let finalCandidates = searchResults;
+
+        // If searching text, also pull from a popular/trending pool to ensure synonyms/genres match
+        if (debounced) {
+          const [trending, popular] = await Promise.all([
+            getTrending(1, 40).catch(() => []),
+            getMostPopular(1, 40).catch(() => [])
+          ]);
+
+          // Combine and deduplicate
+          const combined = [...searchResults, ...trending, ...popular];
+          const seen = new Set();
+          finalCandidates = combined.filter(item => {
+            if (!item || seen.has(item.id)) return false;
+            seen.add(item.id);
+            return true;
+          });
+
+          // Run our 4-layer fused matching ranking engine
+          finalCandidates = searchAndRankAnime(debounced, finalCandidates);
+        }
+
+        setResults(finalCandidates);
       } else if (category) {
         // Fetch specific category
         let r = [];
@@ -105,7 +129,8 @@ export default function Browse() {
   const categoryTitle = category ? CATEGORY_TITLES[category] : null;
 
   // Personalize sorting using K-Nearest Neighbors based on recent watch history
-  const personalizedResults = rankAnimeByKnn(results, recentlyViewed);
+  // Only personalize if not actively typing a query (to keep typed results exact)
+  const personalizedResults = debounced ? results : rankAnimeByKnn(results, recentlyViewed);
 
   return (
     <div className="page fade-in-up">
