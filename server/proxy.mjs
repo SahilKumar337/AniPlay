@@ -121,6 +121,70 @@ async function getPlaywrightBrowser() {
   }
 }
 
+async function playwrightFetch(url, referer = '') {
+  console.log(`[Playwright Fetch] Navigating to: ${url}`);
+  const browser = await getPlaywrightBrowser();
+  if (!browser) {
+    throw new Error('Playwright browser is not initialized');
+  }
+
+  const extraHTTPHeaders = {};
+  if (referer) {
+    extraHTTPHeaders['Referer'] = referer;
+  }
+
+  const context = await browser.newContext({
+    userAgent: UA,
+    extraHTTPHeaders
+  });
+
+  const page = await context.newPage();
+  try {
+    // Navigate with a generous timeout
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    // Check if we hit a Cloudflare challenge
+    let title = await page.title();
+    let isChallenge = title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!');
+
+    if (isChallenge) {
+      console.log(`[Playwright Fetch] Cloudflare challenge detected. Waiting for it to resolve...`);
+      let solved = false;
+      for (let i = 0; i < 80; i++) {
+        await page.waitForTimeout(100);
+        title = await page.title();
+        if (!title.includes('Cloudflare') && !title.includes('Just a moment') && !title.includes('Attention Required!')) {
+          solved = true;
+          break;
+        }
+      }
+      if (solved) {
+        console.log(`[Playwright Fetch] Cloudflare solved! New title: "${title}"`);
+      } else {
+        console.warn(`[Playwright Fetch] Cloudflare challenge timed out.`);
+      }
+    }
+
+    // Retrieve page content
+    const bodyText = await page.evaluate(() => document.body.innerText || '');
+    let content;
+    if (bodyText.trim().startsWith('{') || bodyText.trim().startsWith('[')) {
+      content = bodyText;
+    } else {
+      content = await page.content();
+    }
+
+    await page.close();
+    await context.close();
+    return content;
+  } catch (e) {
+    await page.close();
+    await context.close();
+    throw e;
+  }
+}
+
+
 async function playwrightExtractM3U8(embedUrl) {
   const cached = streamUrlCache.get(embedUrl);
   if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL) {
@@ -424,6 +488,13 @@ function json(res, code, data) {
 // ── Smart fetch with cookie persistence ──────────────────────────
 let globalCookie = '';
 async function xfetch(url, opts = {}) {
+  if (url.includes('aniwaves.ru') || url.includes('aniwave.')) {
+    try {
+      return await playwrightFetch(url, opts.referer);
+    } catch (e) {
+      console.warn(`[xfetch] Playwright fetch failed for ${url}, trying standard fetch fallback:`, e.message);
+    }
+  }
   const r = await fetch(url, {
     signal: AbortSignal.timeout(opts.timeout || 45000),
     headers: {
@@ -864,15 +935,16 @@ async function resolveServerM3U8(videoUrl) {
 // ══════════════════════════════════════════════════════════════════
 async function getServers(titles, episode) {
   const errors = [];
-  let result = null;
+  
+  let aniNekoData = null;
+  let aniWavesData = null;
 
-  // Phase 1: Try AniNeko FIRST (uses GogoAnime CDN, no Cloudflare blocking on server-side)
-  // AniWaves uses Vidplay/EchoVideo which blocks our proxy via Cloudflare — use as fallback only
+  // 1. Scraping AniNeko
   for (const title of titles) {
     if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
     try {
       console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
-      result = await scrapeAniNeko(title, episode);
+      aniNekoData = await scrapeAniNeko(title, episode);
       break;
     } catch (e) {
       console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
@@ -880,23 +952,46 @@ async function getServers(titles, episode) {
     }
   }
 
-  // Phase 2: Try AniWaves as fallback (Vidplay embeds — iframe-proxy approach)
-  if (!result) {
-    for (const title of titles) {
-      try {
-        console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
-        result = await scrapeAniWaves(title, episode);
-        break;
-      } catch (e) {
-        console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
-        errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
-      }
+  // 2. Scraping AniWaves (Uses Playwright-backed xfetch to bypass Cloudflare)
+  for (const title of titles) {
+    try {
+      console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
+      aniWavesData = await scrapeAniWaves(title, episode);
+      break;
+    } catch (e) {
+      console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
+      errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
     }
   }
 
-  if (!result) {
+  // 3. Combine servers from both scrapers
+  const combinedServers = [];
+  if (aniNekoData?.servers?.length) {
+    aniNekoData.servers.forEach(s => {
+      combinedServers.push({
+        ...s,
+        name: `Neko ${s.name}`
+      });
+    });
+  }
+  if (aniWavesData?.servers?.length) {
+    aniWavesData.servers.forEach(s => {
+      combinedServers.push({
+        ...s,
+        name: `Waves ${s.name}`
+      });
+    });
+  }
+
+  if (combinedServers.length === 0) {
     throw new Error(errors.join(' | '));
   }
+
+  const result = {
+    servers: combinedServers,
+    animeTitle: aniNekoData?.animeTitle || aniWavesData?.animeTitle || titles[0],
+    slug: aniNekoData?.slug || aniWavesData?.slug || ''
+  };
 
   // Resolve M3U8 streams concurrently
   console.log(`[Engine] Resolving HLS streams for ${result.servers.length} servers...`);
