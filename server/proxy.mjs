@@ -854,7 +854,9 @@ const server = createServer(async (req, res) => {
       });
       return res.end(html);
     } catch (e) {
-      return json(res, 500, { error: e.message });
+      console.warn(`[Iframe Proxy] Proxy failed for ${targetUrl}, redirecting client directly:`, e.message);
+      res.writeHead(302, { 'Location': targetUrl });
+      return res.end();
     }
   }
 
