@@ -121,36 +121,55 @@ async function getPlaywrightBrowser() {
   }
 }
 
+let playwrightContext = null;
+async function getPlaywrightContext() {
+  const browser = await getPlaywrightBrowser();
+  if (!browser) return null;
+  
+  if (!playwrightContext) {
+    playwrightContext = await browser.newContext({
+      userAgent: UA,
+      viewport: { width: 1280, height: 720 }
+    });
+
+    console.log('[Playwright] Priming shared context with AniWaves homepage...');
+    const page = await playwrightContext.newPage();
+    try {
+      await page.goto(AW, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await page.waitForTimeout(4000); // Allow time for CF challenge to execute
+      console.log('[Playwright] Shared context priming completed successfully.');
+    } catch (e) {
+      console.warn('[Playwright] Context priming failed:', e.message);
+    } finally {
+      await page.close();
+    }
+  }
+  return playwrightContext;
+}
+
 async function playwrightFetch(url, referer = '') {
   console.log(`[Playwright Fetch] Navigating to: ${url}`);
-  const browser = await getPlaywrightBrowser();
-  if (!browser) {
-    throw new Error('Playwright browser is not initialized');
+  const context = await getPlaywrightContext();
+  if (!context) {
+    throw new Error('Playwright context is not initialized');
   }
-
-  const extraHTTPHeaders = {};
-  if (referer) {
-    extraHTTPHeaders['Referer'] = referer;
-  }
-
-  const context = await browser.newContext({
-    userAgent: UA,
-    extraHTTPHeaders
-  });
 
   const page = await context.newPage();
   try {
-    // Navigate with a generous timeout
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (referer) {
+      await page.setExtraHTTPHeaders({ 'Referer': referer });
+    }
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
     // Check if we hit a Cloudflare challenge
     let title = await page.title();
     let isChallenge = title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!');
 
     if (isChallenge) {
-      console.log(`[Playwright Fetch] Cloudflare challenge detected. Waiting for it to resolve...`);
+      console.log(`[Playwright Fetch] Cloudflare challenge detected for ${url}. Waiting...`);
       let solved = false;
-      for (let i = 0; i < 80; i++) {
+      for (let i = 0; i < 60; i++) {
         await page.waitForTimeout(100);
         title = await page.title();
         if (!title.includes('Cloudflare') && !title.includes('Just a moment') && !title.includes('Attention Required!')) {
@@ -165,7 +184,6 @@ async function playwrightFetch(url, referer = '') {
       }
     }
 
-    // Retrieve page content
     const bodyText = await page.evaluate(() => document.body.innerText || '');
     let content;
     if (bodyText.trim().startsWith('{') || bodyText.trim().startsWith('[')) {
@@ -175,14 +193,13 @@ async function playwrightFetch(url, referer = '') {
     }
 
     await page.close();
-    await context.close();
     return content;
   } catch (e) {
     await page.close();
-    await context.close();
     throw e;
   }
 }
+
 
 
 async function playwrightExtractM3U8(embedUrl) {
@@ -933,36 +950,58 @@ async function resolveServerM3U8(videoUrl) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+async function runWithTimeout(promise, ms, name) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${name} timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      res => { clearTimeout(timer); resolve(res); },
+      err => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 async function getServers(titles, episode) {
   const errors = [];
   
-  let aniNekoData = null;
-  let aniWavesData = null;
-
-  // 1. Scraping AniNeko
-  for (const title of titles) {
-    if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
-    try {
-      console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
-      aniNekoData = await scrapeAniNeko(title, episode);
-      break;
-    } catch (e) {
-      console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
-      errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
+  // 1. Define AniNeko scraper execution
+  const nekoPromise = (async () => {
+    for (const title of titles) {
+      if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
+      try {
+        console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
+        const data = await scrapeAniNeko(title, episode);
+        if (data?.servers?.length) return data;
+      } catch (e) {
+        console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
+        errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
+      }
     }
-  }
+    return null;
+  })();
 
-  // 2. Scraping AniWaves (Uses Playwright-backed xfetch to bypass Cloudflare)
-  for (const title of titles) {
-    try {
-      console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
-      aniWavesData = await scrapeAniWaves(title, episode);
-      break;
-    } catch (e) {
-      console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
-      errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
+  // 2. Define AniWaves scraper execution (uses Playwright-backed xfetch)
+  const wavesPromise = (async () => {
+    for (const title of titles) {
+      try {
+        console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
+        const data = await scrapeAniWaves(title, episode);
+        if (data?.servers?.length) return data;
+      } catch (e) {
+        console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
+        errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
+      }
     }
-  }
+    return null;
+  })();
+
+  // 3. Execute both scrapers concurrently. Limit AniWaves to 6.5s to prevent stalling.
+  const [aniNekoData, aniWavesData] = await Promise.all([
+    runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(wavesPromise, 6500, 'AniWaves').catch(e => { console.warn(e.message); return null; })
+  ]);
+
 
   // 3. Combine servers from both scrapers
   const combinedServers = [];
