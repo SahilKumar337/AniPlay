@@ -174,8 +174,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         }
       });
 
-      hls.attachMedia(v);
-
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
         log('Media attached to Hls.js, loading source...');
         hls.loadSource(url);
@@ -198,6 +196,8 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
             label: t.name || t.lang || `Track ${i + 1}`
           })));
       });
+
+      hls.attachMedia(v);
 
     } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
       log('Native HLS support detected (Safari/iOS), playing directly...');
