@@ -169,8 +169,14 @@ async function puppeteerExtractM3U8(embedUrl) {
         }
       });
 
-      // Navigate to embed page - only wait for domcontentloaded which is extremely fast
-      await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      // Navigate to embed page - wait for domcontentloaded first, then networkidle
+      try {
+        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
+      } catch (navErr) {
+        // Timeout is OK — the page might still be loading assets
+        if (!navErr.message.includes('timeout')) throw navErr;
+        console.warn('[Puppeteer] Navigation timeout — continuing anyway');
+      }
 
       if (resolved) return;
 
@@ -199,8 +205,8 @@ async function puppeteerExtractM3U8(embedUrl) {
         console.warn('[Puppeteer] Click play button failed:', e.message);
       }
 
-      // Wait up to 5 seconds for any final lazy requests to load
-      for (let i = 0; i < 10; i++) {
+      // Wait up to 12 seconds for any lazy player requests to load
+      for (let i = 0; i < 24; i++) {
         await new Promise(r => setTimeout(r, 500));
         if (resolved) return;
       }
@@ -793,14 +799,14 @@ export async function handleRequest(req, res) {
 
       console.log(`[Iframe Proxy Asset] Forwarded response for ${req.url}: Status ${sRes.status} (${sRes.headers.get('content-type')})`);
       
-      if (req.url.includes('/api/getSources')) {
-        const bodyText = await sRes.text();
-        console.log(`[Iframe Proxy Asset] getSources body snippet:`, bodyText.slice(0, 300));
-        res.writeHead(sRes.status, {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        });
-        return res.end(bodyText);
+      if (req.url.includes('/api/getSources') || req.url.includes('/ajax/getSources')) {
+        // The injected script should rewrite these to go direct, but if they still come through
+        // our proxy, redirect the browser directly to the embed server so Cloudflare sees a real browser IP
+        const directUrl = `${targetOrigin}${req.url}`;
+        console.log(`[Iframe Proxy Asset] getSources: redirecting browser direct to ${directUrl}`);
+        cors(res);
+        res.writeHead(307, { 'Location': directUrl, 'Access-Control-Allow-Origin': '*' });
+        return res.end();
       }
 
       const isStatic = req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/i);
@@ -834,72 +840,126 @@ export async function handleRequest(req, res) {
       html = html.replace(/(<script[^>]+src=["'])([^"']+\.js)(["'])/gi, `$1$2?_cb=${cb}$3`);
       html = html.replace(/(<link[^>]+href=["'])([^"']+\.css)(["'])/gi, `$1$2?_cb=${cb}$3`);
       
+      // Detect the actual origin of the embed server from the targetUrl
+      const embedOrigin = new URL(targetUrl).origin;
+
       const injectedScript = `
 <script>
   (function() {
+    // The REAL embed server origin — getSources calls will go here directly from browser
+    var EMBED_ORIGIN = '${embedOrigin}';
+
+    // ── Send stream URL to parent page ──────────────────────────
+    var _sentUrls = new Set();
     function checkAndSend(src) {
-      if (src && typeof src === 'string') {
-        let absoluteUrl = src;
-        try {
-          absoluteUrl = new URL(src, window.location.href).href;
-        } catch(e) {}
-        if (absoluteUrl.includes('.m3u8') || absoluteUrl.includes('.mp4') || absoluteUrl.includes('.mkv')) {
-          console.log('[Iframe Interceptor] Captured video stream URL:', absoluteUrl);
-          window.parent.postMessage({ type: 'NATIVE_STREAM_URL', url: absoluteUrl }, '*');
-        }
+      if (!src || typeof src !== 'string' || _sentUrls.has(src)) return;
+      var absoluteUrl = src;
+      try { absoluteUrl = new URL(src, EMBED_ORIGIN + '/').href; } catch(e) {}
+      if (absoluteUrl.includes('.m3u8') || absoluteUrl.includes('.mp4')) {
+        _sentUrls.add(src);
+        console.log('[Iframe Interceptor] Stream URL:', absoluteUrl.slice(0, 120));
+        window.parent.postMessage({ type: 'NATIVE_STREAM_URL', url: absoluteUrl }, '*');
       }
     }
 
-    // Intercept fetch
-    const originalFetch = window.fetch;
+    // ── Helper: rewrite API URLs to go direct (bypass proxy) ────
+    // play.echovideo.ru (and Vidplay/Vidstream) blocks server-side proxy IPs via Cloudflare.
+    // Solution: have the BROWSER make getSources directly using the user's residential IP.
+    function rewriteApiUrl(url) {
+      if (!url || typeof url !== 'string') return url;
+      // Rewrite relative API paths to absolute embed-origin URLs
+      if (url.startsWith('/api/getSources') || url.startsWith('/ajax/getSources') ||
+          url.startsWith('/api/getApiKey')  || url.startsWith('/ajax/getApiKey') ||
+          url.startsWith('/api/encrypt-ajax') || url.startsWith('/encrypt-ajax')) {
+        return EMBED_ORIGIN + url;
+      }
+      return url;
+    }
+
+    // ── Intercept fetch ──────────────────────────────────────────
+    var originalFetch = window.fetch;
     window.fetch = function(input, init) {
-      let url = '';
-      if (typeof input === 'string') {
-        url = input;
-      } else if (input && input.url) {
-        url = input.url;
-      }
+      var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+      url = rewriteApiUrl(url);
       checkAndSend(url);
-      return originalFetch.apply(this, arguments);
+      if (typeof input === 'string') input = url;
+      return originalFetch.call(this, input, init);
     };
 
-    // Intercept XMLHttpRequest
-    const originalOpen = XMLHttpRequest.prototype.open;
+    // ── Intercept XMLHttpRequest.open ────────────────────────────
+    var originalOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
+      url = rewriteApiUrl(url) || url;
       checkAndSend(url);
-      return originalOpen.apply(this, arguments);
+      return originalOpen.call(this, method, url, arguments[2], arguments[3], arguments[4]);
     };
 
-    // Fallback: Intercept DOM video element src
-    const originalSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-    if (originalSrcDescriptor) {
+    // ── Intercept HTMLMediaElement.src ───────────────────────────
+    var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+    if (srcDesc) {
       Object.defineProperty(HTMLMediaElement.prototype, 'src', {
-        get: originalSrcDescriptor.get,
-        set: function(val) {
-          checkAndSend(val);
-          return originalSrcDescriptor.set.call(this, val);
-        },
+        get: srcDesc.get,
+        set: function(val) { checkAndSend(val); return srcDesc.set.call(this, val); },
         configurable: true
       });
     }
-    const originalSetAttribute = Element.prototype.setAttribute;
+
+    // ── Intercept setAttribute src ───────────────────────────────
+    var origSetAttr = Element.prototype.setAttribute;
     Element.prototype.setAttribute = function(name, val) {
-      if (name === 'src' && (this.tagName === 'VIDEO' || this.tagName === 'SOURCE')) {
-        checkAndSend(val);
-      }
-      return originalSetAttribute.apply(this, arguments);
+      if (name === 'src' && (this.tagName === 'VIDEO' || this.tagName === 'SOURCE')) checkAndSend(val);
+      return origSetAttr.apply(this, arguments);
     };
-    const originalSourceSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
-    if (originalSourceSrcDescriptor) {
+
+    // ── Intercept HTMLSourceElement.src ─────────────────────────
+    var srcDescSE = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
+    if (srcDescSE) {
       Object.defineProperty(HTMLSourceElement.prototype, 'src', {
-        get: originalSourceSrcDescriptor.get,
-        set: function(val) {
-          checkAndSend(val);
-          return originalSourceSrcDescriptor.set.call(this, val);
-        },
+        get: srcDescSE.get,
+        set: function(val) { checkAndSend(val); return srcDescSE.set.call(this, val); },
         configurable: true
       });
     }
+
+    // ── Intercept jwplayer setup (belt-and-suspenders) ───────────
+    // JWPlayer gets the m3u8 from getSources JSON and configures itself.
+    // Intercept jwplayer() to catch the .setup({sources:[{file:"...m3u8"}]}) call.
+    function patchJWPlayer(jwp) {
+      if (!jwp || jwp.__anilab_patched) return;
+      jwp.__anilab_patched = true;
+      var origCall = jwp;
+      window.jwplayer = function() {
+        var instance = origCall.apply(this, arguments);
+        if (instance && instance.setup && !instance.__anilab_patched) {
+          instance.__anilab_patched = true;
+          var origSetup = instance.setup.bind(instance);
+          instance.setup = function(config) {
+            if (config) {
+              // Check sources directly
+              var sources = config.sources || (config.playlist && config.playlist[0] && config.playlist[0].sources);
+              if (sources) {
+                for (var i = 0; i < sources.length; i++) {
+                  if (sources[i].file) checkAndSend(sources[i].file);
+                }
+              }
+            }
+            return origSetup(config);
+          };
+        }
+        return instance;
+      };
+      window.jwplayer.__anilab_patched = true;
+    }
+
+    // Watch for jwplayer to be defined (it loads async)
+    var jwInterval = setInterval(function() {
+      if (window.jwplayer && !window.jwplayer.__anilab_patched) {
+        patchJWPlayer(window.jwplayer);
+        clearInterval(jwInterval);
+      }
+    }, 100);
+    setTimeout(function() { clearInterval(jwInterval); }, 15000);
+
   })();
 </script>
 `;
