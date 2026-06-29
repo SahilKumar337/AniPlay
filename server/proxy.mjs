@@ -638,14 +638,16 @@ async function getServers(titles, episode) {
   console.log(`[Engine] Resolving HLS streams for ${result.servers.length} servers...`);
   const resolvedServers = await Promise.all(
     result.servers.map(async s => {
-      const m3u8Url = await resolveServerM3U8(s.videoUrl);
-      if (m3u8Url) {
-        const proxiedUrl = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(new URL(s.videoUrl).origin)}`;
-        return {
-          ...s,
-          videoUrl: proxiedUrl,
-          isHLS: true
-        };
+      if (s.videoUrl && s.videoUrl.startsWith('http') && !s.videoUrl.includes('/api/')) {
+        const m3u8Url = await resolveServerM3U8(s.videoUrl);
+        if (m3u8Url) {
+          const proxiedUrl = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(new URL(s.videoUrl).origin)}`;
+          return {
+            ...s,
+            videoUrl: proxiedUrl,
+            isHLS: true
+          };
+        }
       }
       return s; // Fallback to iframe
     })
@@ -691,19 +693,28 @@ export async function handleRequest(req, res) {
     console.log(`[Iframe Proxy Asset] Forwarding: ${req.url} -> ${targetUrl} (Referer: ${forwardReferer})`);
     
     try {
-      const headersToForward = {
-        'User-Agent': UA,
-        'Referer': forwardReferer,
-      };
-      if (req.headers['x-requested-with']) {
-        headersToForward['X-Requested-With'] = req.headers['x-requested-with'];
+      const headersToForward = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        const lowerKey = key.toLowerCase();
+        if (
+          lowerKey === 'host' || 
+          lowerKey === 'connection' || 
+          lowerKey === 'content-length' || 
+          lowerKey === 'cookie' || 
+          lowerKey === 'referer' || 
+          lowerKey === 'origin'
+        ) {
+          continue;
+        }
+        headersToForward[key] = value;
       }
-      if (req.headers['accept']) {
-        headersToForward['Accept'] = req.headers['accept'];
-      }
+
+      headersToForward['User-Agent'] = UA;
+      headersToForward['Referer'] = forwardReferer;
       if (req.headers['origin']) {
         headersToForward['Origin'] = targetOrigin;
       }
+
       let clientCookie = req.headers.cookie || '';
       let mergedCookie = '';
       if (globalCookie) {
