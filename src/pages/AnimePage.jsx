@@ -8,7 +8,7 @@ import {
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 import AnimeCard from '../components/AnimeCard';
-import Navbar from '../components/Navbar';
+
 
 export default function AnimePage() {
   const { id }   = useParams();
@@ -17,13 +17,21 @@ export default function AnimePage() {
     addToWatchlist, removeFromWatchlist, isInWatchlist,
     toggleFavorite, isFavorite, getEpisodeProgress,
   } = useApp();
-
   const [anime,    setAnime]    = useState(null);
   const [state,    setState]    = useState('loading');
   const [errMsg,   setErrMsg]   = useState('');
   const [tab,      setTab]      = useState('episodes');
   const [synOpen,  setSynOpen]  = useState(false);
   const [epQuery,  setEpQuery]  = useState('');
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 60);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -53,7 +61,6 @@ export default function AnimePage() {
           <button className="btn btn-primary" onClick={load}><RefreshCw size={15} /> Retry</button>
           <button className="btn btn-outline" onClick={() => navigate(-1)}>Go Back</button>
         </div>
-        <Navbar />
       </div>
     );
   }
@@ -61,7 +68,6 @@ export default function AnimePage() {
   /* ── Data ──────────────────────────────────────────────────── */
   const title   = getTitle(anime);
   const cover   = getCover(anime);
-  const banner  = anime.bannerImage || cover;
   const score   = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
   const eps     = anime.episodes || 0;
   const studios = anime.studios?.nodes?.map(s => s.name).join(', ') || '';
@@ -80,54 +86,90 @@ export default function AnimePage() {
   return (
     <div className="page" style={{ position: 'relative' }}>
 
-      {/* ════════════════════════════════════════
-          HERO IMAGE (full-width)
-      ════════════════════════════════════════ */}
-      <div style={{ position: 'relative', width: '100%', height: 280, overflow: 'hidden', background: '#111' }}>
-        <img
-          src={banner} alt={title}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }}
-          onError={e => { if (e.target.src !== cover) e.target.src = cover; }}
-        />
-        {/* Gradient fade to black at bottom */}
-        <div style={{
-          position: 'absolute', inset: 0,
-          background: 'linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(15,15,15,0.7) 70%, rgba(15,15,15,1) 100%)',
-        }} />
-
-        {/* Back button */}
+      {/* ── Fixed Premium Header ─────────────────────────────────── */}
+      <div style={{
+        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', right: 0, zIndex: 90,
+        width: '100%', maxWidth: 430,
+        padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: scrolled ? 'rgba(15, 15, 15, 0.75)' : 'rgba(15, 15, 15, 0)',
+        backdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
+        WebkitBackdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
+        borderBottom: scrolled ? '1px solid var(--border)' : '1px solid rgba(255, 255, 255, 0)',
+        transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+        pointerEvents: 'none',
+      }}>
         <button
           onClick={() => navigate(-1)} id="detail-back"
-          style={{
-            position: 'absolute', top: 14, left: 14,
-            width: 36, height: 36, borderRadius: '50%',
-            background: 'rgba(0,0,0,0.6)', border: 'none',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', backdropFilter: 'blur(6px)',
-          }}
-        ><ArrowLeft size={18} color="#fff" /></button>
-      </div>
+          className="floating-btn"
+          style={{ pointerEvents: 'all' }}
+          aria-label="Go back"
+        ><ArrowLeft size={18} /></button>
 
-      {/* ════════════════════════════════════════
-          TITLE ROW
-      ════════════════════════════════════════ */}
-      <div style={{ padding: '12px 16px 0', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 900, fontFamily: 'var(--font-brand)', lineHeight: 1.2, flex: 1 }}>
+        {/* Title visible only when scrolled */}
+        <div style={{
+          flex: 1, textAlign: 'center', padding: '0 12px',
+          opacity: scrolled ? 1 : 0,
+          transform: scrolled ? 'translateY(0)' : 'translateY(-10px)',
+          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          fontWeight: 800, fontSize: 15, color: '#fff',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          fontFamily: 'var(--font-brand)'
+        }}>
           {title}
-        </h1>
-        <div style={{ display: 'flex', gap: 10, marginTop: 2, flexShrink: 0 }}>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
           <button
             onClick={() => toggleFavorite(anime.id)} id={`fav-${anime.id}`}
             aria-label="Bookmark"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}
+            className="floating-btn"
           >
-            <Bookmark size={22} color={fav ? '#e50914' : 'var(--text-secondary)'} fill={fav ? '#e50914' : 'none'} />
+            <Bookmark size={18} color={fav ? '#e50914' : '#fff'} fill={fav ? '#e50914' : 'none'} />
           </button>
-          <button id="share-btn" aria-label="Share" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}>
-            <Share2 size={22} color="var(--text-secondary)" />
+          <button
+            id="share-btn"
+            aria-label="Share"
+            className="floating-btn"
+          >
+            <Share2 size={18} />
           </button>
         </div>
       </div>
+
+      {/* ── Content Wrapper with Entrance Animation ────────────────── */}
+      <div className="fade-in-up">
+        {/* ════════════════════════════════════════
+            HERO IMAGE (full-width)
+        ════════════════════════════════════════ */}
+        <div style={{ position: 'relative', width: '100%', height: 210, overflow: 'hidden', background: '#111' }}>
+          <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+            <img
+              src={cover} alt=""
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(20px) brightness(0.35)', transform: 'scale(1.15)', display: 'block' }}
+            />
+            <img
+              src={cover} alt={title}
+              style={{ height: '85%', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.65)', zIndex: 2, objectFit: 'contain' }}
+            />
+          </div>
+          {/* Gradient fade to black at bottom */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,15,15,0.6) 60%, rgba(15,15,15,1) 100%)',
+            pointerEvents: 'none',
+            zIndex: 3,
+          }} />
+        </div>
+
+        {/* ════════════════════════════════════════
+            TITLE ROW
+        ════════════════════════════════════════ */}
+        <div style={{ padding: '12px 16px 0' }}>
+          <h1 style={{ fontSize: 22, fontWeight: 900, fontFamily: 'var(--font-brand)', lineHeight: 1.2 }}>
+            {title}
+          </h1>
+        </div>
 
       {/* ════════════════════════════════════════
           META BADGES ROW
@@ -385,11 +427,9 @@ export default function AnimePage() {
             )}
           </div>
         )}
-
       </div>
-
-      <Navbar />
     </div>
+  </div>
   );
 }
 
@@ -414,7 +454,6 @@ function DetailSkeleton() {
           ))}
         </div>
       </div>
-      <Navbar />
     </div>
   );
 }

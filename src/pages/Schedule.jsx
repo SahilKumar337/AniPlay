@@ -3,7 +3,7 @@ import { Search } from 'lucide-react';
 import { getSchedule, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
-import Navbar from '../components/Navbar';
+
 import { Plus, Check } from 'lucide-react';
 
 function getDayLabel(ts) {
@@ -65,76 +65,81 @@ export default function Schedule() {
   };
 
   return (
-    <div className="page fade-in-up">
-      {/* Header */}
-      <div className="schedule-header">
-        <h1 className="schedule-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{
-            width: 28, height: 28, background: 'var(--accent)', borderRadius: 8,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 14, fontWeight: 900, fontFamily: 'var(--font-brand)',
-          }}>A</div>
-          Schedule
-        </h1>
-        <button className="icon-btn" onClick={() => navigate('/browse')} id="schedule-search" aria-label="Search">
-          <Search size={18} />
-        </button>
-      </div>
-
-      {/* Day Tabs */}
-      <div className="day-tabs">
-        {DAYS.map((day, idx) => (
-          <button
-            key={day}
-            className={`day-tab ${activeDay === idx ? 'active' : ''}`}
-            onClick={() => setActiveDay(idx)}
-            id={`day-tab-${day.toLowerCase()}`}
-          >
-            <span className="day-name">{day}</span>
-            <span className="day-num">{dayNum(idx)}</span>
+    <div className="page">
+      {/* Sticky Header Container */}
+      <div className="sticky-header">
+        {/* Header */}
+        <div className="schedule-header" style={{ paddingBottom: 8 }}>
+          <h1 className="schedule-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{
+              width: 28, height: 28, background: 'var(--accent)', borderRadius: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 14, fontWeight: 900, fontFamily: 'var(--font-brand)', color: '#fff'
+            }}>A</div>
+            Schedule
+          </h1>
+          <button className="floating-btn" onClick={() => navigate('/browse')} id="schedule-search" aria-label="Search">
+            <Search size={18} />
           </button>
-        ))}
+        </div>
+
+        {/* Day Tabs */}
+        <div className="day-tabs" style={{ paddingBottom: 10 }}>
+          {DAYS.map((day, idx) => (
+            <button
+              key={day}
+              className={`day-tab ${activeDay === idx ? 'active' : ''}`}
+              onClick={() => setActiveDay(idx)}
+              id={`day-tab-${day.toLowerCase()}`}
+            >
+              <span className="day-name">{day}</span>
+              <span className="day-num">{dayNum(idx)}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Timeline */}
-      {loading ? (
-        <div style={{ padding: 16 }}>
-          {[1,2,3,4].map(i => <SkeletonItem key={i} />)}
-        </div>
-      ) : dayItems.length === 0 ? (
-        <div className="empty-state">
-          <p className="empty-title">No schedule for this day</p>
-          <p className="empty-sub">Try another day</p>
-        </div>
-      ) : (
-        <div className="schedule-timeline">
-          {timeKeys.map(timeKey => {
-            const isCurrent = timeKey === currentHourKey;
-            return (
-              <div key={timeKey} className="time-group">
-                <div className={`time-label ${isCurrent ? 'current-time' : ''}`}>
-                  {timeKey}
-                  {isCurrent && <span style={{ fontSize: 11, marginLeft: 4 }}>— Current Time · {new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})}</span>}
-                  <div className="time-line" />
+      {/* Timeline Wrapper with Entrance Animation */}
+      <div className="fade-in-up">
+        {/* Timeline */}
+        {loading ? (
+          <div style={{ padding: 16 }}>
+            {[1,2,3,4].map(i => <SkeletonItem key={i} />)}
+          </div>
+        ) : dayItems.length === 0 ? (
+          <div className="empty-state">
+            <p className="empty-title">No schedule for this day</p>
+            <p className="empty-sub">Try another day</p>
+          </div>
+        ) : (
+          <div className="schedule-timeline">
+            {timeKeys.map(timeKey => {
+              const isCurrent = timeKey === currentHourKey;
+              return (
+                <div key={timeKey} className="time-group">
+                  <div className={`time-label ${isCurrent ? 'current-time' : ''}`}>
+                    {timeKey}
+                    {isCurrent && <span style={{ fontSize: 11, marginLeft: 4 }}>— Current Time · {new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})}</span>}
+                    <div className="time-line" />
+                  </div>
+                  {grouped[timeKey].map(item => (
+                    <ScheduleItem
+                      key={item.id}
+                      item={item}
+                      navigate={navigate}
+                      isInWatchlist={isInWatchlist}
+                      addToWatchlist={addToWatchlist}
+                      removeFromWatchlist={removeFromWatchlist}
+                      isPast={item.airingAt < now}
+                    />
+                  ))}
                 </div>
-                {grouped[timeKey].map(item => (
-                  <ScheduleItem
-                    key={item.id}
-                    item={item}
-                    navigate={navigate}
-                    isInWatchlist={isInWatchlist}
-                    addToWatchlist={addToWatchlist}
-                    removeFromWatchlist={removeFromWatchlist}
-                    isPast={item.airingAt < now}
-                  />
-                ))}
-              </div>
-            );
-          })}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </div>
 
-      <Navbar />
     </div>
   );
 }

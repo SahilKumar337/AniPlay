@@ -24,7 +24,7 @@
   --radius-xl:    24px;
   --shadow-card:  0 4px 20px rgba(0,0,0,0.5);
   --shadow-glow:  0 0 20px rgba(229,9,20,0.3);
-  --nav-height:   64px;
+  --nav-height:   56px;
   --transition:   0.2s ease;
   --font-main:    'Inter', sans-serif;
   --font-brand:   'Outfit', sans-serif;
@@ -65,7 +65,7 @@ ul, ol { list-style: none; }
 
 /* ---------- Page wrapper (with bottom nav space) ---------- */
 .page {
-  padding-bottom: calc(var(--nav-height) + 16px);
+  padding-bottom: calc(var(--nav-height) + 32px);
   min-height: 100vh;
   position: relative;
 }
@@ -342,43 +342,87 @@ ul, ol { list-style: none; }
 /* ---------- Navbar ---------- */
 .navbar {
   position: fixed;
-  bottom: 0; left: 50%;
+  bottom: 16px;
+  left: 50%;
   transform: translateX(-50%);
-  width: 100%;
-  max-width: 430px;
+  width: calc(100% - 32px);
+  max-width: 398px;
   height: var(--nav-height);
-  background: rgba(18,18,18,0.95);
-  backdrop-filter: blur(16px);
-  border-top: 1px solid var(--border);
+  background: rgba(20, 20, 20, 0.75);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   z-index: 100;
+  padding: 0 8px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .nav-items {
   display: flex;
   width: 100%;
-  justify-content: space-around;
+  height: 100%;
+  align-items: center;
+  justify-content: space-between;
 }
 .nav-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
+  justify-content: center;
+  gap: 3px;
+  height: 100%;
+  border-radius: 20px;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
   flex: 1;
 }
 .nav-item span {
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-muted);
-  transition: color var(--transition);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.1px;
 }
-.nav-item svg { color: var(--text-muted); transition: color var(--transition); }
-.nav-item.active svg { color: var(--accent); }
-.nav-item.active span { color: var(--accent); }
-.nav-item:hover svg, .nav-item:hover span { color: var(--text-primary); }
+.nav-item svg {
+  color: var(--text-muted);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-item.active svg {
+  color: var(--accent);
+  transform: translateY(-2px) scale(1.1);
+  filter: drop-shadow(0 2px 8px rgba(229, 9, 20, 0.5));
+}
+.nav-item.active span {
+  color: var(--accent);
+  transform: scale(1.05);
+  font-weight: 700;
+}
+.nav-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--accent);
+  animation: navDotPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes navDotPop {
+  0% { transform: scale(0); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.nav-item:hover:not(.active) svg {
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+.nav-item:hover:not(.active) span {
+  color: var(--text-primary);
+}
 
 /* ---------- Top Header ---------- */
 .top-header {
@@ -1042,6 +1086,41 @@ ul, ol { list-style: none; }
 }
 .genre-quick-pill:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ---------- Sticky Header ---------- */
+.sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  background: rgba(15, 15, 15, 0.75);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+  transition: all 0.3s ease;
+}
+
+.floating-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition);
+  color: #fff;
+}
+.floating-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(1.05);
+}
+.floating-btn:active {
+  transform: scale(0.95);
+}
+
 /* ---------- Animations ---------- */
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(20px); }
@@ -1060,7 +1139,7 @@ ul, ol { list-style: none; }
     max-width: 100%;
   }
   .navbar {
-    max-width: 100%;
+    max-width: 398px;
   }
 }
 

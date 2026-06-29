@@ -10,7 +10,13 @@
  * This is exactly how Anilab works: scrape → decrypt → proxy → play
  */
 
-const PROXY = 'http://localhost:4000/aniwatch';
+const PROXY_BASE = import.meta.env.VITE_PROXY_URL || (
+  window.location.port === '3000'
+    ? `http://${window.location.hostname}:4000`
+    : window.location.origin
+);
+
+const PROXY = `${PROXY_BASE}/aniwatch`;
 
 async function get(path) {
   const ctrl = new AbortController();
@@ -58,9 +64,8 @@ export async function hiSources(episodeId, server = 'vidstreaming', category = '
 /* ── Wrap the stream URL through the local proxy ──────────────── */
 export function toProxyUrl(url) {
   if (!url) return null;
-  // Already proxied
-  if (url.startsWith('http://localhost:4000')) return url;
-  return `http://localhost:4000/stream?url=${encodeURIComponent(url)}`;
+  if (url.includes('/stream?url=')) return url;
+  return `${PROXY_BASE}/stream?url=${encodeURIComponent(url)}`;
 }
 
 /* ── HIGH-LEVEL: Find HiAnime ID for an AniList anime ────────── */

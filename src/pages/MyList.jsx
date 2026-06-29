@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bookmark, Heart, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getTitle, getCover } from '../api/anilist';
-import Navbar from '../components/Navbar';
+
 
 const TABS = [
   { id: 'all',           label: 'All',          icon: Bookmark   },
@@ -24,120 +24,124 @@ export default function MyList() {
     : items.filter(item => item.status === activeTab);
 
   return (
-    <div className="page fade-in-up">
-      {/* Header */}
-      <div className="mylist-header">
-        <h1 className="mylist-title">My List</h1>
-        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-          {items.length} anime
-        </span>
-      </div>
-
-      {/* Tabs */}
-      <div className="mylist-tabs">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            className={`mylist-tab ${activeTab === t.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(t.id)}
-            id={`mylist-tab-${t.id}`}
-          >{t.label}</button>
-        ))}
-      </div>
-
-      {/* Grid */}
-      {filtered.length === 0 ? (
-        <div className="empty-state">
-          <Bookmark size={48} className="empty-icon" />
-          <p className="empty-title">No anime here</p>
-          <p className="empty-sub">Add anime to your list from the home or browse page</p>
-          <button
-            className="btn btn-primary"
-            style={{ marginTop: 12 }}
-            onClick={() => navigate('/')}
-            id="mylist-browse"
-          >Browse Anime</button>
+    <div className="page">
+      {/* Sticky Header Container */}
+      <div className="sticky-header">
+        {/* Header */}
+        <div className="mylist-header" style={{ paddingBottom: 8 }}>
+          <h1 className="mylist-title">My List</h1>
+          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            {items.length} anime
+          </span>
         </div>
-      ) : (
-        <div className="mylist-grid">
-          {filtered.map(({ anime, status }) => {
-            const title   = getTitle(anime);
-            const cover   = getCover(anime);
-            const ep      = progress[anime.id];
-            return (
-              <div
-                key={anime.id}
-                className="mylist-card"
-                id={`mylist-card-${anime.id}`}
-                onClick={() => navigate(`/anime/${anime.id}`)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
-                aria-label={title}
-              >
-                <img src={cover} alt={title} loading="lazy" />
 
-                {/* Status badge */}
-                <div style={{
-                  position: 'absolute', top: 6, left: 6,
-                  background: statusColor(status),
-                  padding: '2px 6px', borderRadius: 4,
-                  fontSize: 9, fontWeight: 700, color: '#fff',
-                  textTransform: 'uppercase', letterSpacing: 0.5,
-                }}>
-                  {statusLabel(status)}
-                </div>
+        {/* Tabs */}
+        <div className="mylist-tabs" style={{ paddingBottom: 10 }}>
+          {TABS.map(t => (
+            <button
+              key={t.id}
+              className={`mylist-tab ${activeTab === t.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(t.id)}
+              id={`mylist-tab-${t.id}`}
+            >{t.label}</button>
+          ))}
+        </div>
+      </div>
 
-                {/* Progress bar */}
-                {ep && anime.episodes && (
+      {/* Content Wrapper with Entrance Animation */}
+      <div className="fade-in-up">
+        {filtered.length === 0 ? (
+          <div className="empty-state">
+            <Bookmark size={48} className="empty-icon" />
+            <p className="empty-title">No anime here</p>
+            <p className="empty-sub">Add anime to your list from the home or browse page</p>
+            <button
+              className="btn btn-primary"
+              style={{ marginTop: 12 }}
+              onClick={() => navigate('/')}
+              id="mylist-browse"
+            >Browse Anime</button>
+          </div>
+        ) : (
+          <div className="mylist-grid">
+            {filtered.map(({ anime, status }) => {
+              const title   = getTitle(anime);
+              const cover   = getCover(anime);
+              const ep      = progress[anime.id];
+              return (
+                <div
+                  key={anime.id}
+                  className="mylist-card"
+                  id={`mylist-card-${anime.id}`}
+                  onClick={() => navigate(`/anime/${anime.id}`)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
+                  aria-label={title}
+                >
+                  <img src={cover} alt={title} loading="lazy" />
+
+                  {/* Status badge */}
                   <div style={{
-                    position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-                    background: 'rgba(255,255,255,0.1)',
+                    position: 'absolute', top: 6, left: 6,
+                    background: statusColor(status),
+                    padding: '2px 6px', borderRadius: 4,
+                    fontSize: 9, fontWeight: 700, color: '#fff',
+                    textTransform: 'uppercase', letterSpacing: 0.5,
                   }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${(ep.episode / anime.episodes) * 100}%`,
-                      background: 'var(--accent)',
-                    }} />
+                    {statusLabel(status)}
                   </div>
-                )}
 
-                <div className="mylist-card-overlay">
-                  <div className="mylist-card-title">{title}</div>
-                  {ep && (
-                    <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>
-                      Ep {ep.episode}
+                  {/* Progress bar */}
+                  {ep && anime.episodes && (
+                    <div style={{
+                      position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+                      background: 'rgba(255,255,255,0.1)',
+                    }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${(ep.episode / anime.episodes) * 100}%`,
+                        background: 'var(--accent)',
+                      }} />
                     </div>
                   )}
-                </div>
 
-                {/* Long-press context: quick actions */}
-                <div style={{
-                  position: 'absolute', top: 6, right: 6,
-                  display: 'flex', flexDirection: 'column', gap: 4,
-                }}>
-                  <button
-                    onClick={e => { e.stopPropagation(); removeFromWatchlist(anime.id); }}
-                    id={`remove-${anime.id}`}
-                    aria-label="Remove from list"
-                    style={{
-                      width: 24, height: 24,
-                      borderRadius: '50%',
-                      background: 'rgba(0,0,0,0.6)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      border: 'none', cursor: 'pointer',
-                    }}
-                  >
-                    <XCircle size={14} color="#fff" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                  <div className="mylist-card-overlay">
+                    <div className="mylist-card-title">{title}</div>
+                    {ep && (
+                      <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>
+                        Ep {ep.episode}
+                      </div>
+                    )}
+                  </div>
 
-      <Navbar />
+                  {/* Long-press context: quick actions */}
+                  <div style={{
+                    position: 'absolute', top: 6, right: 6,
+                    display: 'flex', flexDirection: 'column', gap: 4,
+                  }}>
+                    <button
+                      onClick={e => { e.stopPropagation(); removeFromWatchlist(anime.id); }}
+                      id={`remove-${anime.id}`}
+                      aria-label="Remove from list"
+                      style={{
+                        width: 24, height: 24,
+                        borderRadius: '50%',
+                        background: 'rgba(0,0,0,0.6)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        border: 'none', cursor: 'pointer',
+                      }}
+                    >
+                      <XCircle size={14} color="#fff" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }

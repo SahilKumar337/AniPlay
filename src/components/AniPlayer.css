@@ -1,0 +1,501 @@
+/* ══════════════════════════════════════════════════════════════
+   AniPlayer — Premium Multi-Device Video Player
+   Layout: top-bar  |  spacer (flex-grow)  |  bottom-group
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Wrapper ───────────────────────────────────────────────── */
+.anip {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+.anip--fs {
+  width: 100vw  !important;
+  height: 100vh !important;
+  aspect-ratio: unset !important;
+}
+
+/* ── Video ─────────────────────────────────────────────────── */
+.anip__video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+
+/* ── Buffering spinner ─────────────────────────────────────── */
+.anip__spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+.anip__spinner-ring {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,255,255,0.15);
+  border-top-color: #e50914;
+  animation: anip-spin 0.8s linear infinite;
+}
+@keyframes anip-spin { to { transform: rotate(360deg); } }
+
+/* ══════════════════════════════════════════════════════════════
+   OVERLAY — the entire controls layer
+   Uses flex column with spacer so controls pin to bottom
+   ══════════════════════════════════════════════════════════════ */
+.anip__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+  /* hidden by default, revealed by .anip--ctrl */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.anip--ctrl .anip__overlay {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* ── Top bar ───────────────────────────────────────────────── */
+.anip__top-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 40px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.80) 0%, transparent 100%);
+  /* pointer-events so back button is always clickable */
+  pointer-events: all;
+}
+
+.anip__back-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background 0.15s, transform 0.12s;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.anip__back-btn:hover  { background: rgba(255,255,255,0.2); }
+.anip__back-btn:active { transform: scale(0.88); }
+
+.anip__title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.9);
+}
+
+/* ── Spacer (middle area, clicking toggles controls) ───────── */
+.anip__spacer {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BOTTOM GROUP — seek bar + controls bar, pinned to bottom
+   ══════════════════════════════════════════════════════════════ */
+.anip__bottom-group {
+  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%);
+  padding: 0 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  pointer-events: all;
+}
+
+/* ── Seek bar ──────────────────────────────────────────────── */
+.anip__seek-wrap {
+  width: 100%;
+  padding: 10px 0 6px;
+  cursor: pointer;
+  touch-action: none;
+}
+.anip__seek-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  background: rgba(255,255,255,0.25);
+  border-radius: 99px;
+  transition: height 0.15s ease;
+}
+.anip__seek-wrap:hover .anip__seek-track { height: 6px; }
+.anip__seek-buf {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: rgba(255,255,255,0.32);
+  border-radius: 99px;
+  pointer-events: none;
+}
+.anip__seek-played {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: #e50914;
+  border-radius: 99px;
+  pointer-events: none;
+}
+.anip__seek-knob {
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%) scale(0);
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #e50914;
+  border: 2px solid #fff;
+  box-shadow: 0 0 8px rgba(229,9,20,0.6);
+  transition: transform 0.15s ease;
+}
+.anip__seek-wrap:hover .anip__seek-knob,
+.anip--touch .anip__seek-knob {
+  transform: translateY(-50%) scale(1);
+}
+
+/* ── Controls bar ──────────────────────────────────────────── */
+.anip__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+/* ── Clusters ──────────────────────────────────────────────── */
+.anip__cluster {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.anip__cluster--right { margin-left: auto; }
+
+/* ── Generic button ────────────────────────────────────────── */
+.anip__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.9);
+  padding: 9px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.13s, transform 0.1s, color 0.13s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+.anip__btn:hover  { background: rgba(255,255,255,0.12); color: #fff; }
+.anip__btn:active { transform: scale(0.88); }
+.anip__btn--active { color: #e50914; }
+
+/* Play button slightly larger hit area */
+.anip__btn--play { padding: 9px 11px; }
+
+/* Skip button — icon + small number overlay */
+.anip__btn--skip { position: relative; padding: 9px 8px 14px; }
+.anip__skip-num {
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-weight: 800;
+  color: rgba(255,255,255,0.85);
+  line-height: 1;
+  letter-spacing: 0.2px;
+}
+
+/* Quality badge next to settings icon */
+.anip__badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.8);
+  letter-spacing: 0.3px;
+}
+
+/* ── Time display ──────────────────────────────────────────── */
+.anip__time {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  white-space: nowrap;
+  padding: 0 6px;
+  letter-spacing: 0.2px;
+}
+
+/* ── Volume slider (desktop only, hidden on touch) ─────────── */
+.anip__vol {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 72px;
+  height: 4px;
+  background: rgba(255,255,255,0.28);
+  border-radius: 99px;
+  outline: none;
+  cursor: pointer;
+  display: block;
+}
+.anip__vol::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e50914;
+  border: 2px solid #fff;
+  box-shadow: 0 0 4px rgba(229,9,20,0.5);
+  cursor: pointer;
+}
+.anip__vol::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e50914;
+  border: 2px solid #fff;
+  cursor: pointer;
+}
+
+/* ── Popup menus ───────────────────────────────────────────── */
+.anip__menu-anchor { position: relative; }
+.anip__menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  min-width: 150px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(8,8,12,0.97);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  padding: 8px 6px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.75);
+  z-index: 99;
+  animation: anip-menu-pop 0.18s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes anip-menu-pop {
+  from { opacity:0; transform: translateY(6px) scale(0.94); }
+  to   { opacity:1; transform: translateY(0) scale(1); }
+}
+.anip__menu-hd {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: rgba(255,255,255,0.38);
+  padding: 4px 12px 8px;
+  margin: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  margin-bottom: 4px;
+}
+.anip__menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.8);
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+  touch-action: manipulation;
+}
+.anip__menu-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.anip__menu-item--on   { color: #e50914; font-weight: 700; }
+.anip__chk             { color: #e50914; margin-right: 6px; font-weight: 900; }
+.anip__menu-empty {
+  font-size: 12px;
+  color: rgba(255,255,255,0.32);
+  text-align: center;
+  padding: 10px 12px;
+  margin: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SKIP RIPPLES (double-tap feedback)
+   ══════════════════════════════════════════════════════════════ */
+.anip-ripple {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  z-index: 30;
+}
+.anip-ripple--left  { left:  8%; }
+.anip-ripple--right { right: 8%; }
+
+.anip-ripple__ring {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 90px; height: 90px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.4);
+  animation: anip-ring 0.7s ease forwards;
+}
+.anip-ripple__ring--2 {
+  width: 114px; height: 114px;
+  border-color: rgba(255,255,255,0.18);
+  animation-delay: 0.08s;
+}
+@keyframes anip-ring {
+  0%   { opacity:0.9; transform: translate(-50%,-50%) scale(0.4); }
+  100% { opacity:0;   transform: translate(-50%,-50%) scale(1.2); }
+}
+.anip-ripple__inner {
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #fff;
+  animation: anip-inner 0.7s ease forwards;
+}
+.anip-ripple__inner span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+@keyframes anip-inner {
+  0%   { opacity:1; transform: scale(0.7); }
+  40%  { opacity:1; transform: scale(1.05); }
+  100% { opacity:0; transform: scale(1); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SWIPE INDICATORS (brightness / volume)
+   ══════════════════════════════════════════════════════════════ */
+.anip-swipe {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%) scale(0.85);
+  opacity: 0;
+  transition: opacity 0.18s, transform 0.18s;
+  pointer-events: none;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 18px;
+  padding: 16px 13px;
+}
+.anip-swipe--on {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+.anip-swipe--brightness { left:  4%; }
+.anip-swipe--volume     { right: 4%; }
+.anip-swipe__icon { font-size: 18px; line-height: 1; }
+.anip-swipe__track {
+  width: 6px; height: 80px;
+  background: rgba(255,255,255,0.18);
+  border-radius: 99px;
+  position: relative;
+  overflow: hidden;
+}
+.anip-swipe__fill {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top, #e50914, #ff6b6b);
+  border-radius: 99px;
+  transition: height 0.08s linear;
+}
+.anip-swipe__pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.3px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ══════════════════════════════════════════════════════════════ */
+
+/* Mobile ≤ 540px */
+@media (max-width: 540px) {
+  .anip__top-bar    { padding: 10px 12px 32px; }
+  .anip__title      { font-size: 11px; }
+  .anip__bottom-group { padding: 0 10px 8px; }
+  .anip__bar        { gap: 0; }
+  .anip__btn        { padding: 8px 7px; }
+  .anip__btn--play  { padding: 8px 9px; }
+  .anip__btn--skip  { padding: 8px 6px 13px; }
+  .anip__time       { font-size: 10px; padding: 0 3px; }
+  .anip__badge      { display: none; }
+  .anip__vol        { display: none; }   /* use swipe gesture on mobile */
+  .anip__back-btn   { width: 30px; height: 30px; }
+  .anip-swipe__track { height: 60px; }
+}
+
+/* Small tablet 541–768px */
+@media (min-width: 541px) and (max-width: 768px) {
+  .anip__vol  { display: none; }         /* swipe for volume on tablet too */
+  .anip__badge { display: none; }
+}
+
+/* Desktop ≥ 769px — cursor hides when inactive */
+@media (min-width: 769px) {
+  .anip        { cursor: none; }
+  .anip--ctrl  { cursor: default; }
+  .anip__btn   { padding: 9px 10px; }
+  .anip__vol   { width: 80px; }
+}
+
+/* Large screens ≥ 1200px */
+@media (min-width: 1200px) {
+  .anip__title   { font-size: 14px; }
+  .anip__time    { font-size: 13px; }
+  .anip__vol     { width: 96px; }
+}
+
+/* Fullscreen — always show volume slider */
+.anip--fs .anip__vol          { display: block !important; }
+.anip--fs .anip__badge        { display: inline !important; }
+.anip--fs .anip__bottom-group { padding: 0 20px 18px; }
+.anip--fs .anip__top-bar      { padding: 18px 20px 44px; }
+.anip--fs .anip__title        { font-size: 15px; }

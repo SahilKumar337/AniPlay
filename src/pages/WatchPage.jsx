@@ -5,9 +5,12 @@ import {
   AlertCircle, RefreshCw, Wifi, WifiOff, Loader, Tv
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
-import { getAniNekoServers, checkProxy }      from '../api/stream';
+import { getAniNekoServers, checkProxy, formatServerUrl } from '../api/stream';
 import Navbar      from '../components/Navbar';
+import AniPlayer   from '../components/AniPlayer';
 import { useApp }  from '../context/AppContext';
+
+
 
 export default function WatchPage() {
   const { id, ep } = useParams();
@@ -22,11 +25,16 @@ export default function WatchPage() {
   const [activeUrl,   setActiveUrl]   = useState('');
   const [activeName,  setActiveName]  = useState('');
   const [activeType,  setActiveType]  = useState('sub'); // 'sub' or 'dub'
+  const [audioTrack,  setAudioTrack]  = useState(() => localStorage.getItem('anilab_preferred_track') || 'sub'); // 'sub' or 'dub'
   const [loadStream,  setLoadStream]  = useState(false);
   const [streamErr,   setStreamErr]   = useState(null);
   
   const [showEps,     setShowEps]     = useState(true);
   const [proxyUp,     setProxyUp]     = useState(null);
+  const [isActiveHLS, setIsActiveHLS] = useState(false);
+  const [extracting,  setExtracting]  = useState(false); // Puppeteer extraction in progress
+
+  const [activeServer, setActiveServer] = useState(null);
 
   const episode = Math.max(1, parseInt(ep) || 1);
 
@@ -40,6 +48,73 @@ export default function WatchPage() {
       .then(d  => { setAnime(d); setLoadAnime(false); })
       .catch(e => { setAnimeErr(e.message); setLoadAnime(false); });
   }, [id]);
+
+  // Robust server selection with automatic fallback to next server on error
+  const selectServer = useCallback(async (srv, srvList) => {
+    setActiveServer(srv);
+    setStreamErr(null);
+    setExtracting(false);
+
+    const listToUse = srvList || [];
+    const sameTypeServers = srv.type === 'dub' 
+      ? listToUse.filter(s => s.type === 'dub') 
+      : listToUse.filter(s => s.type === 'sub');
+    
+    const currentIndex = sameTypeServers.findIndex(s => s.videoUrl === srv.videoUrl);
+
+    const tryNext = () => {
+      if (currentIndex !== -1 && currentIndex < sameTypeServers.length - 1) {
+        const nextSrv = sameTypeServers[currentIndex + 1];
+        console.log(`[WatchPage] Server ${srv.name} failed. Falling back to next server: ${nextSrv.name}...`);
+        selectServer(nextSrv, listToUse);
+      } else {
+        setStreamErr('All available servers failed to load. Please try another episode.');
+      }
+    };
+
+    // For AniWaves iframe-proxy servers: extract real m3u8 via Puppeteer headless browser
+    if (srv.videoUrl && srv.videoUrl.includes('iframe-proxy')) {
+      let embedUrl = srv.videoUrl;
+      try {
+        const proxyUrlObj = new URL(srv.videoUrl);
+        embedUrl = proxyUrlObj.searchParams.get('url') || srv.videoUrl;
+      } catch {}
+
+      setActiveName(srv.name + ' (Extracting…)');
+      setActiveType(srv.type || 'sub');
+      setIsActiveHLS(false);
+      setActiveUrl('');
+      setExtracting(true);
+
+      try {
+        const res = await fetch(formatServerUrl(`/api/extract-stream?url=${encodeURIComponent(embedUrl)}`));
+        const data = await res.json();
+        if (data.ok && data.url) {
+          setActiveUrl(formatServerUrl(data.url));
+          setIsActiveHLS(true);
+          setActiveName(srv.name);
+        } else {
+          throw new Error(data.error || 'Extraction returned no url');
+        }
+      } catch (e) {
+        console.warn(`[WatchPage] Extraction failed for ${srv.name}:`, e.message);
+        // Fall back to showing the ad-free sandboxed iframe player in the browser
+        setActiveUrl(srv.videoUrl);
+        setIsActiveHLS(false);
+        setActiveName(srv.name);
+      } finally {
+        setExtracting(false);
+      }
+      return;
+    }
+
+    // Regular servers (AniNeko direct HLS or other iframes)
+    setActiveUrl(srv.videoUrl);
+    setActiveName(srv.name);
+    setActiveType(srv.type || 'sub');
+    setIsActiveHLS(!!srv.isHLS);
+    setExtracting(false);
+  }, []);
 
   // Fetch streaming servers
   const fetchStream = useCallback(async () => {
@@ -55,20 +130,38 @@ export default function WatchPage() {
     setServers([]);
     setActiveUrl('');
     setActiveName('');
+    setActiveServer(null);
 
     try {
       const result = await getAniNekoServers(anime, episode);
       if (result?.servers?.length) {
         setServers(result.servers);
-        // Auto-select first SUB server (prefer Vidstream or Mycloud)
-        const subServers = result.servers.filter(s => s.type === 'sub');
-        const preferred  = subServers.find(s => /vidstream/i.test(s.name))
-                        || subServers.find(s => /mycloud/i.test(s.name))
-                        || subServers[0]
+        // Auto-select based on preferred track from localStorage
+        const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
+        let matchingServers = result.servers.filter(s => s.type === preferredTrack);
+        
+        // Fallback to the other track if the preferred track is not available for this episode
+        if (matchingServers.length === 0) {
+          matchingServers = result.servers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+        }
+
+        const preferred  = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                        || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                        || matchingServers[0]
                         || result.servers[0];
-        setActiveUrl(preferred.videoUrl);
-        setActiveName(preferred.name);
+
         setActiveType(preferred.type || 'sub');
+        setAudioTrack(preferred.type || 'sub');
+
+        // Let selectServer handle the resolution & extraction automatically
+        selectServer(preferred, result.servers);
+
+        // Background prefetch next episode for instant loading
+        const nextEp = episode + 1;
+        const maxEps = anime.episodes || 999;
+        if (nextEp <= maxEps) {
+          getAniNekoServers(anime, nextEp).catch(() => {});
+        }
       } else {
         setStreamErr('No streaming servers available for this episode.');
       }
@@ -77,7 +170,7 @@ export default function WatchPage() {
     } finally {
       setLoadStream(false);
     }
-  }, [anime, episode]);
+  }, [anime, episode, selectServer]);
 
   useEffect(() => { fetchStream(); }, [fetchStream]);
   
@@ -88,17 +181,37 @@ export default function WatchPage() {
     }
   }, [anime, episode, setEpisodeProgress, addToRecentlyViewed]);
 
+  // Listen for video stream URL intercepted from the iframe proxy sandbox
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'NATIVE_STREAM_URL' && event.data?.url) {
+        const streamUrl = event.data.url;
+        console.log('[Parent] Intercepted stream URL:', streamUrl);
+        
+        let originalOrigin = 'https://play.echovideo.ru';
+        try {
+          const urlObj = new URL(activeUrl);
+          const originalUrl = urlObj.searchParams.get('url');
+          if (originalUrl) {
+            originalOrigin = new URL(originalUrl).origin;
+          }
+        } catch {}
+
+        const proxied = formatServerUrl(`/api/stream/hls?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(originalOrigin)}`);
+        
+        setActiveUrl(proxied);
+        setIsActiveHLS(true);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [activeUrl]);
+
   const goEp = n => {
     const max = anime?.episodes || 999;
     if (n < 1 || n > max) return;
     navigate(`/watch/${id}/${n}`, { replace: true });
     window.scrollTo(0, 0);
-  };
-
-  const selectServer = srv => {
-    setActiveUrl(srv.videoUrl);
-    setActiveName(srv.name);
-    setActiveType(srv.type || 'sub');
   };
 
   const subServers = servers.filter(s => s.type === 'sub');
@@ -137,29 +250,24 @@ export default function WatchPage() {
       {/* ── Player area ────────────────────────────────────────── */}
       <div style={{ position:'relative', background:'#000' }}>
 
-        {/* Back button */}
-        <button onClick={() => navigate(`/anime/${id}`, { replace: true })} id="watch-back"
-          style={{ position:'absolute', top:10, left:10, zIndex:20, width:36, height:36, borderRadius:'50%', background:'rgba(0,0,0,0.7)', border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backdropFilter:'blur(6px)' }}
-        ><ArrowLeft size={17} color="#fff"/></button>
-
         {/* Loading state */}
         {(loadAnime || loadStream) && (
-          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:18, padding:24 }}>
+          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:18, padding:24, position:'relative' }}>
+            {/* Back button on loading screen */}
+            <button onClick={() => navigate(`/anime/${id}`, { replace: true })} id="watch-back"
+              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backdropFilter:'blur(6px)', color:'#fff' }}
+            ><ArrowLeft size={17} color="#fff"/></button>
             <Loader size={44} color="#e50914" style={{ animation:'spin 0.9s linear infinite' }}/>
-            <div style={{ textAlign:'center' }}>
-              <p style={{ color:'#fff', fontSize:14, fontWeight:600, marginBottom:6 }}>
-                {loadAnime ? 'Loading anime…' : 'Finding stream…'}
-              </p>
-              <p style={{ color:'var(--text-secondary)', fontSize:12 }}>
-                Searching and resolving fast servers...
-              </p>
-            </div>
+            <p style={{ color:'#fff', fontSize:14, fontWeight:600 }}>Loading...</p>
           </div>
         )}
 
         {/* Error state */}
         {!loadAnime && !loadStream && streamErr && (
-          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, padding:28 }}>
+          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, padding:28, position:'relative' }}>
+            <button onClick={() => navigate(`/anime/${id}`, { replace: true })}
+              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff' }}
+            ><ArrowLeft size={17} color="#fff"/></button>
             <AlertCircle size={44} color="#e50914" style={{ opacity:0.7 }}/>
             <p style={{ color:'#fff', fontSize:15, fontWeight:700 }}>Stream not found</p>
             <p style={{ color:'var(--text-secondary)', fontSize:12, textAlign:'center', maxWidth:280, lineHeight:1.7 }}>{streamErr}</p>
@@ -169,15 +277,38 @@ export default function WatchPage() {
           </div>
         )}
 
+        {/* Extracting state (Puppeteer running) */}
+        {!loadAnime && !loadStream && extracting && !streamErr && (
+          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:18, padding:24, position:'relative' }}>
+            <button onClick={() => navigate(`/anime/${id}`, { replace: true })}
+              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff' }}
+            ><ArrowLeft size={17} color="#fff"/></button>
+            <Loader size={44} color="#e50914" style={{ animation:'spin 0.9s linear infinite' }}/>
+            <p style={{ color:'#fff', fontSize:14, fontWeight:600 }}>Loading...</p>
+          </div>
+        )}
+
+        {/* ── Native HLS Player (AniPlayer) ───────────────── */}
+        {!loadAnime && !loadStream && !extracting && activeUrl && isActiveHLS && !streamErr && (
+          <AniPlayer
+            url={activeUrl}
+            title={`${title} – Episode ${episode}`}
+            onBack={() => navigate(`/anime/${id}`, { replace: true })}
+          />
+        )}
+
         {/* ── Sandboxed Ad-Free Iframe Player ───────────────── */}
-        {!loadAnime && !loadStream && activeUrl && !streamErr && (
+        {!loadAnime && !loadStream && activeUrl && !isActiveHLS && !streamErr && (
           <div style={{ aspectRatio:'16/9', position:'relative', background:'#000' }}>
+            {/* Back button for iframe player */}
+            <button onClick={() => navigate(`/anime/${id}`, { replace: true })}
+              style={{ position:'absolute', top:10, left:10, zIndex:20, width:36, height:36, borderRadius:'50%', background:'rgba(0,0,0,0.7)', border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backdropFilter:'blur(6px)' }}
+            ><ArrowLeft size={17} color="#fff"/></button>
             <iframe
               key={`player-${activeUrl}`}
-              src={activeUrl}
+              src={activeUrl.includes('?') ? `${activeUrl}&_t=${Date.now()}` : `${activeUrl}?_t=${Date.now()}`}
               allowFullScreen
               allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-              // Sandbox blocks popups and redirects but allows video scripts to run!
               sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
               style={{ width:'100%', height:'100%', border:'none' }}
               title={`${title} – Episode ${episode}`}
@@ -186,71 +317,93 @@ export default function WatchPage() {
         )}
       </div>
 
+
       {/* ── Controls ──────────────────────────────────────────── */}
       <div style={{ padding:'14px 16px 0' }}>
 
         {/* Title */}
-        <p style={{ fontSize:17, fontWeight:700, marginBottom:3, lineHeight:1.3 }}>{title}</p>
+        <p style={{ fontSize:17, fontWeight:700, marginBottom:4, lineHeight:1.3 }}>{title}</p>
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16, flexWrap:'wrap' }}>
           <span style={{ fontSize:13, color:'var(--text-secondary)' }}>Episode {episode} of {totalEps}</span>
-          {activeName && (
-            <span style={{ background:'rgba(76,175,80,0.12)', color:'#4caf50', fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:10, border:'1px solid rgba(76,175,80,0.3)' }}>
-              ✓ {activeName} (Ad-Blocked)
-            </span>
-          )}
         </div>
 
         {/* Server selection: grouped SUB / DUB tabs */}
         {servers.length > 0 && (
-          <>
+          <div style={{ marginBottom: 16 }}>
             <p style={{ fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:1, marginBottom:10 }}>
               Select Server
             </p>
 
-            {/* SUB servers */}
-            {subServers.length > 0 && (
-              <div style={{ marginBottom: 10 }}>
-                <p style={{ fontSize:9, fontWeight:700, color:'#4fc3f7', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>
-                  🔤 SUB
-                </p>
-                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                  {subServers.map((s, idx) => {
-                    const active = activeUrl === s.videoUrl;
-                    return (
-                      <button key={`sub-${idx}`} onClick={() => selectServer(s)}
-                        style={{ padding:'8px 14px', borderRadius:24, background: active ? '#4fc3f7' : 'var(--bg-card)', border:`1.5px solid ${active ? '#4fc3f7' : 'var(--border)'}`, color: active ? '#000' : 'var(--text-secondary)', fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:5, transition:'all 0.2s' }}
-                      >
-                        {active && <span style={{ width:5, height:5, borderRadius:'50%', background:'#000', flexShrink:0 }}/>}
-                        {s.name.replace(' (SUB)', '')}
-                      </button>
-                    );
-                  })}
-                </div>
+            {/* Segmented Control for Sub / Dub if both are available */}
+            {hasDub && (
+              <div style={{
+                display: 'flex',
+                background: 'rgba(255,255,255,0.03)',
+                borderRadius: 24,
+                padding: 3,
+                marginBottom: 14,
+                border: '1px solid var(--border)'
+              }}>
+                <button
+                  onClick={() => {
+                    localStorage.setItem('anilab_preferred_track', 'sub');
+                    setAudioTrack('sub');
+                    if (subServers.length > 0) selectServer(subServers[0]);
+                  }}
+                  style={{
+                    flex: 1, padding: '7px 0', border: 'none',
+                    background: audioTrack === 'sub' ? 'var(--accent)' : 'transparent',
+                    color: audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)',
+                    fontSize: 12, fontWeight: 700, borderRadius: 20,
+                    cursor: 'pointer', transition: 'all 0.2s'
+                  }}
+                >
+                  Subtitled (SUB)
+                </button>
+                <button
+                  onClick={() => {
+                    localStorage.setItem('anilab_preferred_track', 'dub');
+                    setAudioTrack('dub');
+                    if (dubServers.length > 0) selectServer(dubServers[0]);
+                  }}
+                  style={{
+                    flex: 1, padding: '7px 0', border: 'none',
+                    background: audioTrack === 'dub' ? 'var(--accent)' : 'transparent',
+                    color: audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)',
+                    fontSize: 12, fontWeight: 700, borderRadius: 20,
+                    cursor: 'pointer', transition: 'all 0.2s'
+                  }}
+                >
+                  Dubbed (DUB)
+                </button>
               </div>
             )}
 
-            {/* DUB servers */}
-            {hasDub && (
-              <div style={{ marginBottom: 10 }}>
-                <p style={{ fontSize:9, fontWeight:700, color:'#ffb74d', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>
-                  🔊 DUB
-                </p>
-                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                  {dubServers.map((s, idx) => {
-                    const active = activeUrl === s.videoUrl;
-                    return (
-                      <button key={`dub-${idx}`} onClick={() => selectServer(s)}
-                        style={{ padding:'8px 14px', borderRadius:24, background: active ? '#ffb74d' : 'var(--bg-card)', border:`1.5px solid ${active ? '#ffb74d' : 'var(--border)'}`, color: active ? '#000' : 'var(--text-secondary)', fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:5, transition:'all 0.2s' }}
-                      >
-                        {active && <span style={{ width:5, height:5, borderRadius:'50%', background:'#000', flexShrink:0 }}/>}
-                        {s.name.replace(' (DUB)', '')}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </>
+            {/* Active Track Server List */}
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              {(audioTrack === 'sub' ? subServers : dubServers).map((s, idx) => {
+                const active = activeServer?.videoUrl === s.videoUrl;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => selectServer(s, servers)}
+                    style={{
+                      padding: '8px 16px', borderRadius: 20,
+                      background: active ? 'var(--accent)' : 'var(--bg-card)',
+                      border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                      color: active ? '#fff' : 'var(--text-secondary)',
+                      fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      transition: 'all 0.25s'
+                    }}
+                  >
+                    {active && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fff', flexShrink: 0 }} />}
+                    {s.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
 
         {/* Prev / Current / Next */}
@@ -259,8 +412,8 @@ export default function WatchPage() {
             style={{ flex:1, padding:12, borderRadius:12, background:'var(--bg-card)', border:'1px solid var(--border)', color: episode <= 1 ? 'var(--text-muted)' : 'var(--text-primary)', fontSize:13, fontWeight:700, cursor: episode <= 1 ? 'not-allowed' : 'pointer', opacity: episode <= 1 ? 0.35 : 1, display:'flex', alignItems:'center', justifyContent:'center', gap:4 }}
           ><ChevronLeft size={16}/> Prev</button>
 
-          <div style={{ flex:1, padding:12, borderRadius:12, background:'rgba(229,9,20,0.15)', border:'1.5px solid rgba(229,9,20,0.4)', color:'#e50914', fontSize:14, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center' }}>
-            Ep {episode}
+          <div style={{ flex:1, padding:12, borderRadius:12, background:'rgba(255,255,255,0.03)', border:'1px solid var(--border)', color:'#fff', fontSize:13, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            Episode {episode}
           </div>
 
           <button id="ep-next" onClick={() => goEp(episode + 1)} disabled={episode >= totalEps}

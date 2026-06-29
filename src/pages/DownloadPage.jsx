@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { Download as DownloadIcon, Smartphone } from 'lucide-react';
-import Navbar from '../components/Navbar';
+
 
 export default function DownloadPage() {
   const navigate = useNavigate();
@@ -21,7 +21,6 @@ export default function DownloadPage() {
           id="download-browse"
         >Browse Anime</button>
       </div>
-      <Navbar />
     </div>
   );
 }

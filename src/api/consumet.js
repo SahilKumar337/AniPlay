@@ -3,8 +3,14 @@
  * Routes through local proxy server at port 4000
  */
 
-const PROXY = 'http://localhost:4000/consumet';
-const STREAM_PROXY = 'http://localhost:4000/stream?url=';
+const PROXY_BASE = import.meta.env.VITE_PROXY_URL || (
+  window.location.port === '3000'
+    ? `http://${window.location.hostname}:4000`
+    : window.location.origin
+);
+
+const PROXY = `${PROXY_BASE}/consumet`;
+const STREAM_PROXY = `${PROXY_BASE}/stream?url=`;
 
 async function get(path) {
   const ctrl = new AbortController();
@@ -39,7 +45,7 @@ export async function gogoWatch(episodeId) {
 
 /* ── Proxy stream URL through the server ─────────────────────── */
 function toProxyUrl(url) {
-  if (!url || url.startsWith('http://localhost:4000')) return url;
+  if (!url || url.includes('/stream?url=')) return url;
   return STREAM_PROXY + encodeURIComponent(url);
 }
 

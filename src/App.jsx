@@ -10,6 +10,7 @@ import WatchPage     from './pages/WatchPage';
 import MyList        from './pages/MyList';
 import DownloadPage  from './pages/DownloadPage';
 import Profile       from './pages/Profile';
+import Navbar        from './components/Navbar';
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
@@ -28,20 +29,24 @@ export default function App() {
           {showWelcome ? (
             <WelcomeScreen onEnter={handleEnter} />
           ) : (
-            <Routes>
-              <Route path="/"            element={<Home />}         />
-              <Route path="/browse"      element={<Browse />}       />
-              <Route path="/schedule"    element={<Schedule />}     />
-              <Route path="/anime/:id"   element={<AnimePage />}    />
-              <Route path="/watch/:id/:ep" element={<WatchPage />}  />
-              <Route path="/mylist"      element={<MyList />}       />
-              <Route path="/download"    element={<DownloadPage />} />
-              <Route path="/profile"     element={<Profile />}      />
-              <Route path="*"            element={<Navigate to="/" replace />} />
-            </Routes>
+            <>
+              <Routes>
+                <Route path="/"            element={<Home />}         />
+                <Route path="/browse"      element={<Browse />}       />
+                <Route path="/schedule"    element={<Schedule />}     />
+                <Route path="/anime/:id"   element={<AnimePage />}    />
+                <Route path="/watch/:id/:ep" element={<WatchPage />}  />
+                <Route path="/mylist"      element={<MyList />}       />
+                <Route path="/download"    element={<DownloadPage />} />
+                <Route path="/profile"     element={<Profile />}      />
+                <Route path="*"            element={<Navigate to="/" replace />} />
+              </Routes>
+              <Navbar />
+            </>
           )}
         </div>
       </BrowserRouter>
     </AppProvider>
   );
 }
+

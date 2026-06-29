@@ -3,9 +3,17 @@
  * v5: sends all title variants, handles SUB + DUB server types
  */
 
-const PROXY = window.location.port === '3000'
-  ? `http://${window.location.hostname}:4000`
-  : window.location.origin;
+export const PROXY = import.meta.env.VITE_PROXY_URL || (
+  window.location.port === '3000'
+    ? `http://${window.location.hostname}:4000`
+    : window.location.origin
+);
+
+export function formatServerUrl(url) {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  return `${PROXY}${url.startsWith('/') ? '' : '/'}${url}`;
+}
 
 // Cache for search results (keyed by animeId-episode)
 const cache = new Map();
@@ -36,8 +44,13 @@ export async function getAniNekoServers(anime, episode) {
   const data = await res.json();
 
   if (data.ok && data.servers?.length) {
-    cache.set(key, data);
-    return data;
+    const formattedServers = data.servers.map(s => ({
+      ...s,
+      videoUrl: formatServerUrl(s.videoUrl)
+    }));
+    const formattedData = { ...data, servers: formattedServers };
+    cache.set(key, formattedData);
+    return formattedData;
   }
 
   throw new Error(data.error || 'No streaming servers found');

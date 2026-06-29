@@ -22,16 +22,138 @@ import { createServer }    from 'node:http';
 import { URL, fileURLToPath } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname }   from 'node:path';
+import puppeteer from 'puppeteer-core';
 
 const PORT     = process.env.PORT || 4000;
 const AW       = 'https://aniwaves.ru';
 const ANINEKO  = 'https://anineko.to';
 const UA       = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DIST_DIR  = join(__dirname, '../dist');
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
+
+// ── Puppeteer stream extractor (headless Chrome, network intercept) ──
+// Cache recently extracted stream URLs to avoid relaunching browser for the same embed
+const streamUrlCache = new Map(); // embedUrl -> { url, referer, ts }
+const STREAM_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+async function puppeteerExtractM3U8(embedUrl) {
+  const cached = streamUrlCache.get(embedUrl);
+  if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL) {
+    console.log(`[Puppeteer] Cache hit for ${embedUrl.slice(0, 80)}`);
+    return cached;
+  }
+
+  console.log(`[Puppeteer] Launching headless Chrome for: ${embedUrl.slice(0, 100)}`);
+  let browser;
+  try {
+    const launchOptions = {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--autoplay-policy=no-user-gesture-required',
+      ],
+    };
+
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    } else if (existsSync(CHROME_PATH)) {
+      launchOptions.executablePath = CHROME_PATH;
+    }
+
+    browser = await puppeteer.launch(launchOptions);
+
+    const page = await browser.newPage();
+    await page.setUserAgent(UA);
+    await page.setExtraHTTPHeaders({ Referer: AW + '/' });
+
+    let capturedM3U8 = null;
+    let capturedReferer = embedUrl;
+
+    // Intercept every request — grab the first .m3u8 that isn't a tiny manifest
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      const url = req.url();
+      // Block ads/trackers to speed things up
+      if (
+        url.includes('doubleclick') ||
+        url.includes('googlesyndication') ||
+        url.includes('google-analytics') ||
+        url.includes('adsbygoogle')
+      ) {
+        return req.abort();
+      }
+      if (!capturedM3U8 && (url.includes('.m3u8') || url.includes('playlist.m3u8'))) {
+        capturedM3U8 = url;
+        capturedReferer = req.headers()['referer'] || embedUrl;
+        console.log(`[Puppeteer] Intercepted m3u8: ${url.slice(0, 120)}`);
+      }
+      req.continue();
+    });
+
+    // Also listen on responses to catch .m3u8 from XHR/fetch
+    page.on('response', async resp => {
+      if (capturedM3U8) return;
+      const url = resp.url();
+      const ct  = resp.headers()['content-type'] || '';
+      if (url.includes('.m3u8') || ct.includes('mpegurl') || ct.includes('x-mpegURL')) {
+        capturedM3U8 = url;
+        capturedReferer = resp.request().headers()['referer'] || embedUrl;
+        console.log(`[Puppeteer] Response m3u8: ${url.slice(0, 120)}`);
+      }
+    });
+
+    // Navigate to the embed page and wait for network to settle
+    await page.goto(embedUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // Try to trigger playback by clicking elements that resemble play buttons
+    try {
+      await page.evaluate(() => {
+        const selectors = [
+          'video', 
+          '#player', 
+          '.jw-video', 
+          '.jw-display-icon-container', 
+          '.vjs-big-play-button',
+          '.play-button',
+          '[class*="play"]',
+          '[id*="play"]'
+        ];
+        for (const selector of selectors) {
+          const el = document.querySelector(selector);
+          if (el) {
+            el.click();
+            const event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+            el.dispatchEvent(event);
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('[Puppeteer] Click play button failed:', e.message);
+    }
+
+    // If no m3u8 yet, wait a bit more for player lazy-loading
+    if (!capturedM3U8) {
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
+    if (!capturedM3U8) {
+      throw new Error('No .m3u8 URL captured from embed page');
+    }
+
+    const result = { url: capturedM3U8, referer: capturedReferer, ts: Date.now() };
+    streamUrlCache.set(embedUrl, result);
+    return result;
+  } finally {
+    if (browser) await browser.close();
+  }
+}
 
 // ── CORS & JSON helpers ───────────────────────────────────────────
 function cors(res) {
@@ -210,13 +332,8 @@ async function awSearch(title) {
   return best;
 }
 
-/**
- * Step 2: Get episode server list from AniWaves AJAX endpoint.
- * Returns array of { serverId, serverName, type } where type is 'sub'|'dub'.
- * Retries up to 3 times since AniWaves sometimes returns empty on cold requests.
- */
 async function awGetServers(animeId, episode, slug) {
-  const url     = `${AW}/ajax/anime/servers?ep=${episode}&id=${animeId}`;
+  const url     = `${AW}/ajax/server/list?servers=${animeId}&eps=${episode}`;
   const referer = slug ? `${AW}/watch/${slug}` : AW;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -244,16 +361,27 @@ async function awGetServers(animeId, episode, slug) {
       throw new Error('AniWaves servers returned non-JSON');
     }
 
-    if (parsed.status !== 200 || !parsed.html) {
+    if (parsed.status !== 200 || !parsed.result) {
       throw new Error(`No servers available for episode ${episode} on AniWaves (status: ${parsed.status})`);
     }
 
-    const html = parsed.html;
+    const html = parsed.result;
     const servers = [];
-    const re = /data-type="(sub|dub)"\s+data-id="(\d+)">\s*<a[^>]+data-name="([^"]+)"/g;
-    let m;
-    while ((m = re.exec(html)) !== null) {
-      servers.push({ type: m[1], serverId: m[2], serverName: m[3] });
+    const sectionRe = /<div class="type" data-type="(sub|dub)">([\s\S]+?)<\/div>/g;
+    let secMatch;
+    while ((secMatch = sectionRe.exec(html)) !== null) {
+      const type = secMatch[1];
+      const listHtml = secMatch[2];
+      
+      const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([^<]+)<\/li>/g;
+      let liMatch;
+      while ((liMatch = liRe.exec(listHtml)) !== null) {
+        servers.push({
+          type,
+          linkId: liMatch[1],
+          serverName: liMatch[2].trim()
+        });
+      }
     }
 
     if (servers.length === 0) throw new Error(`No servers parsed from AniWaves episode ${episode} HTML`);
@@ -264,53 +392,88 @@ async function awGetServers(animeId, episode, slug) {
 }
 
 /**
- * Step 3: Resolve the actual embed iframe URL for a given server ID.
+ * Step 3: Resolve the actual embed iframe URL for a given server link ID.
  * Returns the iframe URL string.
  */
-async function awGetEmbedUrl(serverId, watchPageSlug) {
-  const url  = `${AW}/ajax/server/${serverId}`;
+async function awGetEmbedUrl(linkId, watchPageSlug) {
+  const url  = `${AW}/ajax/sources?id=${encodeURIComponent(linkId)}&asi=0&autoPlay=0`;
   const text = await xfetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': `${AW}/watch/${watchPageSlug}` },
     timeout: 30000,
   });
 
   let parsed;
-  try { parsed = JSON.parse(text); } catch { throw new Error(`AniWaves server ${serverId} returned non-JSON`); }
-  if (parsed.status !== 200 || !parsed.result?.url) throw new Error(`No embed URL for server ${serverId}`);
+  try { parsed = JSON.parse(text); } catch { throw new Error(`AniWaves server returned non-JSON`); }
+  if (parsed.status !== 200 || !parsed.result?.url) throw new Error(`No embed URL for server`);
+  
   return parsed.result.url;
 }
+
+// Embed providers known to be extractable via Puppeteer/iframe proxy
+// Providers NOT on this list will be skipped silently
+const KNOWN_WORKING_PROVIDERS = [
+  'play.echovideo.ru',   // Vidstream — extractable via Puppeteer ✅
+  'megacloud.club',      // MegaCloud — extractable via Puppeteer ✅  
+  'megacloud.tv',        // MegaCloud alt domain ✅
+  'rapid-cloud.co',      // RapidCloud ✅
+  'rabbitstream.net',    // RabbitStream ✅
+];
 
 /**
  * Full AniWaves scrape pipeline.
  * Returns { servers: [{name, videoUrl, type}], animeTitle, slug }
- * Resolves top N embed URLs concurrently to keep latency low.
+ * Only includes servers whose embed provider is known to be extractable.
  */
 async function scrapeAniWaves(title, episode) {
   const { slug, animeId, animeTitle } = await awSearch(title);
   const rawServers = await awGetServers(animeId, episode, slug);
 
-  // Prioritise: sub Vidstream → sub Mycloud → all subs → then dubs
-  // We'll resolve embed URLs for the first 6 servers (3 sub + 3 dub ideally)
   const subServers = rawServers.filter(s => s.type === 'sub');
   const dubServers = rawServers.filter(s => s.type === 'dub');
 
-  // Take top 3 sub, top 3 dub
-  const toResolve = [...subServers.slice(0, 3), ...dubServers.slice(0, 3)];
+  // Take top 4 sub + top 4 dub to give more candidates after filtering
+  const toResolve = [...subServers.slice(0, 4), ...dubServers.slice(0, 4)];
 
   const resolved = await Promise.allSettled(
     toResolve.map(async s => {
-      const embedUrl = await awGetEmbedUrl(s.serverId, slug);
-      return { name: `${s.serverName} (${s.type.toUpperCase()})`, videoUrl: embedUrl, type: s.type };
+      const embedUrl = await awGetEmbedUrl(s.linkId, slug);
+
+      // Filter out providers that are known to not work
+      let embedHost;
+      try { embedHost = new URL(embedUrl).hostname; } catch { throw new Error(`Bad embed URL`); }
+
+      const isSupported = KNOWN_WORKING_PROVIDERS.some(p => embedHost === p || embedHost.endsWith('.' + p));
+      if (!isSupported) {
+        console.log(`[AW] Skipping unsupported provider: ${embedHost} (server: ${s.serverName})`);
+        throw new Error(`Provider ${embedHost} not supported`);
+      }
+
+      console.log(`[AW] Accepted provider: ${embedHost} (server: ${s.serverName})`);
+      const proxiedUrl = `/api/iframe-proxy?url=${encodeURIComponent(embedUrl)}`;
+      return { videoUrl: proxiedUrl, type: s.type, embedUrl };
     })
   );
 
-  const servers = resolved
+  const workingServers = resolved
     .filter(r => r.status === 'fulfilled')
     .map(r => r.value);
 
-  if (servers.length === 0) throw new Error(`All AniWaves servers failed for episode ${episode}`);
+  // Assign sequential display names
+  let subCount = 0;
+  let dubCount = 0;
+  const servers = workingServers.map(s => {
+    if (s.type === 'sub') {
+      subCount++;
+      return { name: `HD${subCount}`, videoUrl: s.videoUrl, type: s.type };
+    } else {
+      dubCount++;
+      return { name: `HD${dubCount}`, videoUrl: s.videoUrl, type: s.type };
+    }
+  });
 
-  console.log(`[AW] Resolved ${servers.length} servers for "${animeTitle}" ep ${episode}`);
+  if (servers.length === 0) throw new Error(`No supported streaming servers found for episode ${episode}`);
+
+  console.log(`[AW] Resolved ${servers.length} working servers for "${animeTitle}" ep ${episode}`);
   return { servers, animeTitle, slug };
 }
 
@@ -354,18 +517,55 @@ async function scrapeAniNeko(title, episode) {
 
   console.log(`[AniNeko] Matched: "${best.title}" (slug=${best.slug})`);
 
-  const watchUrl = `${domain}/watch/${best.slug}/ep-${episode}`;
-  const watchHtml = await xfetch(watchUrl, { referer: domain, timeout: 55000 });
+  const subUrl = `${domain}/watch/${best.slug}/ep-${episode}`;
+  const urlsToFetch = [{ url: subUrl, isDubPage: best.slug.endsWith('-dub') }];
+
+  if (!best.slug.endsWith('-dub')) {
+    const dubSlug = `${best.slug}-dub`;
+    const dubUrl  = `${domain}/watch/${dubSlug}/ep-${episode}`;
+    urlsToFetch.push({ url: dubUrl, isDubPage: true });
+  }
+
+  console.log(`[AniNeko] Fetching watch pages:`, urlsToFetch.map(x => x.url));
+  const fetchedPages = await Promise.allSettled(
+    urlsToFetch.map(async item => {
+      const html = await xfetch(item.url, { referer: domain, timeout: 50000 });
+      return { html, isDubPage: item.isDubPage };
+    })
+  );
 
   const servers = [];
-  const btnRe = /<button class="nv-server-btn server-video server[^"]*"[^>]*data-video="([^"]+)"[^>]*>([\s\S]+?)<\/button>/g;
-  while ((m = btnRe.exec(watchHtml)) !== null) {
-    let videoUrl = m[1];
-    if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
-    const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    // Only keep HD-1 and HD-2 servers
-    if (name.includes('HD-1') || name.includes('HD-2')) {
-      servers.push({ name, videoUrl, type: 'sub' });
+  let subCount = 0;
+  let dubCount = 0;
+  for (const page of fetchedPages) {
+    if (page.status !== 'fulfilled') continue;
+    const { html, isDubPage } = page.value;
+
+    const btnRe = /<button class="nv-server-btn server-video server[^"]*"[^>]*data-video="([^"]+)"[^>]*>([\s\S]+?)<\/button>/g;
+    let m;
+    while ((m = btnRe.exec(html)) !== null) {
+      let videoUrl = m[1];
+      if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
+      const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      // Only keep HD-1 and HD-2 servers
+      if (name.includes('HD-1') || name.includes('HD-2')) {
+        const isDub = /dub/i.test(name) || isDubPage;
+        if (isDub) {
+          dubCount++;
+          servers.push({
+            name: `HD${dubCount}`,
+            videoUrl,
+            type: 'dub'
+          });
+        } else {
+          subCount++;
+          servers.push({
+            name: `HD${subCount}`,
+            videoUrl,
+            type: 'sub'
+          });
+        }
+      }
     }
   }
 
@@ -373,17 +573,42 @@ async function scrapeAniNeko(title, episode) {
   return { servers, animeTitle: best.title, slug: best.slug };
 }
 
+/**
+ * Scrapes the raw .m3u8 playlist URL from GogoCDN/other player embed pages if available in plain-text.
+ */
+async function resolveServerM3U8(videoUrl) {
+  try {
+    const referer = new URL(videoUrl).origin;
+    const html = await xfetch(videoUrl, { referer, timeout: 15000 });
+    const match = html.match(/const src\s*=\s*"([^"]+\.m3u8)"/)
+               || html.match(/file\s*:\s*"([^"]+\.m3u8)"/)
+               || html.match(/"file"\s*:\s*"([^"]+\.m3u8)"/);
+    if (match) {
+      let m3u8Url = match[1];
+      if (!m3u8Url.startsWith('http')) {
+        m3u8Url = new URL(m3u8Url, videoUrl).href;
+      }
+      return m3u8Url;
+    }
+  } catch (e) {
+    console.warn(`[M3U8 Resolver] Failed for ${videoUrl}:`, e.message);
+  }
+  return null;
+}
+
 // ══════════════════════════════════════════════════════════════════
 // COMBINED SCRAPER: AniWaves first for all titles, then AniNeko fallback
 // ══════════════════════════════════════════════════════════════════
 async function getServers(titles, episode) {
   const errors = [];
+  let result = null;
 
   // Phase 1: Try AniWaves for all title variants (best source)
   for (const title of titles) {
     try {
       console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
-      return await scrapeAniWaves(title, episode);
+      result = await scrapeAniWaves(title, episode);
+      break;
     } catch (e) {
       console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
       errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
@@ -391,19 +616,48 @@ async function getServers(titles, episode) {
   }
 
   // Phase 2: Try AniNeko for latin-script titles only (can't search Japanese)
-  for (const title of titles) {
-    if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
-    try {
-      console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
-      return await scrapeAniNeko(title, episode);
-    } catch (e) {
-      console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
-      errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
+  if (!result) {
+    for (const title of titles) {
+      if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
+      try {
+        console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
+        result = await scrapeAniNeko(title, episode);
+        break;
+      } catch (e) {
+        console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
+        errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
+      }
     }
   }
 
-  throw new Error(errors.join(' | '));
+  if (!result) {
+    throw new Error(errors.join(' | '));
+  }
+
+  // Resolve M3U8 streams concurrently
+  console.log(`[Engine] Resolving HLS streams for ${result.servers.length} servers...`);
+  const resolvedServers = await Promise.all(
+    result.servers.map(async s => {
+      const m3u8Url = await resolveServerM3U8(s.videoUrl);
+      if (m3u8Url) {
+        const proxiedUrl = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(new URL(s.videoUrl).origin)}`;
+        return {
+          ...s,
+          videoUrl: proxiedUrl,
+          isHLS: true
+        };
+      }
+      return s; // Fallback to iframe
+    })
+  );
+
+  return { ...result, servers: resolvedServers };
 }
+
+// ══════════════════════════════════════════════════════════════════
+// Global in-memory cache for resolved server lists (keyed by "firstTitle-episode")
+const serverCache = new Map();
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache life
 
 // ══════════════════════════════════════════════════════════════════
 // HTTP SERVER
@@ -414,22 +668,323 @@ const server = createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') { cors(res); res.writeHead(200); return res.end(); }
 
+  const refererHeader = req.headers.referer || '';
+  const isIframeProxy = refererHeader.includes('/api/iframe-proxy');
+  const myApis = ['/api/anineko-servers', '/api/ping', '/api/stream/hls', '/api/stream/segment', '/api/iframe-proxy'];
+  const isMyApi = myApis.includes(pathname);
+
+  // Intercept relative assets from iframe-proxy
+  if (isIframeProxy && !isMyApi) {
+    let targetOrigin = 'https://play.echovideo.ru'; // default fallback
+    let originalUrl = '';
+    try {
+      const refUrl = new URL(refererHeader);
+      const refParams = new URLSearchParams(refUrl.search);
+      originalUrl = refParams.get('url');
+      if (originalUrl) {
+        targetOrigin = new URL(originalUrl).origin;
+      }
+    } catch {}
+
+    const targetUrl = `${targetOrigin}${req.url}`;
+    const forwardReferer = originalUrl || 'https://aniwaves.ru/';
+    console.log(`[Iframe Proxy Asset] Forwarding: ${req.url} -> ${targetUrl} (Referer: ${forwardReferer})`);
+    
+    try {
+      const headersToForward = {
+        'User-Agent': UA,
+        'Referer': forwardReferer,
+      };
+      if (req.headers['x-requested-with']) {
+        headersToForward['X-Requested-With'] = req.headers['x-requested-with'];
+      }
+      if (req.headers['accept']) {
+        headersToForward['Accept'] = req.headers['accept'];
+      }
+      if (req.headers['origin']) {
+        headersToForward['Origin'] = targetOrigin;
+      }
+      let clientCookie = req.headers.cookie || '';
+      let mergedCookie = '';
+      if (globalCookie) {
+        mergedCookie = globalCookie;
+      }
+      if (clientCookie) {
+        mergedCookie = mergedCookie ? `${mergedCookie}; ${clientCookie}` : clientCookie;
+      }
+      if (mergedCookie) {
+        headersToForward['Cookie'] = mergedCookie;
+      }
+
+      console.log(`[Iframe Proxy Asset] Target headers:`, {
+        url: targetUrl,
+        referer: headersToForward.Referer,
+        cookie: headersToForward.Cookie,
+        globalCookie: globalCookie
+      });
+
+      const sRes = await fetch(targetUrl, {
+        headers: headersToForward
+      });
+      
+      const setCookieHeaders = sRes.headers.getSetCookie?.() || [];
+      if (setCookieHeaders.length) {
+        const newCookies = setCookieHeaders.map(c => c.split(';')[0]).join('; ');
+        globalCookie = globalCookie ? `${globalCookie}; ${newCookies}` : newCookies;
+        console.log(`[Iframe Proxy Asset] Captured cookies from ${req.url}:`, globalCookie);
+        res.setHeader('Set-Cookie', setCookieHeaders);
+      }
+
+      console.log(`[Iframe Proxy Asset] Forwarded response for ${req.url}: Status ${sRes.status} (${sRes.headers.get('content-type')})`);
+      
+      if (req.url.includes('/api/getSources')) {
+        const bodyText = await sRes.text();
+        console.log(`[Iframe Proxy Asset] getSources body snippet:`, bodyText.slice(0, 300));
+        res.writeHead(sRes.status, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        });
+        return res.end(bodyText);
+      }
+
+      const isStatic = req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/i);
+      res.writeHead(sRes.status, {
+        'Content-Type': sRes.headers.get('content-type') || 'application/octet-stream',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': isStatic ? 'public, max-age=86400' : 'no-store, no-cache, must-revalidate'
+      });
+      
+      for await (const chunk of sRes.body) {
+        res.write(chunk);
+      }
+      return res.end();
+    } catch (e) {
+      console.error(`[Iframe Proxy Asset] Error forwarding ${req.url}:`, e.message);
+      res.writeHead(500);
+      return res.end(e.message);
+    }
+  }
+
+  if (pathname === '/api/iframe-proxy') {
+    cors(res);
+    const targetUrl = searchParams.get('url');
+    if (!targetUrl) return json(res, 400, { error: 'url required' });
+    try {
+      let html = await xfetch(targetUrl, { referer: 'https://aniwaves.ru/' });
+      
+      const cb = Date.now();
+      html = html.replace(/(<script[^>]+src=["'])([^"']+\.js)(["'])/gi, `$1$2?_cb=${cb}$3`);
+      html = html.replace(/(<link[^>]+href=["'])([^"']+\.css)(["'])/gi, `$1$2?_cb=${cb}$3`);
+      
+      const injectedScript = `
+<script>
+  (function() {
+    function checkAndSend(src) {
+      if (src && typeof src === 'string') {
+        let absoluteUrl = src;
+        try {
+          absoluteUrl = new URL(src, window.location.href).href;
+        } catch(e) {}
+        if (absoluteUrl.includes('.m3u8') || absoluteUrl.includes('.mp4') || absoluteUrl.includes('.mkv')) {
+          console.log('[Iframe Interceptor] Captured video stream URL:', absoluteUrl);
+          window.parent.postMessage({ type: 'NATIVE_STREAM_URL', url: absoluteUrl }, '*');
+        }
+      }
+    }
+
+    // Intercept fetch
+    const originalFetch = window.fetch;
+    window.fetch = function(input, init) {
+      let url = '';
+      if (typeof input === 'string') {
+        url = input;
+      } else if (input && input.url) {
+        url = input.url;
+      }
+      checkAndSend(url);
+      return originalFetch.apply(this, arguments);
+    };
+
+    // Intercept XMLHttpRequest
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      checkAndSend(url);
+      return originalOpen.apply(this, arguments);
+    };
+
+    // Fallback: Intercept DOM video element src
+    const originalSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+    if (originalSrcDescriptor) {
+      Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+        get: originalSrcDescriptor.get,
+        set: function(val) {
+          checkAndSend(val);
+          return originalSrcDescriptor.set.call(this, val);
+        },
+        configurable: true
+      });
+    }
+    const originalSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, val) {
+      if (name === 'src' && (this.tagName === 'VIDEO' || this.tagName === 'SOURCE')) {
+        checkAndSend(val);
+      }
+      return originalSetAttribute.apply(this, arguments);
+    };
+    const originalSourceSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
+    if (originalSourceSrcDescriptor) {
+      Object.defineProperty(HTMLSourceElement.prototype, 'src', {
+        get: originalSourceSrcDescriptor.get,
+        set: function(val) {
+          checkAndSend(val);
+          return originalSourceSrcDescriptor.set.call(this, val);
+        },
+        configurable: true
+      });
+    }
+  })();
+</script>
+`;
+      html = html.replace(/<head[^>]*>/i, match => match + injectedScript);
+
+      res.writeHead(200, { 
+        'Content-Type': 'text/html',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store, no-cache, must-revalidate'
+      });
+      return res.end(html);
+    } catch (e) {
+      return json(res, 500, { error: e.message });
+    }
+  }
+
   if (pathname === '/api/ping') return json(res, 200, { ok: true });
+
+  // ── Puppeteer-based stream extractor endpoint ──────────────────────
+  if (pathname === '/api/extract-stream') {
+    cors(res);
+    const embedUrl = searchParams.get('url');
+    if (!embedUrl) return json(res, 400, { error: 'url required' });
+    try {
+      const { url: m3u8Url, referer } = await puppeteerExtractM3U8(embedUrl);
+      // Wrap the m3u8 through our HLS proxy so segments get correct headers
+      const proxied = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+      return json(res, 200, { ok: true, url: proxied, rawUrl: m3u8Url });
+    } catch (e) {
+      console.error('[Extract Stream]', e.message);
+      return json(res, 502, { ok: false, error: e.message });
+    }
+  }
 
   if (pathname === '/api/anineko-servers') {
     const titlesParam = searchParams.get('titles') || searchParams.get('title');
     const ep          = searchParams.get('episode') || '1';
     if (!titlesParam) return json(res, 400, { error: 'titles required' });
 
-    // Accept comma-separated list of titles (romaji, english, etc.)
+    // Accept pipe-separated list of titles (romaji, english, etc.)
     const titles = titlesParam.split('|||').map(t => t.trim()).filter(Boolean);
+    if (titles.length === 0) return json(res, 400, { error: 'valid title required' });
+
+    const cacheKey = `${titles[0]}-${ep}`;
+
+    // Check cache first
+    if (serverCache.has(cacheKey)) {
+      const cached = serverCache.get(cacheKey);
+      if (Date.now() - cached.timestamp < CACHE_TTL) {
+        console.log(`[Cache Hit] Serving cached servers for: "${cacheKey}"`);
+        return json(res, 200, cached.data);
+      } else {
+        serverCache.delete(cacheKey);
+      }
+    }
 
     try {
       const data = await getServers(titles, ep);
-      return json(res, 200, { ok: true, ...data });
+      const resData = { ok: true, ...data };
+      serverCache.set(cacheKey, { data: resData, timestamp: Date.now() });
+      return json(res, 200, resData);
     } catch (e) {
       console.error('[Engine Error]', e.message);
       return json(res, 503, { ok: false, error: e.message });
+    }
+  }
+
+  // HLS Playlist Proxy
+  if (pathname === '/api/stream/hls') {
+    cors(res);
+    const targetUrl = searchParams.get('url');
+    const referer = searchParams.get('referer') || new URL(targetUrl).origin;
+    try {
+      const raw = await xfetch(targetUrl, { referer });
+      const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
+      
+      const lines = raw.split('\n').map(line => {
+        line = line.trim();
+        if (!line) return '';
+        if (line.startsWith('#')) {
+          if (line.startsWith('#EXT-X-KEY:')) {
+            const match = line.match(/URI="([^"]+)"/);
+            if (match) {
+              let keyUrl = match[1];
+              if (!keyUrl.startsWith('http')) keyUrl = new URL(keyUrl, baseUrl).href;
+              const proxiedKey = `/api/stream/segment?url=${encodeURIComponent(keyUrl)}&referer=${encodeURIComponent(referer)}`;
+              return line.replace(match[1], proxiedKey);
+            }
+          }
+          return line;
+        }
+        
+        let absoluteUrl = line;
+        if (!absoluteUrl.startsWith('http')) {
+          absoluteUrl = new URL(absoluteUrl, baseUrl).href;
+        }
+        
+        if (absoluteUrl.includes('.m3u8')) {
+          return `/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+        } else {
+          return `/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+        }
+      }).join('\n');
+      
+      res.writeHead(200, { 
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Cache-Control': 'no-cache'
+      });
+      return res.end(lines);
+    } catch (e) {
+      return json(res, 500, { error: e.message });
+    }
+  }
+
+  // HLS Segment Proxy
+  if (pathname === '/api/stream/segment') {
+    cors(res);
+    const targetUrl = searchParams.get('url');
+    const referer = searchParams.get('referer') || new URL(targetUrl).origin;
+    try {
+      const headers = {
+        'User-Agent': UA,
+        'Referer': referer,
+        'Origin': new URL(referer).origin
+      };
+      if (globalCookie) {
+        headers['Cookie'] = globalCookie;
+      }
+      const sRes = await fetch(targetUrl, { headers });
+      
+      res.writeHead(sRes.status, {
+        'Content-Type': sRes.headers.get('content-type') || 'application/octet-stream',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=86400'
+      });
+      
+      for await (const chunk of sRes.body) {
+        res.write(chunk);
+      }
+      return res.end();
+    } catch (e) {
+      res.writeHead(500);
+      return res.end(e.message);
     }
   }
 

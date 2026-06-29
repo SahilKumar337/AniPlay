@@ -1,7 +1,7 @@
 import { User, Settings, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
-import Navbar from '../components/Navbar';
+
 
 export default function Profile() {
   const { watchlist, favorites, progress } = useApp();
@@ -100,7 +100,6 @@ export default function Profile() {
           AniLab v1.0.0 · Made with ❤ for anime fans
         </div>
       </div>
-      <Navbar />
     </div>
   );
 }

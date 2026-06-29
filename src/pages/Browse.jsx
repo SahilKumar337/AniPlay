@@ -10,7 +10,7 @@ import { useApp }       from '../context/AppContext';
 import { rankAnimeByKnn } from '../utils/knn';
 import { searchAndRankAnime } from '../utils/searchEngine';
 import { useDebounce }  from '../hooks/useDebounce';
-import Navbar from '../components/Navbar';
+
 
 const GENRES = ['Action','Adventure','Comedy','Drama','Fantasy','Horror','Mecha','Mystery','Romance','Sci-Fi','Slice of Life','Sports','Thriller','Supernatural'];
 const FORMATS = [
@@ -133,131 +133,136 @@ export default function Browse() {
   const personalizedResults = debounced ? results : rankAnimeByKnn(results, recentlyViewed);
 
   return (
-    <div className="page fade-in-up">
-      {/* Header */}
-      <div className="browse-header">
-        <div className="search-box" style={{ flex: 1 }}>
-          <Search size={16} color="var(--text-muted)" />
-          <input
-            id="search-input"
-            type="text"
-            placeholder={categoryTitle ? `Search in ${categoryTitle}...` : "Search anime..."}
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            autoComplete="off"
-          />
-          {query && (
-            <button onClick={() => setQuery('')} aria-label="Clear search">
-              <X size={14} color="var(--text-muted)" />
-            </button>
-          )}
-        </div>
-        <button
-          className="filter-btn"
-          onClick={() => setShowFilter(v => !v)}
-          id="btn-filter"
-          aria-label="Toggle filters"
-        >
-          <SlidersHorizontal size={18} color="#fff" />
-        </button>
-      </div>
-
-      {/* Category Indicator Card */}
-      {categoryTitle && (
-        <div style={{
-          margin: '0 16px 12px', padding: '12px 16px', borderRadius: 12,
-          background: 'rgba(229,9,20,0.1)', border: '1px solid rgba(229,9,20,0.3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          animation: 'fadeIn var(--transition)'
-        }}>
-          <div>
-            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Tag size={9}/> Category Filter
-            </span>
-            <h2 style={{ fontSize: 15, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', marginTop: 2 }}>{categoryTitle}</h2>
+    <div className="page">
+      {/* Sticky Header Container */}
+      <div className="sticky-header">
+        {/* Header */}
+        <div className="browse-header" style={{ paddingBottom: 8 }}>
+          <div className="search-box" style={{ flex: 1 }}>
+            <Search size={16} color="var(--text-muted)" />
+            <input
+              id="search-input"
+              type="text"
+              placeholder={categoryTitle ? `Search in ${categoryTitle}...` : "Search anime..."}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              autoComplete="off"
+            />
+            {query && (
+              <button onClick={() => setQuery('')} aria-label="Clear search">
+                <X size={14} color="var(--text-muted)" />
+              </button>
+            )}
           </div>
           <button
-            onClick={() => {
-              navigate('/browse');
-              setFormat(null);
-              setStatus(null);
-              setGenre(null);
-            }}
-            style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', cursor: 'pointer', background: 'rgba(229,9,20,0.15)', padding: '5px 12px', borderRadius: 20 }}
+            className="filter-btn"
+            onClick={() => setShowFilter(v => !v)}
+            id="btn-filter"
+            aria-label="Toggle filters"
+            style={{ borderRadius: '50%', width: 36, height: 36 }}
           >
-            Clear
+            <SlidersHorizontal size={16} color="#fff" />
           </button>
         </div>
-      )}
 
-      {/* Filter Panel */}
-      {showFilter && (
-        <div style={{ padding: '0 16px 12px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
-          {/* Format */}
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Format</p>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-            {FORMATS.map(f => (
-              <button
-                key={f.value || 'all'}
-                className={`genre-pill ${format === f.value ? 'active' : ''}`}
-                onClick={() => setFormat(f.value)}
-              >{f.label}</button>
-            ))}
+        {/* Filter Panel */}
+        {showFilter && (
+          <div style={{ padding: '0 16px 12px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
+            {/* Format */}
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Format</p>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+              {FORMATS.map(f => (
+                <button
+                  key={f.value || 'all'}
+                  className={`genre-pill ${format === f.value ? 'active' : ''}`}
+                  onClick={() => setFormat(f.value)}
+                >{f.label}</button>
+              ))}
+            </div>
+            {/* Status */}
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Status</p>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              {STATUSES.map(s => (
+                <button
+                  key={s.value || 'all'}
+                  className={`genre-pill ${status === s.value ? 'active' : ''}`}
+                  onClick={() => setStatus(s.value)}
+                >{s.label}</button>
+              ))}
+            </div>
           </div>
-          {/* Status */}
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Status</p>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-            {STATUSES.map(s => (
-              <button
-                key={s.value || 'all'}
-                className={`genre-pill ${status === s.value ? 'active' : ''}`}
-                onClick={() => setStatus(s.value)}
-              >{s.label}</button>
-            ))}
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Genre Pills */}
-      <div className="genre-pills" style={{ marginTop: 4 }}>
-        <button
-          className={`genre-pill ${!genre ? 'active' : ''}`}
-          onClick={() => setGenre(null)}
-        >All</button>
-        {GENRES.map(g => (
+        {/* Genre Pills */}
+        <div className="genre-pills" style={{ paddingBottom: 10, marginTop: 4 }}>
           <button
-            key={g}
-            className={`genre-pill ${genre === g ? 'active' : ''}`}
-            onClick={() => setGenre(g === genre ? null : g)}
-            id={`genre-filter-${g.toLowerCase().replace(/\s/g, '-')}`}
-          >{g}</button>
-        ))}
-      </div>
-
-      {/* Results */}
-      {loading ? (
-        <div style={{ padding: '16px' }}>
-          {[1,2,3,4,5,6].map(i => <SkeletonResultItem key={i} />)}
-        </div>
-      ) : personalizedResults.length === 0 ? (
-        <div className="empty-state">
-          <Search size={48} className="empty-icon" />
-          <p className="empty-title">No anime found</p>
-          <p className="empty-sub">Try a different search or filters</p>
-        </div>
-      ) : (
-        <div style={{ paddingBottom: 8 }}>
-          {personalizedResults.map(anime => (
-            <SearchResultItem
-              key={anime.id}
-              anime={anime}
-              onClick={() => navigate(`/anime/${anime.id}`)}
-            />
+            className={`genre-pill ${!genre ? 'active' : ''}`}
+            onClick={() => setGenre(null)}
+          >All</button>
+          {GENRES.map(g => (
+            <button
+              key={g}
+              className={`genre-pill ${genre === g ? 'active' : ''}`}
+              onClick={() => setGenre(g === genre ? null : g)}
+              id={`genre-filter-${g.toLowerCase().replace(/\s/g, '-')}`}
+            >{g}</button>
           ))}
         </div>
-      )}
+      </div>
 
-      <Navbar />
+      {/* Content Wrapper with Entrance Animation */}
+      <div className="fade-in-up">
+        {/* Category Indicator Card */}
+        {categoryTitle && (
+          <div style={{
+            margin: '12px 16px 12px', padding: '12px 16px', borderRadius: 12,
+            background: 'rgba(229,9,20,0.1)', border: '1px solid rgba(229,9,20,0.3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            animation: 'fadeIn var(--transition)'
+          }}>
+            <div>
+              <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Tag size={9}/> Category Filter
+              </span>
+              <h2 style={{ fontSize: 15, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', marginTop: 2 }}>{categoryTitle}</h2>
+            </div>
+            <button
+              onClick={() => {
+                navigate('/browse');
+                setFormat(null);
+                setStatus(null);
+                setGenre(null);
+              }}
+              style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', cursor: 'pointer', background: 'rgba(229,9,20,0.15)', padding: '5px 12px', borderRadius: 20 }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
+        {/* Results */}
+        {loading ? (
+          <div style={{ padding: '16px' }}>
+            {[1,2,3,4,5,6].map(i => <SkeletonResultItem key={i} />)}
+          </div>
+        ) : personalizedResults.length === 0 ? (
+          <div className="empty-state">
+            <Search size={48} className="empty-icon" />
+            <p className="empty-title">No anime found</p>
+            <p className="empty-sub">Try a different search or filters</p>
+          </div>
+        ) : (
+          <div style={{ paddingBottom: 8 }}>
+            {personalizedResults.map(anime => (
+              <SearchResultItem
+                key={anime.id}
+                anime={anime}
+                onClick={() => navigate(`/anime/${anime.id}`)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

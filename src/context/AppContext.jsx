@@ -106,12 +106,17 @@ export function AppProvider({ children }) {
     });
   }, []);
 
+  const removeFromRecentlyViewed = useCallback((animeId) => {
+    setRecentlyViewed(prev => prev.filter(item => item.anime.id !== animeId));
+    showToast('Removed from Continue Watching');
+  }, [showToast]);
+
   return (
     <AppContext.Provider value={{
       watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
       favorites, toggleFavorite, isFavorite,
       progress, setEpisodeProgress, getEpisodeProgress,
-      recentlyViewed, addToRecentlyViewed,
+      recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
       showToast, toast,
     }}>
       {children}
