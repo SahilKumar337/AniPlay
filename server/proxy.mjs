@@ -213,30 +213,54 @@ async function awSearch(title) {
 /**
  * Step 2: Get episode server list from AniWaves AJAX endpoint.
  * Returns array of { serverId, serverName, type } where type is 'sub'|'dub'.
+ * Retries up to 3 times since AniWaves sometimes returns empty on cold requests.
  */
-async function awGetServers(animeId, episode) {
-  const url = `${AW}/ajax/anime/servers?ep=${episode}&id=${animeId}`;
-  const text = await xfetch(url, {
-    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': AW },
-    timeout: 30000,
-  });
+async function awGetServers(animeId, episode, slug) {
+  const url     = `${AW}/ajax/anime/servers?ep=${episode}&id=${animeId}`;
+  const referer = slug ? `${AW}/watch/${slug}` : AW;
 
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { throw new Error('AniWaves servers returned non-JSON'); }
-  if (parsed.status !== 200 || !parsed.html) throw new Error(`No servers found for episode ${episode} on AniWaves`);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let text;
+    try {
+      text = await xfetch(url, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': referer },
+        timeout: 30000,
+      });
+    } catch (e) {
+      if (attempt === 3) throw e;
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+      continue;
+    }
 
-  const html = parsed.html;
-  const servers = [];
+    if (!text || text.trim() === '') {
+      console.warn(`[AW] awGetServers got empty response (attempt ${attempt})`);
+      if (attempt < 3) { await new Promise(r => setTimeout(r, 1000 * attempt)); continue; }
+      throw new Error(`AniWaves servers endpoint returned empty for ep ${episode}`);
+    }
 
-  // Parse: <li class="nav-item" data-type="sub" data-id="592398">...<a ...>Vidstream</a>
-  const re = /data-type="(sub|dub)"\s+data-id="(\d+)">\s*<a[^>]+data-name="([^"]+)"/g;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    servers.push({ type: m[1], serverId: m[2], serverName: m[3] });
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      if (attempt < 3) { await new Promise(r => setTimeout(r, 1000 * attempt)); continue; }
+      throw new Error('AniWaves servers returned non-JSON');
+    }
+
+    if (parsed.status !== 200 || !parsed.html) {
+      throw new Error(`No servers available for episode ${episode} on AniWaves (status: ${parsed.status})`);
+    }
+
+    const html = parsed.html;
+    const servers = [];
+    const re = /data-type="(sub|dub)"\s+data-id="(\d+)">\s*<a[^>]+data-name="([^"]+)"/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      servers.push({ type: m[1], serverId: m[2], serverName: m[3] });
+    }
+
+    if (servers.length === 0) throw new Error(`No servers parsed from AniWaves episode ${episode} HTML`);
+    return servers;
   }
 
-  if (servers.length === 0) throw new Error(`No servers parsed from AniWaves episode ${episode} HTML`);
-  return servers;
+  throw new Error(`awGetServers exhausted retries for episode ${episode}`);
 }
 
 /**
@@ -263,7 +287,7 @@ async function awGetEmbedUrl(serverId, watchPageSlug) {
  */
 async function scrapeAniWaves(title, episode) {
   const { slug, animeId, animeTitle } = await awSearch(title);
-  const rawServers = await awGetServers(animeId, episode);
+  const rawServers = await awGetServers(animeId, episode, slug);
 
   // Prioritise: sub Vidstream → sub Mycloud → all subs → then dubs
   // We'll resolve embed URLs for the first 6 servers (3 sub + 3 dub ideally)
