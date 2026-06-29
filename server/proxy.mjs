@@ -662,8 +662,8 @@ const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache life
 // ══════════════════════════════════════════════════════════════════
 // HTTP SERVER
 // ══════════════════════════════════════════════════════════════════
-const server = createServer(async (req, res) => {
-  const parsed = new URL(req.url, `http://localhost:${PORT}`);
+export async function handleRequest(req, res) {
+  const parsed = new URL(req.url, `http://${req.headers.host || `localhost:${PORT}`}`);
   const { pathname, searchParams } = parsed;
 
   if (req.method === 'OPTIONS') { cors(res); res.writeHead(200); return res.end(); }
@@ -1008,16 +1008,20 @@ const server = createServer(async (req, res) => {
   }
 
   json(res, 404, { error: 'not found' });
-});
+}
 
-server.listen(PORT, () => {
-  console.log('');
-  console.log('  🚀 AniLab Stream Engine v5 (AniWaves + AniNeko)');
-  console.log(`  ➜  http://localhost:${PORT}`);
-  console.log('');
-});
+export const server = createServer(handleRequest);
 
-server.on('error', e => {
-  if (e.code === 'EADDRINUSE') console.error(`Port ${PORT} already in use`);
-  else console.error(e.message);
-});
+if (process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1') {
+  server.listen(PORT, () => {
+    console.log('');
+    console.log('  🚀 AniLab Stream Engine v5 (AniWaves + AniNeko)');
+    console.log(`  ➜  http://localhost:${PORT}`);
+    console.log('');
+  });
+
+  server.on('error', e => {
+    if (e.code === 'EADDRINUSE') console.error(`Port ${PORT} already in use`);
+    else console.error(e.message);
+  });
+}
