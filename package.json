@@ -12,6 +12,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/cli": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
     "@consumet/extensions": "^1.8.8",
     "axios": "^1.18.1",
     "hls.js": "^1.6.16",
