@@ -129,15 +129,58 @@ async function getPlaywrightContext() {
   if (!playwrightContext) {
     playwrightContext = await browser.newContext({
       userAgent: UA,
-      viewport: { width: 1280, height: 720 }
+      viewport: { width: 1280, height: 720 },
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      locale: 'en-US',
+      timezoneId: 'America/New_York'
+    });
+
+    // Add robust stealth script before any page loads
+    await playwrightContext.addInitScript(() => {
+      // Hide webdriver automation signature
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      // Mimic Chrome runtime environment
+      window.chrome = { runtime: {} };
+      // Override permissions query
+      const originalQuery = navigator.permissions.query;
+      navigator.permissions.query = (parameters) =>
+        parameters.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : originalQuery(parameters);
+      // Mock languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
     });
 
     console.log('[Playwright] Priming shared context with AniWaves homepage...');
     const page = await playwrightContext.newPage();
     try {
       await page.goto(AW, { waitUntil: 'domcontentloaded', timeout: 20000 });
-      await page.waitForTimeout(4000); // Allow time for CF challenge to execute
-      console.log('[Playwright] Shared context priming completed successfully.');
+      
+      // Let passive challenge load/run
+      await page.waitForTimeout(3000);
+      
+      // Check for Cloudflare Turnstile challenge page
+      let title = await page.title();
+      if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
+        console.log('[Playwright] Cloudflare verification page detected on homepage. Searching for challenge iframe...');
+        
+        // Find Turnstile iframe inside challenges.cloudflare.com
+        const frame = page.frames().find(f => f.url().includes('challenges.cloudflare.com'));
+        if (frame) {
+          console.log('[Playwright] Found Turnstile iframe. Waiting for checkbox wrapper...');
+          // Checkbox wrapper is usually #challenge-stage or input[type=checkbox]
+          const box = await frame.waitForSelector('input[type="checkbox"], #challenge-stage, .ctp-checkbox-label', { timeout: 4000 }).catch(() => null);
+          if (box) {
+            console.log('[Playwright] Clicking Cloudflare verification checkbox...');
+            await box.click();
+            await page.waitForTimeout(3000);
+          }
+        } else {
+          await page.waitForTimeout(3000);
+        }
+      }
+      console.log(`[Playwright] Homepage loaded successfully. Title: "${await page.title()}"`);
     } catch (e) {
       console.warn('[Playwright] Context priming failed:', e.message);
     } finally {
@@ -162,7 +205,7 @@ async function playwrightFetch(url, referer = '') {
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
-    // Check if we hit a Cloudflare challenge
+    // Check if we hit a Cloudflare challenge on the API/Target URL
     let title = await page.title();
     let isChallenge = title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!');
 
@@ -199,6 +242,7 @@ async function playwrightFetch(url, referer = '') {
     throw e;
   }
 }
+
 
 
 
