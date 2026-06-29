@@ -24,6 +24,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, extname }   from 'node:path';
 import { Readable }        from 'node:stream';
 import puppeteer from 'puppeteer-core';
+import { chromium } from 'playwright';
 
 const PORT     = process.env.PORT || 4000;
 const AW       = 'https://aniwaves.ru';
@@ -87,6 +88,195 @@ async function getBrowser() {
   globalBrowser = await puppeteer.launch(launchOptions);
   return globalBrowser;
 }
+
+let playwrightBrowser = null;
+async function getPlaywrightBrowser() {
+  if (playwrightBrowser) {
+    try {
+      if (playwrightBrowser.isConnected()) {
+        return playwrightBrowser;
+      }
+    } catch (e) {
+      playwrightBrowser = null;
+    }
+  }
+
+  try {
+    console.log('[Playwright] Launching shared browser instance...');
+    playwrightBrowser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-web-security',
+        '--disable-gpu',
+        '--disable-dev-shm-usage',
+      ]
+    });
+    return playwrightBrowser;
+  } catch (e) {
+    console.warn('[Playwright] Failed to launch browser:', e.message);
+    playwrightBrowser = null;
+    return null;
+  }
+}
+
+async function playwrightExtractM3U8(embedUrl) {
+  const cached = streamUrlCache.get(embedUrl);
+  if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL) {
+    console.log(`[Playwright] Cache hit for ${embedUrl.slice(0, 80)}`);
+    return cached;
+  }
+
+  const browser = await getPlaywrightBrowser();
+  if (!browser) {
+    throw new Error('Playwright browser is not initialized');
+  }
+
+  console.log(`[Playwright] Launching isolated page context for: ${embedUrl.slice(0, 100)}`);
+  
+  // Create isolated context with user agent and referer
+  const context = await browser.newContext({
+    userAgent: UA,
+    extraHTTPHeaders: { 'Referer': AW + '/' }
+  });
+
+  return new Promise(async (resolve, reject) => {
+    let page = null;
+    let resolved = false;
+
+    const cleanup = async () => {
+      if (page) {
+        try { await page.close(); } catch (e) {}
+      }
+      try { await context.close(); } catch (e) {}
+    };
+
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      streamUrlCache.set(embedUrl, result);
+      cleanup().catch(() => {});
+      resolve(result);
+    };
+
+    const fail = (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup().catch(() => {});
+      reject(err);
+    };
+
+    try {
+      page = await context.newPage();
+
+      // Intercept and block unnecessary resources for high performance
+      await page.route('**/*', (route) => {
+        const url = route.request().url();
+        const type = route.request().resourceType();
+
+        if (
+          url.includes('doubleclick') ||
+          url.includes('googlesyndication') ||
+          url.includes('google-analytics') ||
+          url.includes('adsbygoogle') ||
+          url.includes('adnxs') ||
+          url.includes('adsystem') ||
+          url.includes('popads') ||
+          url.includes('onclickads') ||
+          url.includes('exoclick') ||
+          ['image', 'stylesheet', 'font', 'media'].includes(type)
+        ) {
+          return route.abort().catch(() => {});
+        }
+
+        // Intercept m3u8 requests
+        if (url.includes('.m3u8') || url.includes('playlist.m3u8')) {
+          const reqHeaders = route.request().headers();
+          const capturedReferer = reqHeaders['referer'] || embedUrl;
+          console.log(`[Playwright] Captured request m3u8: ${url.slice(0, 120)}`);
+          finish({ url, referer: capturedReferer, ts: Date.now() });
+          return;
+        }
+
+        route.continue().catch(() => {});
+      });
+
+      // Response-level monitoring
+      page.on('response', (response) => {
+        const url = response.url();
+        const headers = response.headers();
+        const ct = headers['content-type'] || '';
+        if (url.includes('.m3u8') || ct.includes('mpegurl') || ct.includes('x-mpegURL')) {
+          const reqHeaders = response.request().headers();
+          const capturedReferer = reqHeaders['referer'] || embedUrl;
+          console.log(`[Playwright] Captured response m3u8: ${url.slice(0, 120)}`);
+          finish({ url, referer: capturedReferer, ts: Date.now() });
+        }
+      });
+
+      // Open page
+      try {
+        await page.goto(embedUrl, { waitUntil: 'commit', timeout: 30000 });
+      } catch (navErr) {
+        if (!navErr.message.includes('timeout')) throw navErr;
+        console.warn('[Playwright] Page navigation timeout - continuing extraction');
+      }
+
+      if (resolved) return;
+
+      // Click playback buttons to trigger load
+      try {
+        await page.evaluate(() => {
+          const selectors = [
+            'video', 
+            '#player', 
+            '.jw-video', 
+            '.jw-display-icon-container', 
+            '.vjs-big-play-button',
+            '.play-button',
+            '[class*="play"]',
+            '[id*="play"]'
+          ];
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (el) {
+              el.click();
+              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }
+          }
+        });
+      } catch (clickErr) {
+        console.warn('[Playwright] Trigger click failed:', clickErr.message);
+      }
+
+      // Check loop for up to 12 seconds
+      for (let i = 0; i < 24; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (resolved) return;
+      }
+
+      fail(new Error('No m3u8 URL captured by Playwright'));
+    } catch (e) {
+      fail(e);
+    }
+  });
+}
+
+async function extractStreamM3U8(embedUrl) {
+  // 1. Try Playwright first
+  try {
+    const result = await playwrightExtractM3U8(embedUrl);
+    if (result) return result;
+  } catch (e) {
+    console.warn(`[Stream Resolver] Playwright failed for ${embedUrl.slice(0, 60)}:`, e.message);
+  }
+
+  // 2. Fall back to Puppeteer
+  console.log(`[Stream Resolver] Falling back to Puppeteer for ${embedUrl.slice(0, 60)}`);
+  return await puppeteerExtractM3U8(embedUrl);
+}
+
 
 // ── Puppeteer stream extractor (headless Chrome, network intercept) ──
 // Cache recently extracted stream URLs to avoid relaunching browser for the same embed
@@ -1000,7 +1190,7 @@ export async function handleRequest(req, res) {
     const embedUrl = searchParams.get('url');
     if (!embedUrl) return json(res, 400, { error: 'url required' });
     try {
-      const { url: m3u8Url, referer } = await puppeteerExtractM3U8(embedUrl);
+      const { url: m3u8Url, referer } = await extractStreamM3U8(embedUrl);
       // Return ABSOLUTE URL so Capacitor WebView (which runs at http://localhost)
       // can correctly resolve the playlist — relative paths would hit localhost, not Render.
       const proto = req.headers['x-forwarded-proto'] || 'https';
