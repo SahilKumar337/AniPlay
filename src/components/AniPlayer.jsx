@@ -82,17 +82,18 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const [swipeVol,  setSwipeVol]  = useState(false);
   const [swipeBri,  setSwipeBri]  = useState(false);
   const [fitMode,   setFitMode]   = useState('contain');
+  const [needsTap,  setNeedsTap]  = useState(false);  // autoplay blocked
+  const [hlsErr,    setHlsErr]    = useState(null);   // fatal stream error
 
   /* ── HLS ──────────────────────────────────────────────────── */
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !url) return;
 
-    // Clear previous source to prevent conflicts
-    v.removeAttribute('src');
-    v.load();
-
-    // Reset stream state
+    // Reset all state on URL change
+    setNeedsTap(false);
+    setHlsErr(null);
+    setWaiting(true);
     setQualities([]);
     setActiveQ(-1);
     setSubs(subtitleTracks || []);
@@ -100,37 +101,54 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     setShowQ(false);
     setShowSub(false);
 
+    v.removeAttribute('src');
+    v.load();
+
+    const tryPlay = () => {
+      v.play().then(() => {
+        setNeedsTap(false);
+      }).catch(err => {
+        // NotAllowedError = browser blocked autoplay → show tap-to-play
+        // AbortError = previous play() was interrupted (harmless)
+        if (err.name === 'NotAllowedError') {
+          setNeedsTap(true);
+        } else if (err.name !== 'AbortError') {
+          console.warn('[AniPlayer] play() error:', err.name, err.message);
+        }
+      });
+    };
+
     let hls;
+    let mediaErrRetries = 0;
+
     if (Hls.isSupported()) {
-      hls = new Hls({ 
-        maxMaxBufferLength: 30, 
-        enableWorker: true, 
+      hls = new Hls({
+        // enableWorker:false — avoids Web Worker CSP issues inside Capacitor WebView
+        enableWorker: false,
         startLevel: -1,
-        manifestLoadingMaxRetry: 4,
-        manifestLoadingRetryDelay: 1000,
-        levelLoadingMaxRetry: 4,
-        levelLoadingRetryDelay: 1000
+        maxMaxBufferLength: 30,
+        manifestLoadingMaxRetry: 3,
+        manifestLoadingRetryDelay: 1500,
+        levelLoadingMaxRetry: 3,
+        levelLoadingRetryDelay: 1500,
+        fragLoadingMaxRetry: 3,
+        fragLoadingRetryDelay: 1500,
       });
       hlsRef.current = hls;
 
-      // Error handling and auto-recovery
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        console.warn('[Hls.js Error]:', data);
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.log('Fatal network error, trying to recover...');
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.log('Fatal media error, trying to recover...');
-              hls.recoverMediaError();
-              break;
-            default:
-              console.error('Unrecoverable Hls error, destroying...');
-              hls.destroy();
-              break;
-          }
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (!data.fatal) return;
+        console.error('[HLS fatal]', data.type, data.details, data.reason || '');
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          // retry once on network errors
+          hls.startLoad();
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 2) {
+          mediaErrRetries++;
+          hls.recoverMediaError();
+        } else {
+          // Give up — show a visible error so user can retry
+          setHlsErr(`Stream error: ${data.details || data.type}. Tap retry.`);
+          setWaiting(false);
         }
       });
 
@@ -141,25 +159,33 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       });
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
-        setQualities(d.levels.map((l, i) => ({ id: i, label: l.height ? `${l.height}p` : `Level ${i+1}` })));
-        v.play().catch(() => {});
+        setQualities(d.levels.map((l, i) => ({
+          id: i,
+          label: l.height ? `${l.height}p` : `Level ${i + 1}`
+        })));
+        tryPlay();
       });
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, d) => {
         if (d.subtitleTracks?.length)
-          setSubs(d.subtitleTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Track ${i+1}` })));
+          setSubs(d.subtitleTracks.map((t, i) => ({
+            id: i,
+            label: t.name || t.lang || `Track ${i + 1}`
+          })));
       });
+
     } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari / native HLS
       v.src = url;
       v.load();
-      v.play().catch(() => {});
+      tryPlay();
+    } else {
+      setHlsErr('HLS is not supported in this browser.');
     }
 
-    return () => { 
-      if (hls) {
-        hls.destroy();
-      }
-      hlsRef.current = null; 
+    return () => {
+      if (hls) hls.destroy();
+      hlsRef.current = null;
     };
   }, [url]);
 
@@ -427,7 +453,46 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         style={{ objectFit: fitMode }}
         playsInline
         preload="auto"
+        autoPlay
+        crossOrigin="anonymous"
       />
+
+      {/* ── Tap-to-play overlay (autoplay blocked by browser) ── */}
+      {needsTap && !hlsErr && (
+        <div
+          className="anip__tap-play"
+          onClick={() => {
+            const v = videoRef.current;
+            if (v) v.play().then(() => setNeedsTap(false)).catch(() => {});
+          }}
+        >
+          <div className="anip__tap-play__circle">
+            <Play size={38} fill="#fff" strokeWidth={0} />
+          </div>
+          <span className="anip__tap-play__label">Tap to Play</span>
+        </div>
+      )}
+
+      {/* ── Fatal HLS error overlay ───────────────────────────── */}
+      {hlsErr && (
+        <div className="anip__error">
+          <span className="anip__error__icon">⚠️</span>
+          <p className="anip__error__msg">{hlsErr}</p>
+          <button
+            className="anip__error__retry"
+            onClick={() => {
+              setHlsErr(null);
+              setNeedsTap(false);
+              // Force reload by toggling url via parent — simulate by re-attaching
+              const v = videoRef.current;
+              const h = hlsRef.current;
+              if (h && v) { h.detachMedia(); h.attachMedia(v); h.loadSource(url); }
+            }}
+          >
+            ↺ Retry
+          </button>
+        </div>
+      )}
 
       {/* ── buffering spinner ───────────────────────────────── */}
       {waiting && (
