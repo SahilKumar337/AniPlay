@@ -233,6 +233,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     if (!v) return;
     const sync = (e) => {
       setPlaying(!v.paused);
+      if (!v.paused) setNeedsTap(false);
       setCurTime(v.currentTime);
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
       log(`Video state sync (event: ${e.type}, curTime=${v.currentTime.toFixed(1)}, paused=${v.paused})`);
@@ -248,6 +249,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     const onPlay = (e) => {
       log(`Video event: playing/canplay (event: ${e.type})`);
       setWaiting(false);
+      setNeedsTap(false);
     };
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
