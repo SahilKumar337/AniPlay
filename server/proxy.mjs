@@ -644,9 +644,16 @@ async function resolveServerM3U8(videoUrl) {
   try {
     const referer = new URL(videoUrl).origin;
     const html = await xfetch(videoUrl, { referer, timeout: 15000 });
-    const match = html.match(/const src\s*=\s*"([^"]+\.m3u8)"/)
-               || html.match(/file\s*:\s*"([^"]+\.m3u8)"/)
-               || html.match(/"file"\s*:\s*"([^"]+\.m3u8)"/);
+    const match =
+      // Direct string assignment
+      html.match(/const\s+src\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i)
+      || html.match(/var\s+src\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i)
+      // JWPlayer file property
+      || html.match(/['"]?file['"]?\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i)
+      // GogoAnime sources array
+      || html.match(/sources\s*:\s*\[\s*['"]([^'"]+\.m3u8[^'"]*)['"]/i)
+      // Any absolute HTTPS m3u8 URL in the HTML (most permissive)
+      || html.match(/(https?:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]*)?)/);
     if (match) {
       let m3u8Url = match[1];
       if (!m3u8Url.startsWith('http')) {
@@ -665,29 +672,30 @@ async function getServers(titles, episode) {
   const errors = [];
   let result = null;
 
-  // Phase 1: Try AniWaves first (primary source)
+  // Phase 1: Try AniNeko FIRST (uses GogoAnime CDN, no Cloudflare blocking on server-side)
+  // AniWaves uses Vidplay/EchoVideo which blocks our proxy via Cloudflare — use as fallback only
   for (const title of titles) {
+    if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
     try {
-      console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
-      result = await scrapeAniWaves(title, episode);
+      console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
+      result = await scrapeAniNeko(title, episode);
       break;
     } catch (e) {
-      console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
-      errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
+      console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
+      errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
     }
   }
 
-  // Phase 2: Try AniNeko fallback
+  // Phase 2: Try AniWaves as fallback (Vidplay embeds — iframe-proxy approach)
   if (!result) {
     for (const title of titles) {
-      if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
       try {
-        console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
-        result = await scrapeAniNeko(title, episode);
+        console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
+        result = await scrapeAniWaves(title, episode);
         break;
       } catch (e) {
-        console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
-        errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
+        console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
+        errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
       }
     }
   }
@@ -700,9 +708,14 @@ async function getServers(titles, episode) {
   console.log(`[Engine] Resolving HLS streams for ${result.servers.length} servers...`);
   const resolvedServers = await Promise.all(
     result.servers.map(async s => {
+      // Skip iframe-proxy URLs for resolveServerM3U8 (they're relative paths, not real URLs)
+      if (s.videoUrl.startsWith('/api/')) return s;
+
       const m3u8Url = await resolveServerM3U8(s.videoUrl);
       if (m3u8Url) {
-        const proxiedUrl = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(new URL(s.videoUrl).origin)}`;
+        let referer;
+        try { referer = new URL(s.videoUrl).origin; } catch { referer = ''; }
+        const proxiedUrl = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
         return {
           ...s,
           videoUrl: proxiedUrl,
@@ -972,9 +985,10 @@ export async function handleRequest(req, res) {
       });
       return res.end(html);
     } catch (e) {
-      console.warn(`[Iframe Proxy] Proxy failed for ${targetUrl}, redirecting client directly:`, e.message);
-      res.writeHead(302, { 'Location': targetUrl });
-      return res.end();
+      // Do NOT redirect to the target URL — that would cause X-Frame-Options blocks (🚫 icon)
+      console.error(`[Iframe Proxy] Failed to fetch embed page: ${e.message}`);
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ error: 'embed_fetch_failed', message: e.message }));
     }
   }
 
