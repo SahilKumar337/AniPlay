@@ -4,7 +4,17 @@
    ============================================================ */
 
 /* ---------- Reset & Base ---------- */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { 
+  box-sizing: border-box; 
+  margin: 0; 
+  padding: 0; 
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-touch-callout: none;
+}
+
+*:focus {
+  outline: none !important;
+}
 
 :root {
   --bg-primary:   #0f0f0f;
@@ -30,7 +40,10 @@
   --font-brand:   'Outfit', sans-serif;
 }
 
-html { scroll-behavior: smooth; }
+html { 
+  scroll-behavior: smooth; 
+  -webkit-text-size-adjust: 100%;
+}
 
 body {
   font-family: var(--font-main);
@@ -39,12 +52,13 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  user-select: none;
 }
 
 img { display: block; max-width: 100%; }
-a  { text-decoration: none; color: inherit; }
-button { cursor: pointer; border: none; background: none; font-family: inherit; }
-input  { font-family: inherit; }
+a  { text-decoration: none; color: inherit; outline: none; }
+button { cursor: pointer; border: none; background: none; font-family: inherit; outline: none; }
+input  { font-family: inherit; outline: none; }
 ul, ol { list-style: none; }
 
 /* ---------- Scrollbar ---------- */
@@ -379,6 +393,15 @@ ul, ol { list-style: none; }
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   flex: 1;
+  background: transparent !important;
+  border: none;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.nav-item:focus, .nav-item:active, .nav-item:hover {
+  background: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 .nav-item span {
   font-size: 10px;
