@@ -8,6 +8,7 @@ import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { getAniNekoServers, checkProxy, formatServerUrl, PROXY } from '../api/stream';
 import Navbar      from '../components/Navbar';
 import AniPlayer   from '../components/AniPlayer';
+import IframePlayer from '../components/IframePlayer';
 import { useApp }  from '../context/AppContext';
 
 
@@ -182,48 +183,6 @@ export default function WatchPage() {
     }
   }, [anime, episode, setEpisodeProgress, addToRecentlyViewed]);
 
-  // Listen for video stream URL intercepted from the iframe proxy sandbox
-  // IMPORTANT: always proxy the captured m3u8 through our backend to avoid CORS issues
-  useEffect(() => {
-    const handleMessage = (event) => {
-      if (event.data?.type === 'NATIVE_STREAM_URL' && event.data?.url) {
-        const streamUrl = event.data.url;
-        console.log('[Parent] Intercepted stream URL from iframe:', streamUrl);
-
-        // If it's already a proxied URL (from background extraction), use as-is
-        if (streamUrl.includes('anilab-backend.onrender.com') || streamUrl.includes('localhost:4000')) {
-          setActiveUrl(streamUrl);
-          setIsActiveHLS(true);
-          return;
-        }
-
-        // Determine referer from the original embed URL
-        let referer = 'https://aniwaves.ru/';
-        try {
-          const m3u8Host = new URL(streamUrl).origin;
-          referer = m3u8Host;
-        } catch {}
-        // Also try to extract the embed host from the current activeUrl (iframe-proxy URL)
-        try {
-          if (activeUrl.includes('iframe-proxy')) {
-            const urlObj = new URL(activeUrl);
-            const originalEmbedUrl = urlObj.searchParams.get('url');
-            if (originalEmbedUrl) referer = new URL(originalEmbedUrl).origin;
-          }
-        } catch {}
-
-        // CRITICAL: always route through our proxy to bypass CORS restrictions
-        const proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(referer)}`;
-        console.log('[Parent] Routing m3u8 through proxy:', proxied.slice(0, 120));
-        
-        setActiveUrl(proxied);
-        setIsActiveHLS(true);
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [activeUrl]);
-
   const goEp = n => {
     const max = anime?.episodes || 999;
     if (n < 1 || n > max) return;
@@ -316,21 +275,18 @@ export default function WatchPage() {
 
         {/* ── Sandboxed Ad-Free Iframe Player ───────────────── */}
         {!loadAnime && !loadStream && activeUrl && !isActiveHLS && !streamErr && (
-          <div style={{ aspectRatio:'16/9', position:'relative', background:'#000' }}>
-            {/* Back button for iframe player */}
-            <button onClick={() => navigate(`/anime/${id}`, { replace: true })}
-              style={{ position:'absolute', top:10, left:10, zIndex:20, width:36, height:36, borderRadius:'50%', background:'rgba(0,0,0,0.7)', border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backdropFilter:'blur(6px)' }}
-            ><ArrowLeft size={17} color="#fff"/></button>
-            <iframe
-              key={`player-${activeUrl}`}
-              src={activeUrl.includes('?') ? `${activeUrl}&_t=${Date.now()}` : `${activeUrl}?_t=${Date.now()}`}
-              allowFullScreen
-              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-              style={{ width:'100%', height:'100%', border:'none' }}
-              title={`${title} – Episode ${episode}`}
-            />
-          </div>
+          <IframePlayer
+            key={activeUrl}
+            src={activeUrl}
+            onBack={() => navigate(`/anime/${id}`, { replace: true })}
+            onStreamCaptured={(m3u8Url, referer) => {
+              // CRITICAL: always route through our proxy to bypass CORS restrictions
+              const proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+              console.log('[WatchPage] IframePlayer captured stream, switching to native player');
+              setActiveUrl(proxied);
+              setIsActiveHLS(true);
+            }}
+          />
         )}
       </div>
 

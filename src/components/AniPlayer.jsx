@@ -504,7 +504,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         playsInline
         preload="auto"
         autoPlay
-        crossOrigin="anonymous"
       />
 
       {/* ── Tap-to-play overlay (autoplay blocked by browser) ── */}
