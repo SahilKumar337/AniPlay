@@ -22,6 +22,7 @@ import { createServer }    from 'node:http';
 import { URL, fileURLToPath } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname }   from 'node:path';
+import { Readable }        from 'node:stream';
 import puppeteer from 'puppeteer-core';
 
 const PORT     = process.env.PORT || 4000;
@@ -83,12 +84,7 @@ async function getBrowser() {
     launchOptions.executablePath = CHROME_PATH;
   }
 
-  console.log('[Puppeteer] Launching shared Chrome instance...');
-  globalBrowser = await puppeteer.launch(launchOptions);
-  return globalBrowser;
-}
-
-async function puppeteerExtractM3U8(embedUrl) {
+  async function puppeteerExtractM3U8(embedUrl) {
   const cached = streamUrlCache.get(embedUrl);
   if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL) {
     console.log(`[Puppeteer] Cache hit for ${embedUrl.slice(0, 80)}`);
@@ -96,96 +92,120 @@ async function puppeteerExtractM3U8(embedUrl) {
   }
 
   console.log(`[Puppeteer] Opening new page for: ${embedUrl.slice(0, 100)}`);
-  let page;
-  try {
-    const browser = await getBrowser();
-    page = await browser.newPage();
-    await page.setUserAgent(UA);
-    await page.setExtraHTTPHeaders({ Referer: AW + '/' });
+  
+  return new Promise(async (resolve, reject) => {
+    let page;
+    let resolved = false;
 
-    let capturedM3U8 = null;
-    let capturedReferer = embedUrl;
-
-    // Intercept every request — grab the first .m3u8 that isn't a tiny manifest
-    await page.setRequestInterception(true);
-    page.on('request', req => {
-      const url = req.url();
-      // Block ads/trackers to speed things up
-      if (
-        url.includes('doubleclick') ||
-        url.includes('googlesyndication') ||
-        url.includes('google-analytics') ||
-        url.includes('adsbygoogle')
-      ) {
-        return req.abort();
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      if (page) {
+        page.close().catch(() => {});
       }
-      if (!capturedM3U8 && (url.includes('.m3u8') || url.includes('playlist.m3u8'))) {
-        capturedM3U8 = url;
-        capturedReferer = req.headers()['referer'] || embedUrl;
-        console.log(`[Puppeteer] Intercepted m3u8: ${url.slice(0, 120)}`);
+      streamUrlCache.set(embedUrl, result);
+      resolve(result);
+    };
+
+    const fail = (err) => {
+      if (resolved) return;
+      resolved = true;
+      if (page) {
+        page.close().catch(() => {});
       }
-      req.continue();
-    });
+      reject(err);
+    };
 
-    // Also listen on responses to catch .m3u8 from XHR/fetch
-    page.on('response', async resp => {
-      if (capturedM3U8) return;
-      const url = resp.url();
-      const ct  = resp.headers()['content-type'] || '';
-      if (url.includes('.m3u8') || ct.includes('mpegurl') || ct.includes('x-mpegURL')) {
-        capturedM3U8 = url;
-        capturedReferer = resp.request().headers()['referer'] || embedUrl;
-        console.log(`[Puppeteer] Response m3u8: ${url.slice(0, 120)}`);
-      }
-    });
-
-    // Navigate to the embed page and wait for network to settle
-    await page.goto(embedUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-    // Try to trigger playback by clicking elements that resemble play buttons
     try {
-      await page.evaluate(() => {
-        const selectors = [
-          'video', 
-          '#player', 
-          '.jw-video', 
-          '.jw-display-icon-container', 
-          '.vjs-big-play-button',
-          '.play-button',
-          '[class*="play"]',
-          '[id*="play"]'
-        ];
-        for (const selector of selectors) {
-          const el = document.querySelector(selector);
-          if (el) {
-            el.click();
-            const event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-            el.dispatchEvent(event);
-          }
+      const browser = await getBrowser();
+      page = await browser.newPage();
+      await page.setUserAgent(UA);
+      await page.setExtraHTTPHeaders({ Referer: AW + '/' });
+
+      // Intercept requests and abort non-essential assets
+      await page.setRequestInterception(true);
+      page.on('request', req => {
+        const url = req.url();
+        const type = req.resourceType();
+
+        // Block ads, tracking scripts, images, stylesheets, fonts and media to save CPU & RAM
+        if (
+          url.includes('doubleclick') ||
+          url.includes('googlesyndication') ||
+          url.includes('google-analytics') ||
+          url.includes('adsbygoogle') ||
+          url.includes('adnxs') ||
+          url.includes('adsystem') ||
+          url.includes('popads') ||
+          url.includes('onclickads') ||
+          url.includes('exoclick') ||
+          ['image', 'stylesheet', 'font', 'media'].includes(type)
+        ) {
+          return req.abort();
+        }
+
+        if (url.includes('.m3u8') || url.includes('playlist.m3u8')) {
+          const capturedReferer = req.headers()['referer'] || embedUrl;
+          console.log(`[Puppeteer] Intercepted m3u8: ${url.slice(0, 120)}`);
+          finish({ url, referer: capturedReferer, ts: Date.now() });
+        }
+        req.continue();
+      });
+
+      // Listen on responses to catch XHR/fetch m3u8 requests
+      page.on('response', resp => {
+        const url = resp.url();
+        const ct  = resp.headers()['content-type'] || '';
+        if (url.includes('.m3u8') || ct.includes('mpegurl') || ct.includes('x-mpegURL')) {
+          const capturedReferer = resp.request().headers()['referer'] || embedUrl;
+          console.log(`[Puppeteer] Response m3u8: ${url.slice(0, 120)}`);
+          finish({ url, referer: capturedReferer, ts: Date.now() });
         }
       });
+
+      // Navigate to embed page - only wait for domcontentloaded which is extremely fast
+      await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+      if (resolved) return;
+
+      // Try to trigger playback by clicking elements that resemble play buttons
+      try {
+        await page.evaluate(() => {
+          const selectors = [
+            'video', 
+            '#player', 
+            '.jw-video', 
+            '.jw-display-icon-container', 
+            '.vjs-big-play-button',
+            '.play-button',
+            '[class*="play"]',
+            '[id*="play"]'
+          ];
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (el) {
+              el.click();
+              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }
+          }
+        });
+      } catch (e) {
+        console.warn('[Puppeteer] Click play button failed:', e.message);
+      }
+
+      // Wait up to 5 seconds for any final lazy requests to load
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (resolved) return;
+      }
+
+      fail(new Error('No .m3u8 URL captured from embed page'));
     } catch (e) {
-      console.warn('[Puppeteer] Click play button failed:', e.message);
+      fail(e);
     }
-
-    // If no m3u8 yet, wait a bit more for player lazy-loading
-    if (!capturedM3U8) {
-      await new Promise(r => setTimeout(r, 5000));
-    }
-
-    if (!capturedM3U8) {
-      throw new Error('No .m3u8 URL captured from embed page');
-    }
-
-    const result = { url: capturedM3U8, referer: capturedReferer, ts: Date.now() };
-    streamUrlCache.set(embedUrl, result);
-    return result;
-  } finally {
-    if (page) {
-      try { await page.close(); } catch (err) {}
-    }
-  }
+  });
 }
+
 
 // ── CORS & JSON helpers ───────────────────────────────────────────
 function cors(res) {
@@ -784,10 +804,12 @@ export async function handleRequest(req, res) {
         'Cache-Control': isStatic ? 'public, max-age=86400' : 'no-store, no-cache, must-revalidate'
       });
       
-      for await (const chunk of sRes.body) {
-        res.write(chunk);
-      }
-      return res.end();
+      const nodeStream = Readable.fromWeb(sRes.body);
+      nodeStream.pipe(res);
+      req.on('close', () => {
+        nodeStream.destroy();
+      });
+      return;
     } catch (e) {
       console.error(`[Iframe Proxy Asset] Error forwarding ${req.url}:`, e.message);
       res.writeHead(500);
@@ -1025,19 +1047,12 @@ export async function handleRequest(req, res) {
         'Cache-Control': 'public, max-age=86400'
       });
 
-      // Pipe directly — never buffer the full segment in memory
-      const reader = sRes.body.getReader();
-      const pump = async () => {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const ok = res.write(value);
-          // Respect back-pressure from the client
-          if (!ok) await new Promise(r => res.once('drain', r));
-        }
-        res.end();
-      };
-      return pump();
+      const nodeStream = Readable.fromWeb(sRes.body);
+      nodeStream.pipe(res);
+      req.on('close', () => {
+        nodeStream.destroy();
+      });
+      return;
     } catch (e) {
       if (!res.headersSent) { res.writeHead(500); res.end(e.message); }
     }

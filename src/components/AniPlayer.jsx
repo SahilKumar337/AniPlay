@@ -85,10 +85,25 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const [needsTap,  setNeedsTap]  = useState(false);  // autoplay blocked
   const [hlsErr,    setHlsErr]    = useState(null);   // fatal stream error
 
+  // Debug & Diagnostics
+  const [logs,       setLogs]       = useState([]);
+  const [showDebug,  setShowDebug]  = useState(false);
+  const [titleTaps,  setTitleTaps]  = useState(0);
+  const [stuckCount, setStuckCount] = useState(0);
+
+  const log = useCallback((msg) => {
+    const time = new Date().toTimeString().split(' ')[0];
+    setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 40));
+    console.log(`[AniPlayer] ${msg}`);
+  }, []);
+
+
   /* ── HLS ──────────────────────────────────────────────────── */
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !url) return;
+
+    log(`Initializing stream: ${url.slice(0, 100)}...`);
 
     // Reset all state on URL change
     setNeedsTap(false);
@@ -100,14 +115,18 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     setActiveSub(-1);
     setShowQ(false);
     setShowSub(false);
+    setStuckCount(0);
 
     v.removeAttribute('src');
     v.load();
 
     const tryPlay = () => {
+      log('Calling video.play()...');
       v.play().then(() => {
+        log('video.play() SUCCEEDED');
         setNeedsTap(false);
       }).catch(err => {
+        log(`video.play() FAILED: ${err.name} - ${err.message}`);
         // NotAllowedError = browser blocked autoplay → show tap-to-play
         // AbortError = previous play() was interrupted (harmless)
         if (err.name === 'NotAllowedError') {
@@ -122,6 +141,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     let mediaErrRetries = 0;
 
     if (Hls.isSupported()) {
+      log('Hls.js is supported. Spawning player...');
       hls = new Hls({
         // enableWorker:false — avoids Web Worker CSP issues inside Capacitor WebView
         enableWorker: false,
@@ -137,16 +157,18 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       hlsRef.current = hls;
 
       hls.on(Hls.Events.ERROR, (_, data) => {
+        log(`HLS Error: type=${data.type}, details=${data.details}, fatal=${data.fatal}`);
         if (!data.fatal) return;
-        console.error('[HLS fatal]', data.type, data.details, data.reason || '');
+        
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          // retry once on network errors
+          log('Fatal network error, retrying startLoad...');
           hls.startLoad();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 2) {
           mediaErrRetries++;
+          log(`Fatal media error, retrying recoverMediaError (${mediaErrRetries}/2)...`);
           hls.recoverMediaError();
         } else {
-          // Give up — show a visible error so user can retry
+          log('Fatal HLS error unrecoverable. Displaying error overlay.');
           setHlsErr(`Stream error: ${data.details || data.type}. Tap retry.`);
           setWaiting(false);
         }
@@ -155,10 +177,12 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       hls.attachMedia(v);
 
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        log('Media attached to Hls.js, loading source...');
         hls.loadSource(url);
       });
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
+        log(`Manifest parsed: found ${d.levels.length} quality levels`);
         setQualities(d.levels.map((l, i) => ({
           id: i,
           label: l.height ? `${l.height}p` : `Level ${i + 1}`
@@ -167,6 +191,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       });
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, d) => {
+        log(`Subtitle tracks updated: found ${d.subtitleTracks?.length || 0} tracks`);
         if (d.subtitleTracks?.length)
           setSubs(d.subtitleTracks.map((t, i) => ({
             id: i,
@@ -175,19 +200,22 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       });
 
     } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari / native HLS
+      log('Native HLS support detected (Safari/iOS), playing directly...');
       v.src = url;
       v.load();
       tryPlay();
     } else {
+      log('HLS.js not supported and native HLS not supported.');
       setHlsErr('HLS is not supported in this browser.');
     }
 
     return () => {
+      log('Cleaning up player instance.');
       if (hls) hls.destroy();
       hlsRef.current = null;
     };
-  }, [url]);
+  }, [url, log]);
+
 
   // Sync subtitle tracks when props change (using stringify for stable comparison)
   const subTracksJson = JSON.stringify(subtitleTracks);
@@ -203,14 +231,24 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    const sync = () => {
+    const sync = (e) => {
       setPlaying(!v.paused);
       setCurTime(v.currentTime);
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
+      log(`Video state sync (event: ${e.type}, curTime=${v.currentTime.toFixed(1)}, paused=${v.paused})`);
     };
-    const onMeta = () => setDuration(v.duration);
-    const onWait = () => setWaiting(true);
-    const onPlay = () => setWaiting(false);
+    const onMeta = () => {
+      log(`Video loadedmetadata: duration=${v.duration.toFixed(1)}`);
+      setDuration(v.duration);
+    };
+    const onWait = () => {
+      log('Video event: waiting (buffering)');
+      setWaiting(true);
+    };
+    const onPlay = (e) => {
+      log(`Video event: playing/canplay (event: ${e.type})`);
+      setWaiting(false);
+    };
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
     v.addEventListener('timeupdate',      sync);
@@ -227,7 +265,19 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       v.removeEventListener('playing',        onPlay);
       v.removeEventListener('canplay',        onPlay);
     };
-  }, []);
+  }, [log]);
+
+  // Monitor stuck state
+  useEffect(() => {
+    if (!waiting) {
+      setStuckCount(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setStuckCount(c => c + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [waiting]);
 
   /* ── Fullscreen events ────────────────────────────────────── */
   useEffect(() => {
@@ -526,7 +576,25 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
               <ArrowLeft size={19} strokeWidth={2.5} />
             </button>
           )}
-          <span className="anip__title">{title}</span>
+          <span 
+            className="anip__title"
+            style={{ cursor: 'pointer' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setTitleTaps(t => {
+                const next = t + 1;
+                log(`Title tapped ${next}/5 times`);
+                if (next >= 5) {
+                  setShowDebug(d => !d);
+                  log(`Toggled developer console: ${!showDebug}`);
+                  return 0;
+                }
+                return next;
+              });
+            }}
+          >
+            {title}
+          </span>
         </div>
 
         {/* ── Spacer (click to toggle controls) ────────────── */}
@@ -680,6 +748,34 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
           </div>
         </div>
       </div>
+
+      {/* ── Debug logs panel ─────────────────────────────────── */}
+      {showDebug && (
+        <div className="anip__debug-panel" onClick={e => e.stopPropagation()}>
+          <div className="anip__debug-header">
+            <span>Developer Diagnostics</span>
+            <button className="anip__debug-close" onClick={() => setShowDebug(false)}>✕</button>
+          </div>
+          <div className="anip__debug-info">
+            <strong>Stream URL:</strong> <code style={{ fontSize: '10px', wordBreak: 'break-all' }}>{url}</code><br/>
+            <strong>Playback state:</strong> {playing ? 'Playing' : 'Paused'}, <strong>Waiting:</strong> {waiting ? 'Yes' : 'No'}<br/>
+            <strong>Buffer:</strong> {buffered.toFixed(1)}s / {duration.toFixed(1)}s ({pct.toFixed(0)}%)
+          </div>
+          <div className="anip__debug-logs">
+            {logs.map((logStr, idx) => (
+              <div key={idx} className="anip__debug-log-line">{logStr}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Stuck loading prompt ────────────────────────────── */}
+      {waiting && stuckCount >= 8 && !hlsErr && !showDebug && (
+        <div className="anip__stuck-hint" onClick={e => { e.stopPropagation(); setShowDebug(true); }}>
+          <span>Stuck loading? Tap here to open diagnostics</span>
+        </div>
+      )}
+
     </div>
   );
 }
