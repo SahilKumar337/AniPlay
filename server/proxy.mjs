@@ -1214,9 +1214,15 @@ export async function handleRequest(req, res) {
     if (titles.length === 0) return json(res, 400, { error: 'valid title required' });
 
     const cacheKey = `${titles[0]}-${ep}`;
+    const noCache = searchParams.get('nocache') === 'true' || searchParams.get('bypass') === 'true';
+
+    if (noCache) {
+      serverCache.delete(cacheKey);
+      console.log(`[Cache Bypass] Cleared cache for: "${cacheKey}"`);
+    }
 
     // Check cache first
-    if (serverCache.has(cacheKey)) {
+    if (!noCache && serverCache.has(cacheKey)) {
       const cached = serverCache.get(cacheKey);
       if (Date.now() - cached.timestamp < CACHE_TTL) {
         console.log(`[Cache Hit] Serving cached servers for: "${cacheKey}"`);
