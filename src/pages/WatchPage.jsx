@@ -5,7 +5,7 @@ import {
   AlertCircle, RefreshCw, Wifi, WifiOff, Loader, Tv
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
-import { getAniNekoServers, checkProxy, formatServerUrl } from '../api/stream';
+import { getAniNekoServers, checkProxy, formatServerUrl, PROXY } from '../api/stream';
 import Navbar      from '../components/Navbar';
 import AniPlayer   from '../components/AniPlayer';
 import { useApp }  from '../context/AppContext';
@@ -72,7 +72,8 @@ export default function WatchPage() {
       }
     };
 
-    // For AniWaves iframe-proxy servers: extract real m3u8 via Puppeteer headless browser
+    // For AniWaves iframe-proxy servers: try Puppeteer extraction first,
+    // but fall back to iframe quickly (Render free tier may not have Chrome)
     if (srv.videoUrl && srv.videoUrl.includes('iframe-proxy')) {
       let embedUrl = srv.videoUrl;
       try {
@@ -80,31 +81,31 @@ export default function WatchPage() {
         embedUrl = proxyUrlObj.searchParams.get('url') || srv.videoUrl;
       } catch {}
 
-      setActiveName(srv.name + ' (Extracting…)');
+      setActiveName(srv.name);
       setActiveType(srv.type || 'sub');
       setIsActiveHLS(false);
-      setActiveUrl('');
-      setExtracting(true);
+      // Show the iframe immediately — JS injection will fire postMessage when m3u8 is found
+      setActiveUrl(srv.videoUrl);
+      setExtracting(false);
 
-      try {
-        const res = await fetch(formatServerUrl(`/api/extract-stream?url=${encodeURIComponent(embedUrl)}`));
-        const data = await res.json();
-        if (data.ok && data.url) {
-          setActiveUrl(formatServerUrl(data.url));
-          setIsActiveHLS(true);
-          setActiveName(srv.name);
-        } else {
-          throw new Error(data.error || 'Extraction returned no url');
-        }
-      } catch (e) {
-        console.warn(`[WatchPage] Extraction failed for ${srv.name}:`, e.message);
-        // Fall back to showing the ad-free sandboxed iframe player in the browser
-        setActiveUrl(srv.videoUrl);
-        setIsActiveHLS(false);
-        setActiveName(srv.name);
-      } finally {
-        setExtracting(false);
-      }
+      // Also fire a background extraction attempt — if it succeeds, switch to native player
+      // Use a short timeout so it doesn't hang forever
+      const extractController = new AbortController();
+      const extractTimeout = setTimeout(() => extractController.abort(), 20000);
+      fetch(formatServerUrl(`/api/extract-stream?url=${encodeURIComponent(embedUrl)}`), {
+        signal: extractController.signal
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok && data.url) {
+            console.log('[WatchPage] Background extraction succeeded, switching to native player');
+            setActiveUrl(formatServerUrl(data.url));
+            setIsActiveHLS(true);
+            setActiveName(srv.name);
+          }
+        })
+        .catch(e => console.log('[WatchPage] Background extraction skipped:', e.message))
+        .finally(() => clearTimeout(extractTimeout));
       return;
     }
 
@@ -182,22 +183,38 @@ export default function WatchPage() {
   }, [anime, episode, setEpisodeProgress, addToRecentlyViewed]);
 
   // Listen for video stream URL intercepted from the iframe proxy sandbox
+  // IMPORTANT: always proxy the captured m3u8 through our backend to avoid CORS issues
   useEffect(() => {
     const handleMessage = (event) => {
       if (event.data?.type === 'NATIVE_STREAM_URL' && event.data?.url) {
         const streamUrl = event.data.url;
-        console.log('[Parent] Intercepted stream URL:', streamUrl);
-        
-        let originalOrigin = 'https://play.echovideo.ru';
+        console.log('[Parent] Intercepted stream URL from iframe:', streamUrl);
+
+        // If it's already a proxied URL (from background extraction), use as-is
+        if (streamUrl.includes('anilab-backend.onrender.com') || streamUrl.includes('localhost:4000')) {
+          setActiveUrl(streamUrl);
+          setIsActiveHLS(true);
+          return;
+        }
+
+        // Determine referer from the original embed URL
+        let referer = 'https://aniwaves.ru/';
         try {
-          const urlObj = new URL(activeUrl);
-          const originalUrl = urlObj.searchParams.get('url');
-          if (originalUrl) {
-            originalOrigin = new URL(originalUrl).origin;
+          const m3u8Host = new URL(streamUrl).origin;
+          referer = m3u8Host;
+        } catch {}
+        // Also try to extract the embed host from the current activeUrl (iframe-proxy URL)
+        try {
+          if (activeUrl.includes('iframe-proxy')) {
+            const urlObj = new URL(activeUrl);
+            const originalEmbedUrl = urlObj.searchParams.get('url');
+            if (originalEmbedUrl) referer = new URL(originalEmbedUrl).origin;
           }
         } catch {}
 
-        const proxied = formatServerUrl(`/api/stream/hls?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(originalOrigin)}`);
+        // CRITICAL: always route through our proxy to bypass CORS restrictions
+        const proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(referer)}`;
+        console.log('[Parent] Routing m3u8 through proxy:', proxied.slice(0, 120));
         
         setActiveUrl(proxied);
         setIsActiveHLS(true);
@@ -255,7 +272,7 @@ export default function WatchPage() {
           <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:18, padding:24, position:'relative' }}>
             {/* Back button on loading screen */}
             <button onClick={() => navigate(`/anime/${id}`, { replace: true })} id="watch-back"
-              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backdropFilter:'blur(6px)', color:'#fff' }}
+              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff' }}
             ><ArrowLeft size={17} color="#fff"/></button>
             <Loader size={44} color="#e50914" style={{ animation:'spin 0.9s linear infinite' }}/>
             <p style={{ color:'#fff', fontSize:14, fontWeight:600 }}>Loading...</p>

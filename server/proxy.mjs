@@ -84,7 +84,13 @@ async function getBrowser() {
     launchOptions.executablePath = CHROME_PATH;
   }
 
-  async function puppeteerExtractM3U8(embedUrl) {
+  globalBrowser = await puppeteer.launch(launchOptions);
+  return globalBrowser;
+}
+
+// ── Puppeteer stream extractor (headless Chrome, network intercept) ──
+// Cache recently extracted stream URLs to avoid relaunching browser for the same embed
+async function puppeteerExtractM3U8(embedUrl) {
   const cached = streamUrlCache.get(embedUrl);
   if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL) {
     console.log(`[Puppeteer] Cache hit for ${embedUrl.slice(0, 80)}`);
