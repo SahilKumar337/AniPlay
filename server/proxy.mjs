@@ -61,6 +61,19 @@ async function getBrowser() {
       '--disable-web-security',
       '--disable-features=IsolateOrigins,site-per-process',
       '--autoplay-policy=no-user-gesture-required',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--no-zygote',
+      '--single-process',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-sync',
+      '--disable-translate',
+      '--hide-scrollbars',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
     ],
   };
 
@@ -961,7 +974,7 @@ export async function handleRequest(req, res) {
         if (absoluteUrl.includes('.m3u8')) {
           return `/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
         } else {
-          return absoluteUrl;
+          return `/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
         }
       }).join('\n');
       
@@ -975,10 +988,11 @@ export async function handleRequest(req, res) {
     }
   }
 
-  // HLS Segment Proxy
+  // HLS Segment Proxy — streams bytes directly to client without buffering
   if (pathname === '/api/stream/segment') {
     cors(res);
     const targetUrl = searchParams.get('url');
+    if (!targetUrl) { res.writeHead(400); return res.end('missing url'); }
     const referer = searchParams.get('referer') || new URL(targetUrl).origin;
     try {
       const headers = {
@@ -986,24 +1000,33 @@ export async function handleRequest(req, res) {
         'Referer': referer,
         'Origin': new URL(referer).origin
       };
-      if (globalCookie) {
-        headers['Cookie'] = globalCookie;
-      }
+      if (globalCookie) headers['Cookie'] = globalCookie;
+
       const sRes = await fetch(targetUrl, { headers });
-      
+      if (!sRes.ok) { res.writeHead(sRes.status); return res.end(); }
+
       res.writeHead(sRes.status, {
-        'Content-Type': sRes.headers.get('content-type') || 'application/octet-stream',
+        'Content-Type': sRes.headers.get('content-type') || 'video/mp2t',
+        'Content-Length': sRes.headers.get('content-length') || '',
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=86400'
       });
-      
-      for await (const chunk of sRes.body) {
-        res.write(chunk);
-      }
-      return res.end();
+
+      // Pipe directly — never buffer the full segment in memory
+      const reader = sRes.body.getReader();
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const ok = res.write(value);
+          // Respect back-pressure from the client
+          if (!ok) await new Promise(r => res.once('drain', r));
+        }
+        res.end();
+      };
+      return pump();
     } catch (e) {
-      res.writeHead(500);
-      return res.end(e.message);
+      if (!res.headersSent) { res.writeHead(500); res.end(e.message); }
     }
   }
 
