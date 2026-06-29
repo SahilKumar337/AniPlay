@@ -4,9 +4,9 @@
  */
 
 export const PROXY = import.meta.env.VITE_PROXY_URL || (
-  window.location.port === '3000'
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== ''
     ? `http://${window.location.hostname}:4000`
-    : window.location.origin
+    : 'https://anilab-backend.onrender.com'
 );
 
 export function formatServerUrl(url) {
@@ -40,7 +40,17 @@ export async function getAniNekoServers(anime, episode) {
   const titlesParam = titles.join('|||');
   const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}`;
 
-  const res  = await fetch(url, { signal: AbortSignal.timeout(90000) });
+  const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
+  
+  if (!res.ok) {
+    throw new Error(`Server returned status ${res.status}`);
+  }
+
+  const contentType = res.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    throw new Error('Server returned an invalid non-JSON response');
+  }
+
   const data = await res.json();
 
   if (data.ok && data.servers?.length) {
