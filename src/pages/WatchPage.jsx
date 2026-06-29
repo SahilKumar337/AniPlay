@@ -44,6 +44,12 @@ export default function WatchPage() {
   // Fetch streaming servers
   const fetchStream = useCallback(async () => {
     if (!anime) return;
+
+    if (anime.status === 'NOT_YET_RELEASED') {
+      setStreamErr('This anime has not been released yet.');
+      return;
+    }
+
     setLoadStream(true);
     setStreamErr(null);
     setServers([]);

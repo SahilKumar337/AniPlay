@@ -70,7 +70,8 @@ export default function AnimePage() {
   const inList  = isInWatchlist(anime.id);
   const fav     = isFavorite(anime.id);
   const prog    = getEpisodeProgress(anime.id);
-  const totalEps = eps || 12;
+  const isNotReleased = anime.status === 'NOT_YET_RELEASED';
+  const totalEps = isNotReleased ? 0 : (eps || 12);
   const allEps   = Array.from({ length: totalEps }, (_, i) => i + 1);
   const filtered = epQuery ? allEps.filter(n => String(n).includes(epQuery.trim())) : allEps;
   const recs     = anime.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [];
@@ -151,24 +152,37 @@ export default function AnimePage() {
           PLAY + DOWNLOAD BUTTONS
       ════════════════════════════════════════ */}
       <div style={{ padding: '14px 16px 0', display: 'flex', gap: 10 }}>
-        <button
-          className="btn btn-primary"
-          id={`play-${anime.id}`}
-          style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10 }}
-          onClick={() => navigate(`/watch/${anime.id}/${prog?.episode || 1}`)}
-        >
-          <Play size={17} fill="#fff" />
-          {prog ? `Resume Ep ${prog.episode}` : 'Play'}
-        </button>
-        <button
-          className="btn btn-primary"
-          id={`dl-${anime.id}`}
-          style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10, background: '#b50010' }}
-          onClick={() => navigate(`/watch/${anime.id}/${prog?.episode || 1}`)}
-        >
-          <Download size={17} />
-          Download
-        </button>
+        {isNotReleased ? (
+          <div style={{
+            flex: 1, textAlign: 'center', padding: '13px',
+            fontSize: 14, fontWeight: 700, borderRadius: 10,
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+          }}>
+            <AlertCircle size={16} /> Not Yet Released
+          </div>
+        ) : (
+          <>
+            <button
+              className="btn btn-primary"
+              id={`play-${anime.id}`}
+              style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10 }}
+              onClick={() => navigate(`/watch/${anime.id}/${prog?.episode || 1}`)}
+            >
+              <Play size={17} fill="#fff" />
+              {prog ? `Resume Ep ${prog.episode}` : 'Play'}
+            </button>
+            <button
+              className="btn btn-primary"
+              id={`dl-${anime.id}`}
+              style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10, background: '#b50010' }}
+              onClick={() => navigate(`/watch/${anime.id}/${prog?.episode || 1}`)}
+            >
+              <Download size={17} />
+              Download
+            </button>
+          </>
+        )}
       </div>
 
       {/* ════════════════════════════════════════
