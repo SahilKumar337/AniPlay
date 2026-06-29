@@ -16,6 +16,30 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        var errBox = document.getElementById('anilab-fatal-error');
+        if (!errBox) {
+          errBox = document.createElement('div');
+          errBox.id = 'anilab-fatal-error';
+          errBox.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#800;color:#fff;z-index:999999;padding:24px;box-sizing:border-box;font-family:monospace;overflow:auto;';
+          document.body.appendChild(errBox);
+        }
+        var msg = e.error ? (e.error.message + '\n' + e.error.stack) : e.message;
+        errBox.innerHTML = '<h2>🚨 Fatal Javascript Crash</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msg + '</pre>';
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var errBox = document.getElementById('anilab-fatal-error');
+        if (!errBox) {
+          errBox = document.createElement('div');
+          errBox.id = 'anilab-fatal-error';
+          errBox.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#800;color:#fff;z-index:999999;padding:24px;box-sizing:border-box;font-family:monospace;overflow:auto;';
+          document.body.appendChild(errBox);
+        }
+        var msg = e.reason ? (e.reason.message || e.reason) : 'Promise rejection';
+        errBox.innerHTML = '<h2>🚨 Fatal Promise Rejection</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msg + '</pre>';
+      });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

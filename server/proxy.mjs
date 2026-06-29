@@ -1197,7 +1197,11 @@ export async function handleRequest(req, res) {
       const { url: m3u8Url, referer } = await extractStreamM3U8(embedUrl);
       // Return ABSOLUTE URL so Capacitor WebView (which runs at http://localhost)
       // can correctly resolve the playlist — relative paths would hit localhost, not Render.
-      const proto = req.headers['x-forwarded-proto'] || 'https';
+      let proto = req.headers['x-forwarded-proto'];
+      if (!proto) {
+        const hostHeader = req.headers['host'] || '';
+        proto = (hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1')) ? 'http' : 'https';
+      }
       const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
       const selfBase = `${proto}://${host}`;
       const proxied = `${selfBase}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
@@ -1260,7 +1264,11 @@ export async function handleRequest(req, res) {
       // When running in APK, the page origin is http://localhost — so relative
       // paths like /api/stream/... would go to localhost, not the backend.
       // We must emit fully-qualified URLs so HLS.js always hits the Render server.
-      const proto = req.headers['x-forwarded-proto'] || 'https';
+      let proto = req.headers['x-forwarded-proto'];
+      if (!proto) {
+        const hostHeader = req.headers['host'] || '';
+        proto = (hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1')) ? 'http' : 'https';
+      }
       const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
       const selfBase = `${proto}://${host}`;
 
