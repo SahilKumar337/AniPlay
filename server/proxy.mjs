@@ -899,8 +899,12 @@ export async function handleRequest(req, res) {
     if (!embedUrl) return json(res, 400, { error: 'url required' });
     try {
       const { url: m3u8Url, referer } = await puppeteerExtractM3U8(embedUrl);
-      // Wrap the m3u8 through our HLS proxy so segments get correct headers
-      const proxied = `/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+      // Return ABSOLUTE URL so Capacitor WebView (which runs at http://localhost)
+      // can correctly resolve the playlist — relative paths would hit localhost, not Render.
+      const proto = req.headers['x-forwarded-proto'] || 'https';
+      const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
+      const selfBase = `${proto}://${host}`;
+      const proxied = `${selfBase}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
       return json(res, 200, { ok: true, url: proxied, rawUrl: m3u8Url });
     } catch (e) {
       console.error('[Extract Stream]', e.message);
@@ -949,7 +953,15 @@ export async function handleRequest(req, res) {
     try {
       const raw = await xfetch(targetUrl, { referer });
       const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
-      
+
+      // Build absolute base so HLS.js in Capacitor WebView resolves correctly.
+      // When running in APK, the page origin is http://localhost — so relative
+      // paths like /api/stream/... would go to localhost, not the backend.
+      // We must emit fully-qualified URLs so HLS.js always hits the Render server.
+      const proto = req.headers['x-forwarded-proto'] || 'https';
+      const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
+      const selfBase = `${proto}://${host}`;
+
       const lines = raw.split('\n').map(line => {
         line = line.trim();
         if (!line) return '';
@@ -959,28 +971,29 @@ export async function handleRequest(req, res) {
             if (match) {
               let keyUrl = match[1];
               if (!keyUrl.startsWith('http')) keyUrl = new URL(keyUrl, baseUrl).href;
-              const proxiedKey = `/api/stream/segment?url=${encodeURIComponent(keyUrl)}&referer=${encodeURIComponent(referer)}`;
+              const proxiedKey = `${selfBase}/api/stream/segment?url=${encodeURIComponent(keyUrl)}&referer=${encodeURIComponent(referer)}`;
               return line.replace(match[1], proxiedKey);
             }
           }
           return line;
         }
-        
+
         let absoluteUrl = line;
         if (!absoluteUrl.startsWith('http')) {
           absoluteUrl = new URL(absoluteUrl, baseUrl).href;
         }
-        
+
         if (absoluteUrl.includes('.m3u8')) {
-          return `/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+          return `${selfBase}/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
         } else {
-          return `/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+          return `${selfBase}/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
         }
       }).join('\n');
-      
-      res.writeHead(200, { 
+
+      res.writeHead(200, {
         'Content-Type': 'application/vnd.apple.mpegurl',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*'
       });
       return res.end(lines);
     } catch (e) {
