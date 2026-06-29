@@ -311,6 +311,16 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     syncNativeFullscreen();
   }, [fs]);
 
+  /* ── Controls auto-hide ───────────────────────────────────── */
+  const schedHide = useCallback(() => {
+    clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {
+      if (videoRef.current && !videoRef.current.paused) setCtrlVis(false);
+    }, 3500);
+  }, []);
+
+  const showCtrl = useCallback(() => { setCtrlVis(true); schedHide(); }, [schedHide]);
+
   const toggleFitMode = useCallback(() => {
     setFitMode(curr => {
       if (curr === 'contain') return 'cover';
@@ -338,16 +348,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     return () => window.removeEventListener('keydown', onKey);
   // eslint-disable-next-line
   }, []);
-
-  /* ── Controls auto-hide ───────────────────────────────────── */
-  const schedHide = useCallback(() => {
-    clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => {
-      if (videoRef.current && !videoRef.current.paused) setCtrlVis(false);
-    }, 3500);
-  }, []);
-
-  const showCtrl = useCallback(() => { setCtrlVis(true); schedHide(); }, [schedHide]);
 
   /* ── Playback actions ─────────────────────────────────────── */
   const togglePlay = useCallback(() => {
