@@ -187,17 +187,22 @@ async function awSearch(title) {
 
   if (results.length === 0) throw new Error(`Anime "${title}" not found on AniWaves`);
 
-  // Score and pick best match
+  // Score and pick best match — compare against both display title AND slug text
   let best = results[0], maxScore = -1;
   for (const r of results) {
-    const score = titleScore(r.animeTitle, title);
-    console.log(`[AW]   candidate: "${r.animeTitle}" score=${score.toFixed(2)}`);
+    // Score against display title
+    let score = titleScore(r.animeTitle, title);
+    // Also score against slug (slug contains romanized title which matches romaji query)
+    const slugText = r.slug.replace(/-\d+$/, '').replace(/-/g, ' ');
+    const slugScore = titleScore(slugText, title);
+    score = Math.max(score, slugScore);
+    console.log(`[AW]   candidate: "${r.animeTitle}" (slug: ${slugText}) score=${score.toFixed(2)}`);
     if (score > maxScore) { maxScore = score; best = r; }
   }
 
-  // If no scored winner (all 0) and exactly 1 result, take it (keyword was very specific)
-  if (maxScore === 0 && results.length === 1) { maxScore = 0.5; best = results[0]; }
-  if (maxScore === 0 && results.length > 1) {
+  // If still no confident match — accept if ≤2 results (keyword was selective enough)
+  if (maxScore === 0 && results.length <= 2) { maxScore = 0.4; best = results[0]; }
+  if (maxScore === 0 && results.length > 2) {
     throw new Error(`No confident match for "${title}" (${results.length} candidates on AniWaves)`);
   }
 
@@ -345,28 +350,31 @@ async function scrapeAniNeko(title, episode) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// COMBINED SCRAPER: AniWaves first, AniNeko fallback
+// COMBINED SCRAPER: AniWaves first for all titles, then AniNeko fallback
 // ══════════════════════════════════════════════════════════════════
 async function getServers(titles, episode) {
   const errors = [];
 
+  // Phase 1: Try AniWaves for all title variants (best source)
   for (const title of titles) {
-    // Try AniWaves first
     try {
-      console.log(`[Engine] Trying AniWaves for: "${title}" ep ${episode}`);
+      console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
       return await scrapeAniWaves(title, episode);
     } catch (e) {
-      console.warn(`[Engine] AniWaves failed: ${e.message}`);
-      errors.push(`AniWaves: ${e.message}`);
+      console.warn(`[Engine] AniWaves failed for "${title}": ${e.message}`);
+      errors.push(`AW[${title.slice(0, 30)}]: ${e.message}`);
     }
+  }
 
-    // Try AniNeko fallback
+  // Phase 2: Try AniNeko for latin-script titles only (can't search Japanese)
+  for (const title of titles) {
+    if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
     try {
-      console.log(`[Engine] Trying AniNeko fallback for: "${title}" ep ${episode}`);
+      console.log(`[Engine] AniNeko trying: "${title}" ep ${episode}`);
       return await scrapeAniNeko(title, episode);
     } catch (e) {
-      console.warn(`[Engine] AniNeko failed: ${e.message}`);
-      errors.push(`AniNeko: ${e.message}`);
+      console.warn(`[Engine] AniNeko failed for "${title}": ${e.message}`);
+      errors.push(`AN[${title.slice(0, 30)}]: ${e.message}`);
     }
   }
 
