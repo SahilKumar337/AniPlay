@@ -5,6 +5,8 @@ import {
   Maximize, Minimize, Settings, Subtitles,
   RotateCcw, RotateCw, ArrowLeft
 } from 'lucide-react';
+import { ScreenOrientation } from '@capacitor/screen-orientation';
+import { StatusBar } from '@capacitor/status-bar';
 import './AniPlayer.css';
 
 /* ─── helpers ──────────────────────────────────────────────── */
@@ -217,8 +219,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     const syncNativeFullscreen = async () => {
       if (window.Capacitor) {
         try {
-          const { ScreenOrientation } = await import('@capacitor/screen-orientation');
-          const { StatusBar } = await import('@capacitor/status-bar');
           if (fs) {
             await ScreenOrientation.lock({ orientation: 'landscape' });
             await StatusBar.hide();
