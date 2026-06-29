@@ -15,18 +15,7 @@ export function formatServerUrl(url) {
   return `${PROXY}${url.startsWith('/') ? '' : '/'}${url}`;
 }
 
-// Cache for search results (keyed by animeId-episode)
-const cache = new Map();
-
-/**
- * Fetch watch servers for an anime episode.
- * Sends romaji + english titles pipe-separated so the backend can try both.
- * Returns { servers: [{name, videoUrl, type}], animeTitle, slug }
- */
 export async function getAniNekoServers(anime, episode) {
-  const key = `${anime.id}-${episode}`;
-  if (cache.has(key)) return cache.get(key);
-
   // Collect all title variants (romaji first, then english, then native)
   const titles = [
     anime.title?.romaji,
@@ -59,7 +48,6 @@ export async function getAniNekoServers(anime, episode) {
       videoUrl: formatServerUrl(s.videoUrl)
     }));
     const formattedData = { ...data, servers: formattedServers };
-    cache.set(key, formattedData);
     return formattedData;
   }
 
