@@ -52,7 +52,7 @@ async function gql(query, variables = {}) {
 /* ── Shared media fields ──────────────────────────────────────── */
 const MEDIA_FIELDS = `
   id idMal
-  title { romaji english }
+  title { romaji english native }
   coverImage { large extraLarge color }
   bannerImage
   genres averageScore episodes status format

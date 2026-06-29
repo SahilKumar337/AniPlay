@@ -96,6 +96,9 @@ function extractSeason(t) {
 
 /** Title word-overlap score, returns 0–1 */
 function titleScore(resultTitle, queryTitle) {
+  // If query is in Japanese/native script — the slug keywords already matched so give credit
+  if (/[\u3000-\u9fff\uff00-\uffef]/.test(queryTitle)) return 0.7;
+
   const rn = norm(resultTitle);
   const qn = norm(queryTitle);
 
@@ -120,60 +123,69 @@ function titleScore(resultTitle, queryTitle) {
 
 /**
  * Step 1: Search AniWaves and return the best matching anime slug + id.
- * Tries the longest meaningful word first, then full title.
+ * Tries several keyword strategies in order and picks the best match.
  * Returns { slug, animeId, animeTitle } or throws.
  */
 async function awSearch(title) {
-  // Build a smart keyword: strip generic season/part words, pick longest word
-  const cleaned = title.replace(/\b(season|part|s)\s*\d+\b/gi, '').replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '').trim();
-  const words   = cleaned.split(/[^a-zA-Z0-9]/).filter(w => w.length > 3 && !/^(the|and|with|from|that|this|into|over|under)$/i.test(w));
-  const keyword = words.length ? words.reduce((a, b) => a.length >= b.length ? a : b) : title;
+  // Detect if this is a Japanese (native) title — if so, search with the raw title
+  const hasJapanese = /[\u3000-\u9fff\uff00-\uffef]/.test(title);
 
-  console.log(`[AW] Searching: keyword="${keyword}" (from: "${title}")`);
+  // Build keyword strategies (tried in order until we get results)
+  const cleaned = title
+    .replace(/\b(season|part|s)\s*\d+\b/gi, '')
+    .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
+    .trim();
 
-  const searchHtml = await xfetch(`${AW}/ajax/anime/search?keyword=${encodeURIComponent(keyword)}`, {
-    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
-    referer: AW,
-    timeout: 30000,
-  });
+  const engWords = cleaned.split(/[^a-zA-Z0-9]/).filter(w =>
+    w.length > 3 && !/^(the|and|with|from|that|this|into|over|under|behind|you)$/i.test(w)
+  );
+  const longestWord = engWords.length
+    ? engWords.reduce((a, b) => a.length >= b.length ? a : b)
+    : null;
+  const firstTwo   = cleaned.split(' ').slice(0, 2).join(' ');
+  const firstThree = cleaned.split(' ').slice(0, 3).join(' ');
 
-  let parsed;
-  try { parsed = JSON.parse(searchHtml); } catch { throw new Error('AniWaves search returned non-JSON'); }
-  if (parsed.status === 404 || !parsed.result?.html) {
-    // Fallback: search using full title
-    console.log(`[AW] No results for "${keyword}", retrying with full title`);
-    const fb = await xfetch(`${AW}/ajax/anime/search?keyword=${encodeURIComponent(title)}`, {
-      headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
-      referer: AW,
-      timeout: 30000,
-    });
-    try { parsed = JSON.parse(fb); } catch { throw new Error('AniWaves search fallback returned non-JSON'); }
-    if (parsed.status === 404 || !parsed.result?.html) throw new Error(`Anime "${title}" not found on AniWaves`);
-  }
+  // Strategy order: best discrimination first, then broader
+  const strategies = hasJapanese
+    ? [title]                     // For Japanese: search full native string
+    : [longestWord, firstTwo, firstThree, cleaned].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
 
-  // Parse results: href="/watch/slug-ANIMEID"  title text is in .name
-  const html = parsed.result.html;
-  const itemRe = /href="\/watch\/([^"]+)"><div class="poster">[\s\S]+?class="name d-title"[^>]*>([^<]+)<\/div>/g;
-  const results = [];
-  let m;
-  while ((m = itemRe.exec(html)) !== null) {
-    const fullSlug = m[1].trim();           // e.g. "sasaki-to-pii-chan-75185"
-    const rTitle   = m[2].trim();
-    // Extract numeric id from end of slug
-    const idMatch  = fullSlug.match(/-(\d+)$/);
-    const animeId  = idMatch ? idMatch[1] : null;
-    results.push({ slug: fullSlug, animeId, animeTitle: rTitle });
-  }
+  let results = [];
 
-  // Also try simpler regex as fallback
-  if (results.length === 0) {
-    const simpleRe = /href="\/watch\/([\w-]+-(\d+))"/g;
-    while ((m = simpleRe.exec(html)) !== null) {
-      results.push({ slug: m[1], animeId: m[2], animeTitle: m[1].replace(/-\d+$/, '').replace(/-/g, ' ') });
+  for (const keyword of strategies) {
+    console.log(`[AW] Searching: keyword="${keyword}" (from: "${title}")`);
+    let rawText;
+    try {
+      rawText = await xfetch(`${AW}/ajax/anime/search?keyword=${encodeURIComponent(keyword)}`, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
+        referer: AW,
+        timeout: 30000,
+      });
+    } catch (e) { console.warn(`[AW] Search fetch failed for "${keyword}":`, e.message); continue; }
+
+    let parsed;
+    try { parsed = JSON.parse(rawText); } catch { continue; }
+    if (parsed.status === 404 || !parsed.result?.html) continue;
+
+    const html = parsed.result.html;
+    // Parse all result items
+    const itemRe = /href="\/watch\/([\w%-]+-(\d+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
+    let m;
+    while ((m = itemRe.exec(html)) !== null) {
+      results.push({ slug: m[1], animeId: m[2], animeTitle: m[3].trim() });
     }
+    // Simpler slug-only fallback
+    if (results.length === 0) {
+      const slugRe = /href="\/watch\/([\w-]+-(\d+))"/g;
+      while ((m = slugRe.exec(html)) !== null) {
+        results.push({ slug: m[1], animeId: m[2], animeTitle: m[1].replace(/-\d+$/, '').replace(/-/g, ' ') });
+      }
+    }
+
+    if (results.length) break; // Found results — stop trying more strategies
   }
 
-  if (results.length === 0) throw new Error(`No anime results parsed from AniWaves for "${title}"`);
+  if (results.length === 0) throw new Error(`Anime "${title}" not found on AniWaves`);
 
   // Score and pick best match
   let best = results[0], maxScore = -1;
@@ -182,10 +194,11 @@ async function awSearch(title) {
     console.log(`[AW]   candidate: "${r.animeTitle}" score=${score.toFixed(2)}`);
     if (score > maxScore) { maxScore = score; best = r; }
   }
-  // If best score is 0 and we only have 1 result, accept it anyway (keyword was very specific)
-  if (maxScore === 0 && results.length === 1) best = results[0];
+
+  // If no scored winner (all 0) and exactly 1 result, take it (keyword was very specific)
+  if (maxScore === 0 && results.length === 1) { maxScore = 0.5; best = results[0]; }
   if (maxScore === 0 && results.length > 1) {
-    throw new Error(`No good match for "${title}" among ${results.length} AniWaves results`);
+    throw new Error(`No confident match for "${title}" (${results.length} candidates on AniWaves)`);
   }
 
   console.log(`[AW] Best match: "${best.animeTitle}" (id=${best.animeId}, score=${maxScore.toFixed(2)})`);

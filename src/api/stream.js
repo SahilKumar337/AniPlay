@@ -19,10 +19,11 @@ export async function getAniNekoServers(anime, episode) {
   const key = `${anime.id}-${episode}`;
   if (cache.has(key)) return cache.get(key);
 
-  // Collect all title variants (romaji first, then english)
+  // Collect all title variants (romaji first, then english, then native)
   const titles = [
     anime.title?.romaji,
     anime.title?.english,
+    anime.title?.native,
   ].filter(Boolean).filter((t, i, arr) => arr.indexOf(t) === i);
 
   if (titles.length === 0) throw new Error('No anime title available');
