@@ -21,6 +21,7 @@ export default function WatchPage() {
   const [servers,     setServers]     = useState([]);
   const [activeUrl,   setActiveUrl]   = useState('');
   const [activeName,  setActiveName]  = useState('');
+  const [activeType,  setActiveType]  = useState('sub'); // 'sub' or 'dub'
   const [loadStream,  setLoadStream]  = useState(false);
   const [streamErr,   setStreamErr]   = useState(null);
   
@@ -52,19 +53,16 @@ export default function WatchPage() {
     try {
       const result = await getAniNekoServers(anime, episode);
       if (result?.servers?.length) {
-        // Keep only working HD-1 and HD-2 servers (filters out cluttered, ad-heavy StreamHG/Doodstream/Earnvids)
-        const cleanServers = result.servers.filter(s => s.name.includes('HD-1') || s.name.includes('HD-2'));
-        const finalServers = cleanServers.length ? cleanServers : result.servers;
-        
-        setServers(finalServers);
-        
-        // Pick HD-1 Soft/Sort Sub or Hard Sub as default, otherwise first server
-        const preferred = finalServers.find(s => s.name.includes('HD-1') && s.name.includes('Sub'))
-                       || finalServers.find(s => s.name.includes('HD-1'))
-                       || finalServers[0];
-        
+        setServers(result.servers);
+        // Auto-select first SUB server (prefer Vidstream or Mycloud)
+        const subServers = result.servers.filter(s => s.type === 'sub');
+        const preferred  = subServers.find(s => /vidstream/i.test(s.name))
+                        || subServers.find(s => /mycloud/i.test(s.name))
+                        || subServers[0]
+                        || result.servers[0];
         setActiveUrl(preferred.videoUrl);
         setActiveName(preferred.name);
+        setActiveType(preferred.type || 'sub');
       } else {
         setStreamErr('No streaming servers available for this episode.');
       }
@@ -94,7 +92,13 @@ export default function WatchPage() {
   const selectServer = srv => {
     setActiveUrl(srv.videoUrl);
     setActiveName(srv.name);
+    setActiveType(srv.type || 'sub');
   };
+
+  const subServers = servers.filter(s => s.type === 'sub');
+  const dubServers = servers.filter(s => s.type === 'dub');
+  const hasDub     = dubServers.length > 0;
+
 
   if (!loadAnime && (animeErr || !anime)) return (
     <div className="page" style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:24 }}>
@@ -190,33 +194,56 @@ export default function WatchPage() {
           )}
         </div>
 
-        {/* Server pills */}
+        {/* Server selection: grouped SUB / DUB tabs */}
         {servers.length > 0 && (
           <>
             <p style={{ fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:1, marginBottom:10 }}>
               Select Server
             </p>
-            <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:16 }}>
-              {servers.map((s, idx) => {
-                const active = activeUrl === s.videoUrl;
-                return (
-                  <button key={idx} onClick={() => selectServer(s)}
-                    style={{
-                      padding:'9px 14px', borderRadius:24,
-                      background: active ? 'var(--accent)' : 'var(--bg-card)',
-                      border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                      color: active ? '#fff' : 'var(--text-secondary)',
-                      fontSize:12, fontWeight:600, cursor:'pointer',
-                      display:'flex', alignItems:'center', gap:6,
-                      transition:'all 0.2s',
-                    }}
-                  >
-                    {active && <span style={{ width:6, height:6, borderRadius:'50%', background:'#fff', flexShrink:0 }}/>}
-                    {s.name}
-                  </button>
-                );
-              })}
-            </div>
+
+            {/* SUB servers */}
+            {subServers.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <p style={{ fontSize:9, fontWeight:700, color:'#4fc3f7', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>
+                  🔤 SUB
+                </p>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {subServers.map((s, idx) => {
+                    const active = activeUrl === s.videoUrl;
+                    return (
+                      <button key={`sub-${idx}`} onClick={() => selectServer(s)}
+                        style={{ padding:'8px 14px', borderRadius:24, background: active ? '#4fc3f7' : 'var(--bg-card)', border:`1.5px solid ${active ? '#4fc3f7' : 'var(--border)'}`, color: active ? '#000' : 'var(--text-secondary)', fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:5, transition:'all 0.2s' }}
+                      >
+                        {active && <span style={{ width:5, height:5, borderRadius:'50%', background:'#000', flexShrink:0 }}/>}
+                        {s.name.replace(' (SUB)', '')}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* DUB servers */}
+            {hasDub && (
+              <div style={{ marginBottom: 10 }}>
+                <p style={{ fontSize:9, fontWeight:700, color:'#ffb74d', textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>
+                  🔊 DUB
+                </p>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {dubServers.map((s, idx) => {
+                    const active = activeUrl === s.videoUrl;
+                    return (
+                      <button key={`dub-${idx}`} onClick={() => selectServer(s)}
+                        style={{ padding:'8px 14px', borderRadius:24, background: active ? '#ffb74d' : 'var(--bg-card)', border:`1.5px solid ${active ? '#ffb74d' : 'var(--border)'}`, color: active ? '#000' : 'var(--text-secondary)', fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:5, transition:'all 0.2s' }}
+                      >
+                        {active && <span style={{ width:5, height:5, borderRadius:'50%', background:'#000', flexShrink:0 }}/>}
+                        {s.name.replace(' (DUB)', '')}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </>
         )}
 

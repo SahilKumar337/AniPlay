@@ -1,43 +1,45 @@
 /**
- * Stream API — frontend client for the AniLab proxy server (port 4000)
+ * Stream API — frontend client for the AniLab proxy server
+ * v5: sends all title variants, handles SUB + DUB server types
  */
 
 const PROXY = window.location.port === '3000'
   ? `http://${window.location.hostname}:4000`
   : window.location.origin;
 
-// Cache for search results
+// Cache for search results (keyed by animeId-episode)
 const cache = new Map();
 
 /**
- * Fetch watch servers for an anime from the AniNeko scraper backend.
+ * Fetch watch servers for an anime episode.
+ * Sends romaji + english titles pipe-separated so the backend can try both.
+ * Returns { servers: [{name, videoUrl, type}], animeTitle, slug }
  */
 export async function getAniNekoServers(anime, episode) {
   const key = `${anime.id}-${episode}`;
   if (cache.has(key)) return cache.get(key);
 
-  const titles = [...new Set([
+  // Collect all title variants (romaji first, then english)
+  const titles = [
     anime.title?.romaji,
     anime.title?.english,
-  ].filter(Boolean))];
+  ].filter(Boolean).filter((t, i, arr) => arr.indexOf(t) === i);
 
-  let lastErr = 'Anime not found on AniNeko';
+  if (titles.length === 0) throw new Error('No anime title available');
 
-  for (const title of titles) {
-    try {
-      const url = `${PROXY}/api/anineko-servers?title=${encodeURIComponent(title)}&episode=${episode}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(60000) });
-      const data = await res.json();
-      if (data.ok && data.servers?.length) {
-        cache.set(key, data);
-        return data;
-      }
-      lastErr = data.error || lastErr;
-    } catch (e) {
-      lastErr = e.message;
-    }
+  // Send titles pipe-separated (||| as delimiter to avoid URL encoding issues)
+  const titlesParam = titles.join('|||');
+  const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}`;
+
+  const res  = await fetch(url, { signal: AbortSignal.timeout(90000) });
+  const data = await res.json();
+
+  if (data.ok && data.servers?.length) {
+    cache.set(key, data);
+    return data;
   }
-  throw new Error(lastErr);
+
+  throw new Error(data.error || 'No streaming servers found');
 }
 
 /** Check if the proxy server is running */
