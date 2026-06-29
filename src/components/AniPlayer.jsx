@@ -223,10 +223,8 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
             await ScreenOrientation.lock({ orientation: 'landscape' });
             await StatusBar.hide();
           } else {
-            await ScreenOrientation.lock({ orientation: 'portrait' });
-            setTimeout(async () => {
-              try { await ScreenOrientation.unlock(); } catch (err) {}
-            }, 600);
+            // Unlock orientation so it follows system/portrait flow naturally, and restore status bar
+            try { await ScreenOrientation.unlock(); } catch (err) {}
             await StatusBar.show();
           }
         } catch (e) {

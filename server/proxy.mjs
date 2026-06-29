@@ -961,7 +961,7 @@ export async function handleRequest(req, res) {
         if (absoluteUrl.includes('.m3u8')) {
           return `/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
         } else {
-          return `/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+          return absoluteUrl;
         }
       }).join('\n');
       
