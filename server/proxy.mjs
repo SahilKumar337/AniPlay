@@ -40,6 +40,41 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
 const streamUrlCache = new Map(); // embedUrl -> { url, referer, ts }
 const STREAM_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
+let globalBrowser = null;
+async function getBrowser() {
+  if (globalBrowser) {
+    try {
+      await globalBrowser.version();
+      return globalBrowser;
+    } catch (e) {
+      console.log('[Puppeteer] Global browser crashed or disconnected. Re-launching...');
+      try { await globalBrowser.close(); } catch (err) {}
+      globalBrowser = null;
+    }
+  }
+
+  const launchOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--autoplay-policy=no-user-gesture-required',
+    ],
+  };
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  } else if (existsSync(CHROME_PATH)) {
+    launchOptions.executablePath = CHROME_PATH;
+  }
+
+  console.log('[Puppeteer] Launching shared Chrome instance...');
+  globalBrowser = await puppeteer.launch(launchOptions);
+  return globalBrowser;
+}
+
 async function puppeteerExtractM3U8(embedUrl) {
   const cached = streamUrlCache.get(embedUrl);
   if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL) {
@@ -47,29 +82,11 @@ async function puppeteerExtractM3U8(embedUrl) {
     return cached;
   }
 
-  console.log(`[Puppeteer] Launching headless Chrome for: ${embedUrl.slice(0, 100)}`);
-  let browser;
+  console.log(`[Puppeteer] Opening new page for: ${embedUrl.slice(0, 100)}`);
+  let page;
   try {
-    const launchOptions = {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--autoplay-policy=no-user-gesture-required',
-      ],
-    };
-
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    } else if (existsSync(CHROME_PATH)) {
-      launchOptions.executablePath = CHROME_PATH;
-    }
-
-    browser = await puppeteer.launch(launchOptions);
-
-    const page = await browser.newPage();
+    const browser = await getBrowser();
+    page = await browser.newPage();
     await page.setUserAgent(UA);
     await page.setExtraHTTPHeaders({ Referer: AW + '/' });
 
@@ -151,7 +168,9 @@ async function puppeteerExtractM3U8(embedUrl) {
     streamUrlCache.set(embedUrl, result);
     return result;
   } finally {
-    if (browser) await browser.close();
+    if (page) {
+      try { await page.close(); } catch (err) {}
+    }
   }
 }
 

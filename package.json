@@ -15,6 +15,8 @@
     "@capacitor/android": "^8.4.1",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
+    "@capacitor/screen-orientation": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2",
     "@consumet/extensions": "^1.8.8",
     "axios": "^1.18.1",
     "hls.js": "^1.6.16",

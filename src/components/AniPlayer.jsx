@@ -79,6 +79,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const [ripple,    setRipple]    = useState(null);
   const [swipeVol,  setSwipeVol]  = useState(false);
   const [swipeBri,  setSwipeBri]  = useState(false);
+  const [fitMode,   setFitMode]   = useState('contain');
 
   /* ── HLS ──────────────────────────────────────────────────── */
   useEffect(() => {
@@ -210,6 +211,40 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       document.removeEventListener('webkitfullscreenchange', cb);
     };
   }, []);
+
+  // Sync orientation and statusbar for native mobile clients
+  useEffect(() => {
+    const syncNativeFullscreen = async () => {
+      if (window.Capacitor) {
+        try {
+          const { ScreenOrientation } = await import('@capacitor/screen-orientation');
+          const { StatusBar } = await import('@capacitor/status-bar');
+          if (fs) {
+            await ScreenOrientation.lock({ orientation: 'landscape' });
+            await StatusBar.hide();
+          } else {
+            await ScreenOrientation.lock({ orientation: 'portrait' });
+            setTimeout(async () => {
+              try { await ScreenOrientation.unlock(); } catch (err) {}
+            }, 600);
+            await StatusBar.show();
+          }
+        } catch (e) {
+          console.warn('[AniPlayer] Native orientation/statusbar error:', e.message);
+        }
+      }
+    };
+    syncNativeFullscreen();
+  }, [fs]);
+
+  const toggleFitMode = useCallback(() => {
+    setFitMode(curr => {
+      if (curr === 'contain') return 'cover';
+      if (curr === 'cover') return 'fill';
+      return 'contain';
+    });
+    showCtrl();
+  }, [showCtrl]);
 
   /* ── Keyboard ─────────────────────────────────────────────── */
   useEffect(() => {
@@ -388,7 +423,13 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       onMouseUp={e   => onGestureEnd(e.clientX, e.clientY)}
     >
       {/* ── video ───────────────────────────────────────────── */}
-      <video ref={videoRef} className="anip__video" playsInline preload="auto" />
+      <video
+        ref={videoRef}
+        className="anip__video"
+        style={{ objectFit: fitMode }}
+        playsInline
+        preload="auto"
+      />
 
       {/* ── buffering spinner ───────────────────────────────── */}
       {waiting && (
@@ -553,6 +594,17 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
                   </div>
                 )}
               </div>
+
+              {/* Aspect Ratio Toggle */}
+              <button className="anip__btn"
+                onClick={e => { e.stopPropagation(); toggleFitMode(); }}
+                title="Aspect Ratio"
+                style={{ minWidth: '48px', justifyContent: 'center' }}
+              >
+                <span className="anip__badge" style={{ fontSize: '10px', textTransform: 'uppercase', opacity: 0.95 }}>
+                  {fitMode === 'contain' ? 'Fit' : fitMode === 'cover' ? 'Zoom' : 'Stretch'}
+                </span>
+              </button>
 
               {/* Fullscreen */}
               <button className="anip__btn"
