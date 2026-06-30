@@ -77,6 +77,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const [activeQ,   setActiveQ]   = useState(-1);
   const [subs,      setSubs]      = useState(subtitleTracks);
   const [activeSub, setActiveSub] = useState(-1);
+  const [cues,      setCues]      = useState([]);
   const [showQ,     setShowQ]     = useState(false);
   const [showSub,   setShowSub]   = useState(false);
   const [ripple,    setRipple]    = useState(null);
@@ -234,18 +235,30 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   useEffect(() => { if (hlsRef.current) hlsRef.current.currentLevel  = activeQ;  }, [activeQ]);
   
   useEffect(() => { 
-    // 1. Sync Hls.js embedded tracks
+    // Sync Hls.js embedded tracks
     if (hlsRef.current) {
       hlsRef.current.subtitleTrack = activeSub; 
     }
-    // 2. Sync HTML5 native track elements (for external WebVTT files)
-    const v = videoRef.current;
-    if (v && v.textTracks && v.textTracks.length > 0) {
-      for (let i = 0; i < v.textTracks.length; i++) {
-        v.textTracks[i].mode = (i === activeSub) ? 'showing' : 'disabled';
-      }
-    }
   }, [activeSub]);
+
+  // Fetch JSON subtitles from proxied URL when activeSub changes
+  useEffect(() => {
+    if (activeSub !== -1 && subs[activeSub] && subs[activeSub].file) {
+      log(`Fetching JSON subtitles from: ${subs[activeSub].file}`);
+      fetch(subs[activeSub].file)
+        .then(r => r.json())
+        .then(data => {
+          log(`Loaded ${data.length} subtitle cues`);
+          setCues(data);
+        })
+        .catch(err => {
+          log(`Failed to fetch subtitles: ${err.message}`);
+          setCues([]);
+        });
+    } else {
+      setCues([]);
+    }
+  }, [activeSub, subs, log]);
 
   /* ── Video events ─────────────────────────────────────────── */
   useEffect(() => {
@@ -491,6 +504,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
+  const activeCue = cues.find(c => curTime >= c.startTime && curTime <= c.endTime);
 
   /* ─── Render ──────────────────────────────────────────────── */
   return (
@@ -534,30 +548,21 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         playsInline
         preload="auto"
         autoPlay
-        crossOrigin="anonymous"
-      >
-        {(subs || []).map((track) => (
-          <track
-            key={track.id}
-            kind="subtitles"
-            label={track.label}
-            src={track.file}
-            srcLang="en"
-            default={track.id === activeSub}
-            onLoad={(e) => {
-              console.log('[AniPlayer] Native subtitle track loaded:', track.label);
-              try {
-                e.target.track.mode = 'showing';
-              } catch (err) {
-                console.warn('[AniPlayer] Failed to set track mode:', err.message);
-              }
-            }}
-            onError={(e) => {
-              console.error('[AniPlayer] Native subtitle track failed to load:', track.file);
-            }}
-          />
-        ))}
-      </video>
+      />
+
+      {/* ── Custom Subtitle Overlay ─────────────────────────── */}
+      {activeCue && (
+        <div className="anip__subtitle-overlay">
+          <span className="anip__subtitle-text">
+            {activeCue.text.split('\n').map((line, i) => (
+              <span key={i}>
+                {line}
+                {i < activeCue.text.split('\n').length - 1 && <br />}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
 
       {/* ── Tap-to-play overlay (autoplay blocked by browser) ── */}
       {needsTap && !hlsErr && (

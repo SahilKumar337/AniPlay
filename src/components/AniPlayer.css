@@ -641,3 +641,41 @@
 }
 @keyframes anip-fade-in { from { opacity: 0; transform: translate(-50%, -8px); } }
 
+
+/* Custom Subtitle Overlay */
+.anip__subtitle-overlay {
+  position: absolute;
+  bottom: 11%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  pointer-events: none;
+  text-align: center;
+  width: 85%;
+  animation: anip-sub-fade 0.1s ease-out;
+}
+
+.anip__subtitle-text {
+  background: rgba(0, 0, 0, 0.78);
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 1px rgba(0, 0, 0, 0.95);
+  white-space: pre-wrap;
+  display: inline-block;
+  line-height: 1.4;
+  letter-spacing: 0.2px;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+@keyframes anip-sub-fade {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+/* Adjust subtitle bottom height when controls overlay is visible */
+.anip--ctrl .anip__subtitle-overlay {
+  bottom: 18%;
+}

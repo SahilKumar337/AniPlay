@@ -1672,18 +1672,82 @@ export async function handleRequest(req, res) {
     }
   }
 
-  // Subtitle File Proxy — fetches third-party WebVTT files to bypass CORS limits
+  // Subtitle File Proxy — fetches third-party WebVTT files, parses them, and returns JSON to bypass CORS and rendering limitations
   if (pathname === '/api/stream/subtitle') {
     cors(res);
     const targetUrl = searchParams.get('url');
     if (!targetUrl) { res.writeHead(400); return res.end('missing url'); }
     try {
       const text = await xfetch(targetUrl);
+      
+      // Parse WebVTT text into JSON cues
+      const cues = [];
+      const lines = text.replace(/\r\n/g, '\n').split('\n');
+      
+      let currentCue = null;
+      const timeRegex = /(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/;
+      const shortTimeRegex = /(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2})\.(\d{3})/;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        let match = line.match(timeRegex);
+        let isShort = false;
+        if (!match) {
+          match = line.match(shortTimeRegex);
+          isShort = true;
+        }
+
+        if (match) {
+          if (currentCue) {
+            cues.push(currentCue);
+          }
+          
+          let startSecs, endSecs;
+          if (isShort) {
+            const startMins = parseInt(match[1]);
+            const startSec = parseInt(match[2]);
+            const startMs = parseInt(match[3]);
+            startSecs = startMins * 60 + startSec + startMs / 1000;
+
+            const endMins = parseInt(match[4]);
+            const endSec = parseInt(match[5]);
+            const endMs = parseInt(match[6]);
+            endSecs = endMins * 60 + endSec + endMs / 1000;
+          } else {
+            const startHrs = parseInt(match[1]);
+            const startMins = parseInt(match[2]);
+            const startSec = parseInt(match[3]);
+            const startMs = parseInt(match[4]);
+            startSecs = startHrs * 3600 + startMins * 60 + startSec + startMs / 1000;
+
+            const endHrs = parseInt(match[5]);
+            const endMins = parseInt(match[6]);
+            const endSec = parseInt(match[7]);
+            const endMs = parseInt(match[8]);
+            endSecs = endHrs * 3600 + endMins * 60 + endSec + endMs / 1000;
+          }
+
+          currentCue = {
+            startTime: startSecs,
+            endTime: endSecs,
+            text: ''
+          };
+        } else if (currentCue && !line.startsWith('WEBVTT') && isNaN(line)) {
+          currentCue.text += (currentCue.text ? '\n' : '') + line;
+        }
+      }
+
+      if (currentCue) {
+        cues.push(currentCue);
+      }
+
       res.writeHead(200, {
-        'Content-Type': 'text/vtt',
+        'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
       });
-      return res.end(text);
+      return res.end(JSON.stringify(cues));
     } catch (e) {
       if (!res.headersSent) { res.writeHead(500); res.end(e.message); }
     }
