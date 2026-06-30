@@ -77,7 +77,11 @@ export default function AnimePage() {
   const fav     = isFavorite(anime.id);
   const prog    = getEpisodeProgress(anime.id);
   const isNotReleased = anime.status === 'NOT_YET_RELEASED';
-  const totalEps = isNotReleased ? 0 : (eps || 12);
+  const totalEps = isNotReleased ? 0 : (
+    anime.nextAiringEpisode 
+      ? anime.nextAiringEpisode.episode - 1 
+      : (eps || 12)
+  );
   const allEps   = Array.from({ length: totalEps }, (_, i) => i + 1);
   const filtered = epQuery ? allEps.filter(n => String(n).includes(epQuery.trim())) : allEps;
   const recs     = anime.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [];
@@ -187,7 +191,7 @@ export default function AnimePage() {
         {anime.format && (
           <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>{anime.format.replace('_', ' ')}</span>
         )}
-        {eps > 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{eps} eps</span>}
+        {totalEps > 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{totalEps} eps</span>}
       </div>
 
       {/* ════════════════════════════════════════

@@ -160,7 +160,7 @@ export default function WatchPage() {
 
         // Background prefetch next episode for instant loading
         const nextEp = episode + 1;
-        const maxEps = anime.episodes || 999;
+        const maxEps = anime.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
         if (nextEp <= maxEps) {
           getAniNekoServers(anime, nextEp).catch(() => {});
         }
@@ -184,7 +184,7 @@ export default function WatchPage() {
   }, [anime, episode, setEpisodeProgress, addToRecentlyViewed]);
 
   const goEp = n => {
-    const max = anime?.episodes || 999;
+    const max = anime?.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime?.episodes || 999);
     if (n < 1 || n > max) return;
     navigate(`/watch/${id}/${n}`, { replace: true });
     window.scrollTo(0, 0);
@@ -207,7 +207,11 @@ export default function WatchPage() {
 
   const title    = anime ? getTitle(anime) : '…';
   const cover    = anime ? getCover(anime)  : '';
-  const totalEps = anime?.episodes || 12;
+  const totalEps = anime
+    ? (anime.nextAiringEpisode
+        ? anime.nextAiringEpisode.episode - 1
+        : (anime.episodes || 12))
+    : 12;
 
   return (
     <div style={{ background:'var(--bg-primary)', minHeight:'100vh', paddingBottom:80 }}>

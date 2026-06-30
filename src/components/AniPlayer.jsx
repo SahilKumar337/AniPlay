@@ -58,6 +58,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const hideTimer  = useRef(null);
   const tapTimer   = useRef(null);
   const lastTap    = useRef(0);
+  const lastTouchTime = useRef(0);
   const gesture    = useRef(null);
   const seekDrag   = useRef(false);
 
@@ -481,6 +482,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       onMouseLeave={() => { if (!isTouch() && playing) setCtrlVis(false); }}
       /* touch */
       onTouchStart={e => {
+        lastTouchTime.current = Date.now();
         const t = e.touches[0];
         onGestureStart(t.clientX, t.clientY);
       }}
@@ -490,13 +492,20 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         onGestureMove(t.clientX, t.clientY);
       }}
       onTouchEnd={e => {
+        lastTouchTime.current = Date.now();
         if (seekDrag.current) { seekDrag.current = false; return; }
         const t = e.changedTouches[0];
         onGestureEnd(t.clientX, t.clientY);
       }}
       /* mouse */
-      onMouseDown={e => onGestureStart(e.clientX, e.clientY)}
-      onMouseUp={e   => onGestureEnd(e.clientX, e.clientY)}
+      onMouseDown={e => {
+        if (Date.now() - lastTouchTime.current < 800) return;
+        onGestureStart(e.clientX, e.clientY);
+      }}
+      onMouseUp={e => {
+        if (Date.now() - lastTouchTime.current < 800) return;
+        onGestureEnd(e.clientX, e.clientY);
+      }}
     >
       {/* ── video ───────────────────────────────────────────── */}
       <video
