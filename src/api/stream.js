@@ -45,7 +45,7 @@ export async function getAniNekoServers(anime, episode) {
 
   // Send titles pipe-separated (||| as delimiter to avoid URL encoding issues)
   const titlesParam = titles.join('|||');
-  const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}${isLocal ? '&nocache=true' : ''}`;
+  const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}&_t=${Date.now()}`;
 
   const apiKey = import.meta.env.VITE_API_KEY || '';
   const headers = apiKey ? { 'X-API-Key': apiKey } : {};

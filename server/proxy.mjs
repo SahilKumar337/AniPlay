@@ -1589,6 +1589,10 @@ export async function handleRequest(req, res) {
 
 
   if (pathname === '/api/anineko-servers') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
     const titlesParam = searchParams.get('titles') || searchParams.get('title');
     const ep          = searchParams.get('episode') || '1';
     if (!titlesParam) return json(res, 400, { error: 'titles required' });
