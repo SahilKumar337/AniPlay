@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Search, Bell, Play, X } from 'lucide-react';
+import { Search, Bell, Play, X, Calendar } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   getTrending, getSeasonal, getTopRated,
   getAiring, getMovies, getMostPopular,
-  getCurrentSeason, getCover, getTitle,
+  getNewReleases, getPopularThisSeason,
+  getSchedule, getCurrentSeason, getCover, getTitle,
 } from '../api/anilist';
 import { useApp }       from '../context/AppContext';
 import { rankAnimeByKnn } from '../utils/knn';
@@ -16,22 +17,22 @@ export default function Home() {
   const navigate = useNavigate();
   const { recentlyViewed, removeFromRecentlyViewed } = useApp();
 
-  const [trending, setTrending] = useState([]);
-  const [airing,   setAiring]   = useState([]);
-  const [scrolled, setScrolled] = useState(false);
+  const [trending,       setTrending]       = useState([]);
+  const [airing,         setAiring]         = useState([]);
+  const [newReleases,    setNewReleases]     = useState([]);
+  const [popularSeason,  setPopularSeason]   = useState([]);
+  const [topRated,       setTopRated]       = useState([]);
+  const [movies,         setMovies]         = useState([]);
+  const [popular,        setPopular]        = useState([]);
+  const [weekSchedule,   setWeekSchedule]   = useState([]);
+  const [scrolled,       setScrolled]       = useState(false);
+  const [ready,          setReady]          = useState(false);
 
   useEffect(() => {
-    const handleScroll = () => {
-      setScrolled(window.scrollY > 20);
-    };
+    const handleScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
-  const [seasonal, setSeasonal] = useState([]);
-  const [topRated, setTopRated] = useState([]);
-  const [movies,   setMovies]   = useState([]);
-  const [popular,  setPopular]  = useState([]);
-  const [ready,    setReady]    = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -50,14 +51,32 @@ export default function Home() {
       await load(getTrending, setTrending, 1, 15);
       if (live) setReady(true);
 
-      // Then everything else in parallel
+      // All other sections in parallel
       const { season, year } = getCurrentSeason();
       await Promise.allSettled([
-        load(getAiring,      setAiring,   1, 15),
-        load(getSeasonal,    setSeasonal, season, year, 1, 12),
-        load(getTopRated,    setTopRated, 1, 12),
-        load(getMovies,      setMovies,   1, 10),
-        load(getMostPopular, setPopular,  1, 12),
+        // Top Airing: currently releasing sorted by trending score
+        load(getAiring, setAiring, 1, 20),
+
+        // New Episode Releases: actual episodes aired in the past 2 weeks
+        load(getNewReleases, setNewReleases, 1, 25),
+
+        // Popular This Season: what's trending THIS specific season
+        load(getPopularThisSeason, setPopularSeason, 1, 20),
+
+        // All-time top rated TV series (finished shows)
+        load(getTopRated, setTopRated, 1, 15),
+
+        // Movies sorted by popularity
+        load(getMovies, setMovies, 1, 12),
+
+        // This week's airing schedule for the schedule teaser row
+        load(async () => {
+          const sched = await getSchedule(1, 30);
+          // Map to media objects with episode info
+          return sched
+            .filter(s => getCover(s.media))
+            .map(s => ({ ...s.media, _schedEp: s.episode, _schedAt: s.airingAt }));
+        }, setWeekSchedule),
       ]);
     })();
 
@@ -66,13 +85,13 @@ export default function Home() {
 
   if (!ready) return <HomeSkeleton />;
 
-  // Personalize each section row using K-Nearest Neighbors
-  const personalizedAiring   = rankAnimeByKnn(airing,   recentlyViewed);
-  const personalizedTrending = rankAnimeByKnn(trending, recentlyViewed);
-  const personalizedSeasonal = rankAnimeByKnn(seasonal, recentlyViewed);
-  const personalizedPopular  = rankAnimeByKnn(popular,  recentlyViewed);
-  const personalizedTopRated = rankAnimeByKnn(topRated.filter(a => a.format === 'TV'), recentlyViewed);
-  const personalizedMovies   = rankAnimeByKnn(movies,   recentlyViewed);
+  // Personalize rows using K-Nearest Neighbors based on watch history
+  const personalizedAiring        = rankAnimeByKnn(airing,        recentlyViewed);
+  const personalizedNewReleases   = rankAnimeByKnn(newReleases,   recentlyViewed);
+  const personalizedPopularSeason = rankAnimeByKnn(popularSeason, recentlyViewed);
+  const personalizedTrending      = rankAnimeByKnn(trending,      recentlyViewed);
+  const personalizedTopRated      = rankAnimeByKnn(topRated.filter(a => a.format === 'TV'), recentlyViewed);
+  const personalizedMovies        = rankAnimeByKnn(movies,        recentlyViewed);
 
   return (
     <div className="page" style={{ position: 'relative' }}>
@@ -118,7 +137,7 @@ export default function Home() {
         {/* ── Hero Banner ─────────────────────────────────────── */}
         {trending.length > 0 && <HeroBanner animes={trending} />}
 
-        {/* ── Continue Watching (Top Priority) ──────────────── */}
+        {/* ── 1. Continue Watching (Top Priority) ─────────────── */}
         {recentlyViewed && recentlyViewed.length > 0 && (
           <section className="home-section" style={{ position: 'relative', marginTop: 16 }}>
             <div className="section-header">
@@ -133,9 +152,7 @@ export default function Home() {
                     <div
                       key={idx}
                       onClick={() => navigate(`/watch/${item.anime.id}/${item.episode}`)}
-                      style={{
-                        width: 130, flexShrink: 0, cursor: 'pointer', position: 'relative'
-                      }}
+                      style={{ width: 130, flexShrink: 0, cursor: 'pointer', position: 'relative' }}
                     >
                       <div style={{ width: 130, height: 170, borderRadius: 12, overflow: 'hidden', position: 'relative', background: 'var(--bg-card)' }}>
                         <img src={cover} alt={title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -147,19 +164,14 @@ export default function Home() {
                             <Play size={8} fill="#fff"/> EP {item.episode}
                           </span>
                         </div>
-                        {/* Cut option (Cross/Remove button) */}
                         <button
-                          onClick={e => {
-                            e.stopPropagation();
-                            removeFromRecentlyViewed(item.anime.id);
-                          }}
+                          onClick={e => { e.stopPropagation(); removeFromRecentlyViewed(item.anime.id); }}
                           style={{
                             position: 'absolute', top: 6, right: 6,
                             width: 22, height: 22, borderRadius: '50%',
                             background: 'rgba(0,0,0,0.6)', border: 'none',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            cursor: 'pointer', zIndex: 10,
-                            transition: 'background 0.2s',
+                            cursor: 'pointer', zIndex: 10, transition: 'background 0.2s',
                           }}
                           aria-label="Remove from Continue Watching"
                         >
@@ -177,10 +189,24 @@ export default function Home() {
           </section>
         )}
 
-        {/* ── Top Airing ─────────────────────────────────────── */}
+        {/* ── 2. New Episode Releases (aired last 2 weeks, real schedule data) */}
+        {personalizedNewReleases.length > 0 && (
+          <AnimeRow
+            title="New Episode Releases"
+            subtitle="Last 2 weeks"
+            animes={personalizedNewReleases}
+            cardWidth={120}
+            cardHeight={160}
+            showEpBadge
+            onSeeAll={() => navigate('/browse?category=new-releases')}
+          />
+        )}
+
+        {/* ── 3. Top Airing (currently releasing, ranked by trending score) */}
         {personalizedAiring.length > 0 && (
           <AnimeRow
             title="Top Airing"
+            subtitle="Trending now"
             animes={personalizedAiring}
             cardWidth={120}
             cardHeight={160}
@@ -188,21 +214,77 @@ export default function Home() {
           />
         )}
 
-        {/* ── New Episode Releases ────────────────────────────── */}
-        {personalizedAiring.length > 0 && (
+        {/* ── 4. This Week's Schedule teaser ──────────────────── */}
+        {weekSchedule.length > 0 && (
+          <section className="home-section">
+            <div className="section-header">
+              <div>
+                <h2 className="section-title">Airing This Week</h2>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginTop: 1 }}>Next 7 days</span>
+              </div>
+              <button
+                className="see-all-btn"
+                onClick={() => navigate('/schedule')}
+                style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <Calendar size={12} /> Full Schedule
+              </button>
+            </div>
+            <div className="h-scroll">
+              {weekSchedule.slice(0, 15).map((anime, idx) => {
+                const airedDate = anime._schedAt
+                  ? new Date(anime._schedAt * 1000).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                  : '';
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => navigate(`/anime/${anime.id}`)}
+                    style={{ width: 100, flexShrink: 0, cursor: 'pointer' }}
+                  >
+                    <div style={{ width: 100, height: 140, borderRadius: 10, overflow: 'hidden', position: 'relative', background: 'var(--bg-card)' }}>
+                      <img src={getCover(anime)} alt={getTitle(anime)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      <div style={{
+                        position: 'absolute', inset: 0,
+                        background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%)',
+                        display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: '6px 6px 6px',
+                      }}>
+                        {anime._schedEp && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: 'var(--accent)', padding: '2px 5px', borderRadius: 3, width: 'fit-content', marginBottom: 3 }}>
+                            EP {anime._schedEp}
+                          </span>
+                        )}
+                        {airedDate && (
+                          <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>{airedDate}</span>
+                        )}
+                      </div>
+                    </div>
+                    <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {getTitle(anime)}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* ── 5. Popular This Season (this season ranked by trending) */}
+        {personalizedPopularSeason.length > 0 && (
           <AnimeRow
-            title="New Episode Releases"
-            animes={[...personalizedAiring].reverse()}
+            title="Popular This Season"
+            subtitle={(() => { const { season, year } = getCurrentSeason(); return `${season.charAt(0) + season.slice(1).toLowerCase()} ${year}`; })()}
+            animes={personalizedPopularSeason}
             cardWidth={120}
             cardHeight={160}
-            onSeeAll={() => navigate('/browse?category=new-releases')}
+            onSeeAll={() => navigate('/browse?category=seasonal')}
           />
         )}
 
-        {/* ── Top Hits Anime ──────────────────────────────────── */}
+        {/* ── 6. Top Trending (global trending across all time) ── */}
         {personalizedTrending.length > 0 && (
           <AnimeRow
-            title="Top Hits Anime"
+            title="Top Trending"
+            subtitle="All time"
             animes={personalizedTrending}
             cardWidth={130}
             cardHeight={180}
@@ -211,32 +293,11 @@ export default function Home() {
           />
         )}
 
-        {/* ── This Season ─────────────────────────────────────── */}
-        {personalizedSeasonal.length > 0 && (
-          <AnimeRow
-            title="This Season"
-            animes={personalizedSeasonal}
-            cardWidth={120}
-            cardHeight={160}
-            onSeeAll={() => navigate('/browse?category=seasonal')}
-          />
-        )}
-
-        {/* ── Most Favorite ───────────────────────────────────── */}
-        {personalizedPopular.length > 0 && (
-          <AnimeRow
-            title="Most Favorite"
-            animes={personalizedPopular}
-            cardWidth={120}
-            cardHeight={160}
-            onSeeAll={() => navigate('/browse?category=popular')}
-          />
-        )}
-
-        {/* ── Top TV Series ───────────────────────────────────── */}
+        {/* ── 7. Top TV Series (highest rated finished series) ── */}
         {personalizedTopRated.length > 0 && (
           <AnimeRow
             title="Top TV Series"
+            subtitle="Highest rated"
             animes={personalizedTopRated}
             cardWidth={120}
             cardHeight={160}
@@ -244,10 +305,11 @@ export default function Home() {
           />
         )}
 
-        {/* ── Top Movie ───────────────────────────────────────── */}
+        {/* ── 8. Top Movies ───────────────────────────────────── */}
         {personalizedMovies.length > 0 && (
           <AnimeRow
-            title="Top Movie"
+            title="Top Movies"
+            subtitle="Films & specials"
             animes={personalizedMovies}
             cardWidth={120}
             cardHeight={160}
@@ -265,9 +327,10 @@ function HomeSkeleton() {
   return (
     <div className="page">
       <div className="skeleton" style={{ height: 380, borderRadius: 0 }} />
-      {[1, 2].map(i => (
+      {[1, 2, 3].map(i => (
         <div key={i} style={{ padding: '20px 16px 0' }}>
-          <div className="skeleton" style={{ height: 17, width: 130, borderRadius: 6, marginBottom: 14 }} />
+          <div className="skeleton" style={{ height: 17, width: 150, borderRadius: 6, marginBottom: 4 }} />
+          <div className="skeleton" style={{ height: 12, width: 80, borderRadius: 4, marginBottom: 12 }} />
           <div style={{ display: 'flex', gap: 10 }}>
             {[1,2,3,4].map(j => (
               <div key={j} className="skeleton" style={{ width: 120, height: 160, borderRadius: 12, flexShrink: 0 }} />

@@ -8,6 +8,7 @@ export default function AnimeCard({
   width = 120,
   height = 165,
   rank = null,
+  epLabel = null,
   showBadges = true,
   className = '',
 }) {
@@ -53,6 +54,20 @@ export default function AnimeCard({
             textAlign: 'center', lineHeight: 1.3,
           }}>{title}</span>
         </div>
+      )}
+
+      {/* Episode label badge (e.g. New Episode Releases) */}
+      {epLabel && !rank && (
+        <span style={{
+          position: 'absolute', top: 6, left: 6,
+          background: 'var(--accent)', color: '#fff',
+          fontSize: 9, fontWeight: 700,
+          padding: '2px 6px', borderRadius: 4,
+          display: 'flex', alignItems: 'center', gap: 3,
+          zIndex: 3,
+        }}>
+          ▶ {epLabel}
+        </span>
       )}
 
       {/* Rank number */}

@@ -90,11 +90,37 @@ export async function getMovies(page = 1, perPage = 10) {
   return d?.Page?.media || [];
 }
 
-/* ── Airing Now ───────────────────────────────────────────────── */
+/* ── Top Airing (currently releasing, sorted by trending score) ── */
 export async function getAiring(page = 1, perPage = 15) {
-  const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(status:RELEASING,sort:UPDATED_AT_DESC,type:ANIME,isAdult:false,format_in:[TV,TV_SHORT,ONA]){${MEDIA_FIELDS}}}}`;
+  const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(status:RELEASING,sort:TRENDING_DESC,type:ANIME,isAdult:false,format_in:[TV,TV_SHORT,ONA]){${MEDIA_FIELDS}}}}`;
   const d = await gql(q, { p: page, n: perPage });
   return (d?.Page?.media || []).filter(a => getCover(a));
+}
+
+/* ── New Episode Releases (aired in the past 2 weeks) ─────────── */
+export async function getNewReleases(page = 1, perPage = 20) {
+  const now      = Math.floor(Date.now() / 1000);
+  const twoWeeks = now - 14 * 86400;
+  // Fetch recent airing schedule entries and deduplicate by media id
+  const q = `query($p:Int,$n:Int,$from:Int,$to:Int){
+    Page(page:$p,perPage:$n){
+      airingSchedules(airingAt_greater:$from,airingAt_lesser:$to,sort:TIME_DESC){
+        airingAt episode
+        media{ ${MEDIA_FIELDS} isAdult }
+      }
+    }
+  }`;
+  const d = await gql(q, { p: page, n: perPage, from: twoWeeks, to: now });
+  const schedules = (d?.Page?.airingSchedules || []).filter(s => !s.media?.isAdult && getCover(s.media));
+  // Deduplicate: keep the most recent airing per media
+  const seen = new Set();
+  const unique = [];
+  for (const s of schedules) {
+    if (!s.media?.id || seen.has(s.media.id)) continue;
+    seen.add(s.media.id);
+    unique.push({ ...s.media, _latestEp: s.episode, _airedAt: s.airingAt });
+  }
+  return unique;
 }
 
 /* ── Most Popular ─────────────────────────────────────────────── */
@@ -102,6 +128,14 @@ export async function getMostPopular(page = 1, perPage = 12) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(sort:POPULARITY_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
   const d = await gql(q, { p: page, n: perPage });
   return d?.Page?.media || [];
+}
+
+/* ── Popular This Season (current season, sorted by trending) ──── */
+export async function getPopularThisSeason(page = 1, perPage = 15) {
+  const { season, year } = getCurrentSeason();
+  const q = `query($s:MediaSeason,$y:Int,$p:Int,$n:Int){Page(page:$p,perPage:$n){media(season:$s,seasonYear:$y,sort:TRENDING_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
+  const d = await gql(q, { s: season, y: year, p: page, n: perPage });
+  return (d?.Page?.media || []).filter(a => getCover(a));
 }
 
 /* ── Search ───────────────────────────────────────────────────── */
