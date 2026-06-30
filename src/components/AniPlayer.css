@@ -656,13 +656,13 @@
 }
 
 .anip__subtitle-text {
-  background: rgba(0, 0, 0, 0.78);
+  background: rgba(0, 0, 0, 0.35);
   color: #ffffff;
   font-size: 18px;
   font-weight: 600;
   padding: 5px 12px;
   border-radius: 6px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 1px rgba(0, 0, 0, 0.95);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.95);
   white-space: pre-wrap;
   display: inline-block;
   line-height: 1.4;

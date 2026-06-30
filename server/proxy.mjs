@@ -1011,7 +1011,7 @@ async function scrapeAniNeko(title, episode) {
   const rawServers = [];
   for (const page of fetchedPages) {
     if (page.status !== 'fulfilled') continue;
-    const { html } = page.value;
+    const { html, isDubPage } = page.value;
 
     const panelsRe = /<div[^>]+data-id="(sub|dub)"[\s\S]*?<\/div>\s*<\/div>/g;
     let pMatch;
@@ -1028,7 +1028,7 @@ async function scrapeAniNeko(title, episode) {
         
         // Restrict to HD-1 and HD-2 only, as requested by the user
         if (name.includes('HD-1') || name.includes('HD-2')) {
-          const isDub = panelId === 'dub';
+          const isDub = !!(isDubPage || panelId === 'dub' || name.toLowerCase().includes('dub'));
           rawServers.push({ videoUrl, isDub });
         }
       }
@@ -1643,6 +1643,15 @@ export async function handleRequest(req, res) {
     const targetUrl = searchParams.get('url');
     if (!targetUrl) { res.writeHead(400); return res.end('missing url'); }
     const referer = searchParams.get('referer') || new URL(targetUrl).origin;
+    
+    const controller = new AbortController();
+    const { signal } = controller;
+    
+    const cleanup = () => {
+      controller.abort();
+    };
+    req.on('close', cleanup);
+
     try {
       const headers = {
         'User-Agent': UA,
@@ -1651,8 +1660,19 @@ export async function handleRequest(req, res) {
       };
       if (globalCookie) headers['Cookie'] = globalCookie;
 
-      const sRes = await fetch(targetUrl, { headers });
-      if (!sRes.ok) { res.writeHead(sRes.status); return res.end(); }
+      // Add an 8-second request timeout to prevent hanging forever
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 8000);
+
+      const sRes = await fetch(targetUrl, { headers, signal });
+      clearTimeout(timeoutId);
+
+      if (!sRes.ok) { 
+        req.removeListener('close', cleanup);
+        res.writeHead(sRes.status); 
+        return res.end(); 
+      }
 
       res.writeHead(sRes.status, {
         'Content-Type': sRes.headers.get('content-type') || 'video/mp2t',
@@ -1663,12 +1683,23 @@ export async function handleRequest(req, res) {
 
       const nodeStream = Readable.fromWeb(sRes.body);
       nodeStream.pipe(res);
+      
       req.on('close', () => {
         nodeStream.destroy();
       });
+      req.removeListener('close', cleanup);
       return;
     } catch (e) {
-      if (!res.headersSent) { res.writeHead(500); res.end(e.message); }
+      req.removeListener('close', cleanup);
+      if (!res.headersSent) { 
+        if (e.name === 'AbortError') {
+          res.writeHead(499); // Client Closed Request
+        } else {
+          res.writeHead(500);
+        }
+        res.end(e.message); 
+      }
+      return;
     }
   }
 

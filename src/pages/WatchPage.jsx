@@ -286,6 +286,7 @@ export default function WatchPage() {
           <AniPlayer
             url={activeUrl}
             title={`${title} – Episode ${episode}`}
+            subtitleTracks={activeServer?.subtitles || []}
             onBack={() => navigate(`/anime/${id}`, { replace: true })}
           />
         )}

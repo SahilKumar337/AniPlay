@@ -505,6 +505,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
   const activeCue = cues.find(c => curTime >= c.startTime && curTime <= c.endTime);
+  const cleanCueText = activeCue ? activeCue.text.replace(/<\/?[^>]+(>|$)/g, "") : "";
 
   /* ─── Render ──────────────────────────────────────────────── */
   return (
@@ -554,10 +555,10 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       {activeCue && (
         <div className="anip__subtitle-overlay">
           <span className="anip__subtitle-text">
-            {activeCue.text.split('\n').map((line, i) => (
+            {cleanCueText.split('\n').map((line, i) => (
               <span key={i}>
                 {line}
-                {i < activeCue.text.split('\n').length - 1 && <br />}
+                {i < cleanCueText.split('\n').length - 1 && <br />}
               </span>
             ))}
           </span>
