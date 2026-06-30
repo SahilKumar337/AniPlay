@@ -221,12 +221,31 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   // Sync subtitle tracks when props change (using stringify for stable comparison)
   const subTracksJson = JSON.stringify(subtitleTracks);
   useEffect(() => {
-    setSubs(subtitleTracks || []);
-    setActiveSub(-1);
+    const loadedSubs = subtitleTracks || [];
+    setSubs(loadedSubs);
+    // Auto-select English subtitle track by default if available
+    if (loadedSubs.length > 0) {
+      setActiveSub(0);
+    } else {
+      setActiveSub(-1);
+    }
   }, [subTracksJson]);
 
   useEffect(() => { if (hlsRef.current) hlsRef.current.currentLevel  = activeQ;  }, [activeQ]);
-  useEffect(() => { if (hlsRef.current) hlsRef.current.subtitleTrack = activeSub; }, [activeSub]);
+  
+  useEffect(() => { 
+    // 1. Sync Hls.js embedded tracks
+    if (hlsRef.current) {
+      hlsRef.current.subtitleTrack = activeSub; 
+    }
+    // 2. Sync HTML5 native track elements (for external WebVTT files)
+    const v = videoRef.current;
+    if (v && v.textTracks && v.textTracks.length > 0) {
+      for (let i = 0; i < v.textTracks.length; i++) {
+        v.textTracks[i].mode = (i === activeSub) ? 'showing' : 'disabled';
+      }
+    }
+  }, [activeSub]);
 
   /* ── Video events ─────────────────────────────────────────── */
   useEffect(() => {

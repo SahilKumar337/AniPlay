@@ -1064,6 +1064,7 @@ async function scrapeAniNeko(title, episode) {
     }] : [];
 
     if (s.isDub) {
+      if (dubCount >= 2) continue;
       dubCount++;
       servers.push({
         name: `HD${dubCount} (DUB)`,
@@ -1072,6 +1073,7 @@ async function scrapeAniNeko(title, episode) {
         subtitles
       });
     } else {
+      if (subCount >= 2) continue;
       subCount++;
       servers.push({
         name: `HD${subCount}`,
