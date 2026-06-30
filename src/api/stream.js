@@ -3,8 +3,15 @@
  * v5: sends all title variants, handles SUB + DUB server types
  */
 
+const isLocal = 
+  window.location.hostname === 'localhost' || 
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname.startsWith('192.168.') ||
+  window.location.hostname.startsWith('10.') ||
+  window.location.hostname.startsWith('172.');
+
 export const PROXY = import.meta.env.VITE_PROXY_URL || (
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== ''
+  isLocal
     ? `http://${window.location.hostname}:4000`
     : 'https://anilab-backend.onrender.com'
 );
