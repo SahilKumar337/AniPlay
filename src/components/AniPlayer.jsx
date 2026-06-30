@@ -86,6 +86,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const [fitMode,   setFitMode]   = useState('contain');
   const [needsTap,  setNeedsTap]  = useState(false);  // autoplay blocked
   const [hlsErr,    setHlsErr]    = useState(null);   // fatal stream error
+  const [hasStarted, setHasStarted] = useState(false); // first play event occurred
 
   // Debug & Diagnostics
   const [logs,       setLogs]       = useState([]);
@@ -111,6 +112,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     setNeedsTap(false);
     setHlsErr(null);
     setWaiting(true);
+    setHasStarted(false);
     setQualities([]);
     setActiveQ(-1);
     setSubs(subtitleTracks || []);
@@ -266,7 +268,10 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     if (!v) return;
     const sync = (e) => {
       setPlaying(!v.paused);
-      if (!v.paused) setNeedsTap(false);
+      if (!v.paused) {
+        setNeedsTap(false);
+        setHasStarted(true);
+      }
       setCurTime(v.currentTime);
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
       log(`Video state sync (event: ${e.type}, curTime=${v.currentTime.toFixed(1)}, paused=${v.paused})`);
@@ -283,6 +288,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       log(`Video event: playing/canplay (event: ${e.type})`);
       setWaiting(false);
       setNeedsTap(false);
+      setHasStarted(true);
     };
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
@@ -551,6 +557,11 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         autoPlay
       />
 
+      {/* ── BLACK LOADING BG: Covers grey browser poster/play icon ── */}
+      {!hasStarted && !hlsErr && !needsTap && (
+        <div className="anip__loading-bg" />
+      )}
+
       {/* ── Custom Subtitle Overlay ─────────────────────────── */}
       {activeCue && (
         <div className="anip__subtitle-overlay">
@@ -653,6 +664,24 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
           >
             {title}
           </span>
+        </div>
+
+        {/* ── Centered Controls (Play, Pause, Skip) ── */}
+        <div className="anip__center-ctrls" onClick={e => e.stopPropagation()}>
+          {/* Rewind 10s */}
+          <button className="anip__center-btn anip__center-btn--skip" onClick={() => skip(-10)}>
+            <RotateCcw size={22} />
+          </button>
+          
+          {/* Play / Pause */}
+          <button className="anip__center-btn anip__center-btn--play" onClick={togglePlay}>
+            {playing ? <Pause size={28} fill="#fff" strokeWidth={0} /> : <Play size={28} fill="#fff" strokeWidth={0} style={{ marginLeft: 4 }} />}
+          </button>
+
+          {/* Forward 10s */}
+          <button className="anip__center-btn anip__center-btn--skip" onClick={() => skip(10)}>
+            <RotateCw size={22} />
+          </button>
         </div>
 
         {/* ── Spacer (click to toggle controls) ────────────── */}

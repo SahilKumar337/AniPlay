@@ -29,6 +29,27 @@
   display: block;
   object-fit: contain;
   background: #000;
+  /* Kill the ugly Android WebView grey oval / default play icon */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* 
+ * This is the nuclear fix: hide the default browser video loading poster
+ * (the grey oval with black arrow that appears while HLS loads on Android)
+ */
+.anip__video::-webkit-media-controls         { display: none !important; }
+.anip__video::-webkit-media-controls-panel   { display: none !important; }
+.anip__video::--webkit-media-controls-play-button { display: none !important; }
+.anip__video:not([src])::-webkit-media-controls { display: none !important; }
+
+/* ── Full-screen black loading placeholder ────────────────── */
+.anip__loading-bg {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  z-index: 9;
+  pointer-events: none;
 }
 
 /* ── Buffering spinner ─────────────────────────────────────── */
@@ -678,4 +699,61 @@
 /* Adjust subtitle bottom height when controls overlay is visible */
 .anip--ctrl .anip__subtitle-overlay {
   bottom: 18%;
+}
+
+/* ── Centered Controls (Play/Pause, Skip) ────────────────── */
+.anip__center-ctrls {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  pointer-events: all; /* enable clicking on these buttons */
+  z-index: 25;
+}
+
+.anip__center-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+  outline: none;
+}
+
+.anip__center-btn--skip {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.anip__center-btn--play {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(229, 9, 20, 0.9); /* Netflix red accent */
+  box-shadow: 0 6px 20px rgba(229, 9, 20, 0.4), 0 0 0 6px rgba(255, 255, 255, 0.05);
+}
+
+.anip__center-btn:hover {
+  transform: scale(1.08);
+}
+.anip__center-btn:active {
+  transform: scale(0.92);
+}
+
+.anip__center-btn--skip:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.anip__center-btn--play:hover {
+  background: #ff1e27;
 }
