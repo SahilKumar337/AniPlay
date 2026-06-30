@@ -34,8 +34,7 @@ export async function getAniNekoServers(anime, episode) {
 
   // Send titles pipe-separated (||| as delimiter to avoid URL encoding issues)
   const titlesParam = titles.join('|||');
-  const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}${isDev ? '&nocache=true' : ''}`;
+  const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}${isLocal ? '&nocache=true' : ''}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
   
