@@ -1169,10 +1169,10 @@ async function getServers(titles, episode) {
     return null;
   })();
 
-  // 3. Execute both scrapers concurrently. Limit AniWaves to 6.5s to prevent stalling.
+  // 3. Execute both scrapers concurrently. Allow AniWaves up to 20s (plain fetch needs more time without a warm browser).
   const [aniNekoData, aniWavesData] = await Promise.all([
     runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 6500, 'AniWaves').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(wavesPromise, 20000, 'AniWaves').catch(e => { console.warn(e.message); return null; })
   ]);
 
 
