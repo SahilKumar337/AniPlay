@@ -257,15 +257,22 @@ export default function Home() {
                 return (
                   <div
                     key={idx}
-                    onClick={() => navigate(`/anime/${anime.id}`)}
-                    style={{ width: 100, flexShrink: 0, cursor: 'pointer' }}
+                    style={{ width: 100, flexShrink: 0 }}
                   >
-                    <div style={{ width: 100, height: 140, borderRadius: 10, overflow: 'hidden', position: 'relative', background: 'var(--bg-card)' }}>
+                    <div
+                      className="anime-card"
+                      style={{ width: 100, height: 140 }}
+                      onClick={() => navigate(`/anime/${anime.id}`)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={getTitle(anime)}
+                    >
                       <img src={getCover(anime)} alt={getTitle(anime)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                       <div style={{
                         position: 'absolute', inset: 0,
                         background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%)',
                         display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: '6px 6px 6px',
+                        zIndex: 2,
                       }}>
                         {anime._schedEp && (
                           <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: 'var(--accent)', padding: '2px 5px', borderRadius: 3, width: 'fit-content', marginBottom: 3 }}>
@@ -276,8 +283,27 @@ export default function Home() {
                           <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>{airedDate}</span>
                         )}
                       </div>
+
+                      {/* Play overlay on hover (same as AnimeCard) */}
+                      <div className="card-play-overlay">
+                        <div className="card-play-overlay-inner" style={{ width: 28, height: 28 }}>
+                          <Play size={12} color="#fff" fill="#fff" />
+                        </div>
+                      </div>
+
+                      {/* Title overlay on hover (same as AnimeCard) */}
+                      <div className="card-title-overlay" style={{
+                        position: 'absolute', bottom: 0, left: 0, right: 0,
+                        background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 60%)',
+                        padding: '24px 6px 6px', opacity: 0, transition: 'opacity 0.2s',
+                        zIndex: 3,
+                      }}>
+                        <span style={{ fontSize: 9, fontWeight: 600, color: '#fff', display: 'block', lineHeight: 1.3 }}>
+                          {getTitle(anime)}
+                        </span>
+                      </div>
                     </div>
-                    <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', marginTop: 5, width: 100, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {getTitle(anime)}
                     </p>
                   </div>

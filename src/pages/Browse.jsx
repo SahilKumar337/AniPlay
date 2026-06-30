@@ -288,18 +288,8 @@ function SearchResultItem({ anime, onClick }) {
           className="search-result-thumb"
           loading="lazy"
         />
-        <div style={{
-          position: 'absolute', inset: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.3)',
-          opacity: 0,
-          transition: 'opacity 0.2s',
-          borderRadius: 8,
-        }}
-          onMouseEnter={e => e.currentTarget.style.opacity = 1}
-          onMouseLeave={e => e.currentTarget.style.opacity = 0}
-        >
-          <Play size={18} color="#fff" fill="#fff" />
+        <div className="search-result-play-overlay">
+          <Play size={16} color="#fff" fill="#fff" />
         </div>
       </div>
       <div className="search-result-info">

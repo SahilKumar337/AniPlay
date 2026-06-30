@@ -153,10 +153,17 @@ ul, ol { list-style: none; }
   overflow: hidden;
   background: var(--bg-card);
   cursor: pointer;
-  transition: transform var(--transition);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  will-change: transform;
 }
-.anime-card:hover { transform: scale(1.03); }
-.anime-card:active { transform: scale(0.97); }
+.anime-card:hover {
+  transform: scale(1.05) translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(229, 9, 20, 0.35);
+  z-index: 5;
+}
+.anime-card:active {
+  transform: scale(0.97) translateY(0);
+}
 
 .anime-card img {
   width: 100%;
@@ -683,10 +690,12 @@ ul, ol { list-style: none; }
   gap: 12px;
   padding: 10px 16px;
   cursor: pointer;
-  transition: background var(--transition);
+  transition: background 0.3s ease, transform 0.3s ease;
   align-items: center;
 }
-.search-result-item:hover { background: var(--bg-card); }
+.search-result-item:hover {
+  background: var(--bg-hover);
+}
 .search-result-thumb {
   width: 54px;
   height: 72px;
@@ -694,6 +703,22 @@ ul, ol { list-style: none; }
   object-fit: cover;
   flex-shrink: 0;
   background: var(--bg-card);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+.search-result-item:hover .search-result-thumb {
+  transform: scale(1.06);
+}
+.search-result-play-overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.45);
+  opacity: 0;
+  transition: opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border-radius: 8px;
+  z-index: 2;
+}
+.search-result-item:hover .search-result-play-overlay {
+  opacity: 1;
 }
 .search-result-info { flex: 1; min-width: 0; }
 .search-result-title {
@@ -873,19 +898,25 @@ ul, ol { list-style: none; }
   transition: opacity var(--transition);
 }
 .ep-thumb-card:hover .ep-play-icon { opacity: 1; }
-.anime-card:hover .card-play-overlay { opacity: 1; }
-.anime-card:hover .card-title-overlay { opacity: 1 !important; }
+.anime-card:hover .card-play-overlay, .mylist-card:hover .card-play-overlay { opacity: 1; }
+.anime-card:hover .card-title-overlay, .mylist-card:hover .card-title-overlay { opacity: 1 !important; }
 .card-play-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.35);
+  background: rgba(0,0,0,0.4);
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  z-index: 2;
 }
 .card-play-overlay-inner {
   width: 36px; height: 36px; border-radius: 50%;
   background: var(--accent);
   display: flex; align-items: center; justify-content: center;
+  transform: scale(0.7);
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.anime-card:hover .card-play-overlay-inner, .mylist-card:hover .card-play-overlay-inner {
+  transform: scale(1);
 }
 
 .detail-tabs {
@@ -1020,9 +1051,17 @@ ul, ol { list-style: none; }
   overflow: hidden;
   position: relative;
   cursor: pointer;
-  transition: transform var(--transition);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  will-change: transform;
 }
-.mylist-card:hover { transform: scale(1.03); }
+.mylist-card:hover {
+  transform: scale(1.05) translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(229, 9, 20, 0.35);
+  z-index: 5;
+}
+.mylist-card:active {
+  transform: scale(0.97) translateY(0);
+}
 .mylist-card img { width: 100%; height: 100%; object-fit: cover; }
 .mylist-card-overlay {
   position: absolute;
