@@ -1622,7 +1622,8 @@ export async function handleRequest(req, res) {
         if (absoluteUrl.includes('.m3u8')) {
           return `${selfBase}/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
         } else {
-          return `${selfBase}/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+          // Direct Play: Return the raw segment URL so the phone downloads it directly from the CDN
+          return absoluteUrl;
         }
       }).join('\n');
 
