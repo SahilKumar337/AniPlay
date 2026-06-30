@@ -301,7 +301,7 @@ export default function WatchPage() {
               // Direct HLS proxying on Render free tier can cause bandwidth bottlenecks (lag).
               // By returning early here, we keep AniNeko inside the sandboxed iframe player,
               // maintaining direct CDN speeds and avoiding lag.
-              if (activeName && activeName.includes('Neko')) {
+              if (!activeUrl || !activeUrl.includes('iframe-proxy')) {
                 console.log('[WatchPage] AniNeko server detected. Keeping in sandboxed iframe player to prevent proxy lag.');
                 return;
               }
