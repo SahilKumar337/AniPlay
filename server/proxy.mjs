@@ -129,29 +129,20 @@ async function getPlaywrightBrowser() {
   }
 }
 
-// Perform an immediate async startup check to verify if browser launches
-getPlaywrightBrowser().then(browser => {
-  if (browser) {
-    console.log('[Playwright] Startup check: Browser launched successfully.');
-    isPlaywrightAvailable = true;
-  } else {
-    console.log('[Playwright] Startup check: Browser failed to launch. Disabling Playwright scrapers.');
-    isPlaywrightAvailable = false;
-    if (!playwrightStartupError) playwrightStartupError = 'Browser was null after getPlaywrightBrowser';
-  }
-}).catch(err => {
-  console.warn('[Playwright] Startup check error:', err.message);
-  isPlaywrightAvailable = false;
-  playwrightStartupError = err.message + '\n' + err.stack;
-});
-
 let playwrightContext = null;
-async function getPlaywrightContext() {
-  const browser = await getPlaywrightBrowser();
-  if (!browser) return null;
-  
-  if (!playwrightContext) {
-    playwrightContext = await browser.newContext({
+let isPriming = false;
+
+async function primePlaywrightContext() {
+  if (isPriming) return null;
+  isPriming = true;
+  try {
+    const browser = await getPlaywrightBrowser();
+    if (!browser) {
+      isPriming = false;
+      return null;
+    }
+    console.log('[Playwright] Creating fresh context for AniWaves...');
+    const context = await browser.newContext({
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
       deviceScaleFactor: 1,
@@ -161,7 +152,7 @@ async function getPlaywrightContext() {
     });
 
     // Add robust stealth script before any page loads
-    await playwrightContext.addInitScript(() => {
+    await context.addInitScript(() => {
       // Hide webdriver automation signature
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
@@ -222,47 +213,78 @@ async function getPlaywrightContext() {
       });
     });
 
-    console.log('[Playwright] Priming shared context with AniWaves homepage...');
-    const page = await playwrightContext.newPage();
+    console.log('[Playwright] Loading AniWaves homepage to acquire cookies...');
+    const page = await context.newPage();
     try {
-      await page.goto(AW, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await page.goto(AW, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(4000);
       
-      // Let passive challenge load/run
-      await page.waitForTimeout(3000);
-      
-      // Check for Cloudflare Turnstile challenge page
       let title = await page.title();
       if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
-        console.log('[Playwright] Cloudflare verification page detected on homepage. Waiting for Turnstile container...');
-        
-        // Wait for Turnstile container to render on screen
+        console.log('[Playwright] Cloudflare verification page detected. Waiting for Turnstile container...');
         const container = page.locator('#naeL5, div[style*="display: grid"]').first();
         const box = await container.boundingBox().catch(() => null);
         if (box) {
-          console.log('[Playwright] Found Turnstile container bounding box:', JSON.stringify(box));
-          // Click exactly in the center of the checkbox (x+16, y+34 relative to container)
-          const clickX = box.x + 16;
-          const clickY = box.y + 34;
-          console.log(`[Playwright] Clicking Turnstile checkbox at X: ${clickX}, Y: ${clickY}...`);
-          await page.mouse.click(clickX, clickY);
-          
-          // Wait for verification and reload/redirect
-          console.log('[Playwright] Verification clicked. Waiting 10 seconds for redirect/reload...');
+          console.log('[Playwright] Clicking Turnstile checkbox...');
+          await page.mouse.click(box.x + 16, box.y + 34);
           await page.waitForTimeout(10000);
         } else {
-          console.warn('[Playwright] Turnstile container bounding box not found.');
-          await page.waitForTimeout(3000);
+          await page.waitForTimeout(4000);
         }
       }
-      console.log(`[Playwright] Homepage loaded successfully. Title: "${await page.title()}"`);
+      console.log(`[Playwright] Context primed successfully. Title: "${await page.title()}"`);
     } catch (e) {
-      console.warn('[Playwright] Context priming failed:', e.message);
+      console.warn('[Playwright] Homepage navigation failed during priming:', e.message);
     } finally {
-      await page.close();
+      await page.close().catch(() => {});
     }
+
+    const oldContext = playwrightContext;
+    playwrightContext = context;
+    if (oldContext) {
+      await oldContext.close().catch(() => {});
+    }
+    return playwrightContext;
+  } catch (e) {
+    console.error('[Playwright] Context priming crashed:', e.message);
+    return null;
+  } finally {
+    isPriming = false;
+  }
+}
+
+async function getPlaywrightContext() {
+  if (!playwrightContext) {
+    console.log('[Playwright] Context not ready yet. Priming now synchronously...');
+    await primePlaywrightContext();
   }
   return playwrightContext;
 }
+
+// Background Context Refresh Timer (every 8 minutes)
+setInterval(() => {
+  if (isPlaywrightAvailable) {
+    console.log('[Playwright] Periodic background context refresh starting...');
+    primePlaywrightContext();
+  }
+}, 8 * 60 * 1000);
+
+// Perform an immediate async startup check to verify if browser launches
+getPlaywrightBrowser().then(browser => {
+  if (browser) {
+    console.log('[Playwright] Startup check: Browser launched successfully. Priming context in background...');
+    isPlaywrightAvailable = true;
+    primePlaywrightContext();
+  } else {
+    console.log('[Playwright] Startup check: Browser failed to launch. Disabling Playwright scrapers.');
+    isPlaywrightAvailable = false;
+    if (!playwrightStartupError) playwrightStartupError = 'Browser was null after getPlaywrightBrowser';
+  }
+}).catch(err => {
+  console.warn('[Playwright] Startup check error:', err.message);
+  isPlaywrightAvailable = false;
+  playwrightStartupError = err.message + '\n' + err.stack;
+});
 
 async function playwrightFetch(url, referer = '') {
   console.log(`[Playwright Fetch] Navigating to: ${url}`);
