@@ -23,6 +23,12 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
     : '';
 
   useEffect(() => {
+    if (src && !src.includes('iframe-proxy')) {
+      setStatus('playing');
+    }
+  }, [src]);
+
+  useEffect(() => {
     // Handle postMessage from the sandboxed iframe
     const handleMessage = (event) => {
       const data = event.data;
