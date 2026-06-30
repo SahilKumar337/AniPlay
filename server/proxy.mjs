@@ -1251,7 +1251,8 @@ async function getServers(titles, episode) {
   const result = {
     servers: combinedServers,
     animeTitle: aniNekoData?.animeTitle || aniWavesData?.animeTitle || titles[0],
-    slug: aniNekoData?.slug || aniWavesData?.slug || ''
+    slug: aniNekoData?.slug || aniWavesData?.slug || '',
+    errors
   };
 
   // Resolve M3U8 streams concurrently
