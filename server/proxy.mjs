@@ -127,6 +127,20 @@ async function getPlaywrightBrowser() {
   }
 }
 
+// Perform an immediate async startup check to verify if browser launches
+getPlaywrightBrowser().then(browser => {
+  if (browser) {
+    console.log('[Playwright] Startup check: Browser launched successfully.');
+    isPlaywrightAvailable = true;
+  } else {
+    console.log('[Playwright] Startup check: Browser failed to launch. Disabling Playwright scrapers.');
+    isPlaywrightAvailable = false;
+  }
+}).catch(err => {
+  console.warn('[Playwright] Startup check error:', err.message);
+  isPlaywrightAvailable = false;
+});
+
 let playwrightContext = null;
 async function getPlaywrightContext() {
   const browser = await getPlaywrightBrowser();
