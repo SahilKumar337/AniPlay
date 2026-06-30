@@ -143,48 +143,74 @@ export default function Home() {
             <div className="section-header">
               <h2 className="section-title">Continue Watching</h2>
             </div>
-            <div style={{ position: 'relative', width: '100%' }}>
-              <div className="h-scroll">
-                {recentlyViewed.map((item, idx) => {
-                  const title = getTitle(item.anime);
-                  const cover = getCover(item.anime);
-                  return (
+            <div className="h-scroll">
+              {recentlyViewed.map((item, idx) => {
+                const title = getTitle(item.anime);
+                const cover = getCover(item.anime);
+                return (
+                  <div key={idx} style={{ flexShrink: 0 }}>
+                    {/* Card with full anime-card hover effects */}
                     <div
-                      key={idx}
+                      className="anime-card"
+                      style={{ width: 130, height: 170 }}
                       onClick={() => navigate(`/watch/${item.anime.id}/${item.episode}`)}
-                      style={{ width: 130, flexShrink: 0, cursor: 'pointer', position: 'relative' }}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Continue watching ${title}`}
                     >
-                      <div style={{ width: 130, height: 170, borderRadius: 12, overflow: 'hidden', position: 'relative', background: 'var(--bg-card)' }}>
-                        <img src={cover} alt={title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        <div style={{
-                          position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 80%)',
-                          display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: 8
-                        }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: 'var(--accent)', padding: '2px 6px', borderRadius: 4, width: 'fit-content', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 3 }}>
-                            <Play size={8} fill="#fff"/> EP {item.episode}
-                          </span>
+                      <img src={cover} alt={title} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+
+                      {/* Episode badge — bottom left */}
+                      <span style={{
+                        position: 'absolute', bottom: 8, left: 8,
+                        fontSize: 10, fontWeight: 700, color: '#fff',
+                        background: 'var(--accent)', padding: '2px 6px',
+                        borderRadius: 4, display: 'flex', alignItems: 'center', gap: 3, zIndex: 3,
+                      }}>
+                        <Play size={8} fill="#fff"/> EP {item.episode}
+                      </span>
+
+                      {/* Remove button — top right */}
+                      <button
+                        onClick={e => { e.stopPropagation(); removeFromRecentlyViewed(item.anime.id); }}
+                        style={{
+                          position: 'absolute', top: 6, right: 6,
+                          width: 22, height: 22, borderRadius: '50%',
+                          background: 'rgba(0,0,0,0.6)', border: 'none',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          cursor: 'pointer', zIndex: 10, transition: 'background 0.2s',
+                        }}
+                        aria-label="Remove from Continue Watching"
+                      >
+                        <X size={10} color="#fff" />
+                      </button>
+
+                      {/* Play overlay on hover (same as AnimeCard) */}
+                      <div className="card-play-overlay">
+                        <div className="card-play-overlay-inner">
+                          <Play size={16} color="#fff" fill="#fff" />
                         </div>
-                        <button
-                          onClick={e => { e.stopPropagation(); removeFromRecentlyViewed(item.anime.id); }}
-                          style={{
-                            position: 'absolute', top: 6, right: 6,
-                            width: 22, height: 22, borderRadius: '50%',
-                            background: 'rgba(0,0,0,0.6)', border: 'none',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            cursor: 'pointer', zIndex: 10, transition: 'background 0.2s',
-                          }}
-                          aria-label="Remove from Continue Watching"
-                        >
-                          <X size={10} color="#fff" />
-                        </button>
                       </div>
-                      <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginTop: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {title}
-                      </p>
+
+                      {/* Title overlay on hover (same as AnimeCard) */}
+                      <div className="card-title-overlay" style={{
+                        position: 'absolute', bottom: 0, left: 0, right: 0,
+                        background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 60%)',
+                        padding: '24px 6px 6px', opacity: 0, transition: 'opacity 0.2s',
+                      }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: '#fff', display: 'block', lineHeight: 1.3 }}>
+                          {title}
+                        </span>
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    {/* Title below card */}
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginTop: 6, width: 130, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {title}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </section>
         )}
