@@ -1004,25 +1004,26 @@ async function scrapeAniNeko(title, episode) {
       if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
       const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       
-      const isDub = /dub/i.test(name) || isDubPage;
-      let displayName = name;
-      if (name.includes('HD-1')) displayName = 'HD1';
-      else if (name.includes('HD-2')) displayName = 'HD2';
+      // Restrict to HD-1 and HD-2 only, as requested by the user
+      if (name.includes('HD-1') || name.includes('HD-2')) {
+        const isDub = /dub/i.test(name) || isDubPage;
+        let displayName = name.includes('HD-1') ? 'HD1' : 'HD2';
 
-      if (isDub) {
-        dubCount++;
-        servers.push({
-          name: displayName.endsWith('DUB') ? displayName : `${displayName} (DUB)`,
-          videoUrl,
-          type: 'dub'
-        });
-      } else {
-        subCount++;
-        servers.push({
-          name: displayName,
-          videoUrl,
-          type: 'sub'
-        });
+        if (isDub) {
+          dubCount++;
+          servers.push({
+            name: displayName.endsWith('DUB') ? displayName : `${displayName} (DUB)`,
+            videoUrl,
+            type: 'dub'
+          });
+        } else {
+          subCount++;
+          servers.push({
+            name: displayName,
+            videoUrl,
+            type: 'sub'
+          });
+        }
       }
     }
   }

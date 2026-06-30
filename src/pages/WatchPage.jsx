@@ -297,7 +297,14 @@ export default function WatchPage() {
             src={activeUrl}
             onBack={() => navigate(`/anime/${id}`, { replace: true })}
             onStreamCaptured={(m3u8Url, referer) => {
-              // CRITICAL: always route through our proxy to bypass CORS restrictions
+              // AniNeko HD1/HD2 work perfectly in their custom player on the site.
+              // Direct HLS proxying on Render free tier can cause bandwidth bottlenecks (lag).
+              // By returning early here, we keep AniNeko inside the sandboxed iframe player,
+              // maintaining direct CDN speeds and avoiding lag.
+              if (activeName && activeName.includes('Neko')) {
+                console.log('[WatchPage] AniNeko server detected. Keeping in sandboxed iframe player to prevent proxy lag.');
+                return;
+              }
               const proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
               console.log('[WatchPage] IframePlayer captured stream, switching to native player');
               setActiveUrl(proxied);
