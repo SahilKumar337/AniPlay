@@ -14,22 +14,19 @@ RUN apt-get update \
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV PORT=7860
 
-# Create user with UID 1000 (required for Hugging Face Spaces)
-RUN useradd -m -u 1000 user
-
-# Switch to non-root user
-USER user
-ENV HOME=/home/user
-ENV PATH=/home/user/.local/bin:$PATH
+# Switch to the pre-existing 'node' user (which already has UID 1000 in node images)
+USER node
+ENV HOME=/home/node
+ENV PATH=/home/node/.local/bin:$PATH
 
 WORKDIR $HOME/app
 
-# Copy dependency files and install (all as non-root user)
-COPY --chown=user package*.json ./
+# Copy dependency files and install (all as non-root 'node' user)
+COPY --chown=node:node package*.json ./
 RUN npm install
 
-# Copy application code (all as non-root user)
-COPY --chown=user . .
+# Copy application code (all as non-root 'node' user)
+COPY --chown=node:node . .
 
 EXPOSE 7860
 
