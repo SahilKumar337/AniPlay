@@ -52,7 +52,11 @@ export async function getAniNekoServers(anime, episode) {
   if (data.ok && data.servers?.length) {
     const formattedServers = data.servers.map(s => ({
       ...s,
-      videoUrl: formatServerUrl(s.videoUrl)
+      videoUrl: formatServerUrl(s.videoUrl),
+      subtitles: (s.subtitles || []).map(sub => ({
+        ...sub,
+        file: formatServerUrl(sub.file)
+      }))
     }));
     const formattedData = { ...data, servers: formattedServers };
     return formattedData;

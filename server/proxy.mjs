@@ -1060,7 +1060,7 @@ async function scrapeAniNeko(title, episode) {
     const subtitles = subtitleUrl ? [{
       id: 0,
       label: 'English',
-      file: subtitleUrl
+      file: `/api/stream/subtitle?url=${encodeURIComponent(subtitleUrl)}`
     }] : [];
 
     if (s.isDub) {
@@ -1251,7 +1251,7 @@ export async function handleRequest(req, res) {
 
   const refererHeader = req.headers.referer || '';
   const isIframeProxy = refererHeader.includes('/api/iframe-proxy');
-  const myApis = ['/api/anineko-servers', '/api/ping', '/api/stream/hls', '/api/stream/segment', '/api/iframe-proxy'];
+  const myApis = ['/api/anineko-servers', '/api/ping', '/api/stream/hls', '/api/stream/segment', '/api/stream/subtitle', '/api/iframe-proxy'];
   const isMyApi = myApis.includes(pathname);
 
   // Intercept relative assets from iframe-proxy
@@ -1667,6 +1667,23 @@ export async function handleRequest(req, res) {
         nodeStream.destroy();
       });
       return;
+    } catch (e) {
+      if (!res.headersSent) { res.writeHead(500); res.end(e.message); }
+    }
+  }
+
+  // Subtitle File Proxy — fetches third-party WebVTT files to bypass CORS limits
+  if (pathname === '/api/stream/subtitle') {
+    cors(res);
+    const targetUrl = searchParams.get('url');
+    if (!targetUrl) { res.writeHead(400); return res.end('missing url'); }
+    try {
+      const text = await xfetch(targetUrl);
+      res.writeHead(200, {
+        'Content-Type': 'text/vtt',
+        'Access-Control-Allow-Origin': '*'
+      });
+      return res.end(text);
     } catch (e) {
       if (!res.headersSent) { res.writeHead(500); res.end(e.message); }
     }
