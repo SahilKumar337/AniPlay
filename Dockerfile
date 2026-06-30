@@ -16,19 +16,20 @@ ENV PORT=7860
 
 # Create user with UID 1000 (required for Hugging Face Spaces)
 RUN useradd -m -u 1000 user
-WORKDIR /home/user/app
-
-# Copy dependency files first
-COPY --chown=user:user package*.json ./
-RUN npm install
-
-# Copy application code
-COPY --chown=user:user . .
 
 # Switch to non-root user
 USER user
 ENV HOME=/home/user
 ENV PATH=/home/user/.local/bin:$PATH
+
+WORKDIR $HOME/app
+
+# Copy dependency files and install (all as non-root user)
+COPY --chown=user package*.json ./
+RUN npm install
+
+# Copy application code (all as non-root user)
+COPY --chown=user . .
 
 EXPOSE 7860
 
