@@ -1615,7 +1615,19 @@ export async function handleRequest(req, res) {
     const referer = searchParams.get('referer') || new URL(targetUrl).origin;
     const apiKeyParam = searchParams.get('api_key') || '';
     try {
-      const raw = await xfetch(targetUrl, { referer });
+      const hHeaders = {
+        'User-Agent': UA,
+        'Referer': referer
+      };
+      try {
+        hHeaders['Origin'] = new URL(referer).origin;
+      } catch {}
+      const response = await fetch(targetUrl, {
+        signal: AbortSignal.timeout(45000),
+        headers: hHeaders
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status} from HLS source`);
+      const raw = await response.text();
       const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
 
       // Build absolute base so HLS.js in Capacitor WebView resolves correctly.
@@ -1714,7 +1726,6 @@ export async function handleRequest(req, res) {
         'Referer': referer,
         'Origin': new URL(referer).origin
       };
-      if (globalCookie) headers['Cookie'] = globalCookie;
 
       // Add an 8-second request timeout to prevent hanging forever
       const timeoutId = setTimeout(() => {
