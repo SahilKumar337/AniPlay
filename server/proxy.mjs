@@ -90,6 +90,8 @@ async function getBrowser() {
 }
 
 let playwrightBrowser = null;
+let isPlaywrightAvailable = true;
+
 async function getPlaywrightBrowser() {
   if (playwrightBrowser) {
     try {
@@ -115,10 +117,12 @@ async function getPlaywrightBrowser() {
         '--disable-dev-shm-usage',
       ]
     });
+    isPlaywrightAvailable = true;
     return playwrightBrowser;
   } catch (e) {
     console.warn('[Playwright] Failed to launch browser:', e.message);
     playwrightBrowser = null;
+    isPlaywrightAvailable = false;
     return null;
   }
 }
@@ -1100,6 +1104,11 @@ async function getServers(titles, episode) {
 
   // 2. Define AniWaves scraper execution (uses Playwright-backed xfetch)
   const wavesPromise = (async () => {
+    // If playwright failed to initialize (e.g. on Render free tier), skip AniWaves immediately to prevent loading delays
+    if (!isPlaywrightAvailable) {
+      console.log('[Engine] Playwright is unavailable on this server. Skipping AniWaves.');
+      return null;
+    }
     for (const title of titles) {
       try {
         console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
