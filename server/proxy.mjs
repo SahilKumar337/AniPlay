@@ -233,6 +233,10 @@ async function primePlaywrightContext() {
         }
       }
       console.log(`[Playwright] Context primed successfully. Title: "${await page.title()}"`);
+      const cookies = await context.cookies();
+      const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+      globalCookie = cookieStr;
+      console.log(`[Playwright] Saved ${cookies.length} cookies to globalCookie.`);
     } catch (e) {
       console.warn('[Playwright] Homepage navigation failed during priming:', e.message);
     } finally {
@@ -645,29 +649,48 @@ function json(res, code, data) {
 // ── Smart fetch with cookie persistence ──────────────────────────
 let globalCookie = '';
 async function xfetch(url, opts = {}) {
-  if (url.includes('aniwaves.ru') || url.includes('aniwave.')) {
+  // Try standard fetch first (using cookies from background priming)
+  try {
+    const r = await fetch(url, {
+      signal: AbortSignal.timeout(opts.timeout || 15000),
+      headers: {
+        'User-Agent': UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
+        ...(globalCookie ? { 'Cookie': globalCookie } : {}),
+        ...(opts.referer ? { 'Referer': opts.referer, 'Origin': new URL(opts.referer).origin } : {}),
+        ...(opts.headers || {}),
+      },
+    });
+    
+    if (r.ok) {
+      const text = await r.text();
+      // Check if we hit Turnstile or Cloudflare protection in the response body
+      const hasCf = text.includes('Cloudflare') || text.includes('Just a moment') || text.includes('Attention Required!');
+      if (!hasCf) {
+        const setCookies = r.headers.getSetCookie?.() || [];
+        if (setCookies.length) {
+          const newCookies = setCookies.map(c => c.split(';')[0]).join('; ');
+          globalCookie = globalCookie ? `${globalCookie}; ${newCookies}` : newCookies;
+        }
+        return text;
+      }
+    }
+  } catch (e) {
+    // Suppress spammy log unless needed
+  }
+
+  // Fallback to Playwright if standard fetch was blocked/failed
+  if ((url.includes('aniwaves.ru') || url.includes('aniwave.')) && isPlaywrightAvailable) {
     try {
       return await playwrightFetch(url, opts.referer);
     } catch (e) {
-      console.warn(`[xfetch] Playwright fetch failed for ${url}, trying standard fetch fallback:`, e.message);
+      console.warn(`[xfetch] Playwright fallback fetch failed for ${url}:`, e.message);
     }
   }
-  const r = await fetch(url, {
-    signal: AbortSignal.timeout(opts.timeout || 45000),
-    headers: {
-      'User-Agent': UA,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Connection': 'keep-alive',
-      ...(globalCookie ? { 'Cookie': globalCookie } : {}),
-      ...(opts.referer ? { 'Referer': opts.referer, 'Origin': new URL(opts.referer).origin } : {}),
-      ...(opts.headers || {}),
-    },
-  });
-  const setCookie = r.headers.getSetCookie?.() || [];
-  if (setCookie.length) globalCookie = setCookie.map(c => c.split(';')[0]).join('; ');
-  if (!r.ok) throw new Error(`HTTP ${r.status} from ${url.split('?')[0]}`);
-  return r.text();
+  
+  throw new Error(`Request to ${url} failed or was blocked by Cloudflare`);
 }
 
 // ── Text normalisation ────────────────────────────────────────────
