@@ -1589,52 +1589,31 @@ export async function handleRequest(req, res) {
 
   if (pathname === '/api/diagnose') {
     cors(res);
-    const trace = [];
-    const log = (msg) => {
-      const time = new Date().toISOString();
-      console.log(`[Trace] ${msg}`);
-      trace.push({ time, msg });
-    };
+    let nekoOutput = null;
+    let wavesOutput = null;
+    let nekoErr = null;
+    let wavesErr = null;
     
     try {
-      log('Starting AniWaves scrape diagnostics...');
-      log('Step 1: Searching for MARRIAGETOXIN...');
-      const { slug, animeId, animeTitle } = await awSearch('MARRIAGETOXIN');
-      log(`Search succeeded: slug=${slug}, animeId=${animeId}, title=${animeTitle}`);
-      
-      log('Step 2: Fetching server list...');
-      const rawServers = await awGetServers(animeId, '1', slug);
-      log(`Fetch servers succeeded: found ${rawServers.length} raw servers`);
-      
-      log('Step 3: Resolving embed URLs...');
-      const toResolve = rawServers.filter(s => s.type === 'sub').slice(0, 2);
-      log(`Resolving ${toResolve.length} sub servers...`);
-      
-      const resolved = [];
-      for (const s of toResolve) {
-        log(`Resolving server: name=${s.serverName}, linkId=${s.linkId.slice(0, 30)}...`);
-        try {
-          const embedUrl = await awGetEmbedUrl(s.linkId, slug);
-          log(`Resolved embedUrl: ${embedUrl.slice(0, 80)}`);
-          resolved.push({ serverName: s.serverName, embedUrl });
-        } catch (err) {
-          log(`Failed to resolve embedUrl: ${err.message}`);
-        }
-      }
-      
-      return json(res, 200, {
-        ok: true,
-        trace,
-        resolved
-      });
+      nekoOutput = await scrapeAniNeko('MARRIAGETOXIN', '1');
     } catch (e) {
-      log(`Scrape crashed: ${e.message}`);
-      return json(res, 200, {
-        ok: false,
-        trace,
-        error: e.message + '\n' + e.stack
-      });
+      nekoErr = e.message + '\n' + e.stack;
     }
+    
+    try {
+      wavesOutput = await scrapeAniWaves('MARRIAGETOXIN', '1');
+    } catch (e) {
+      wavesErr = e.message + '\n' + e.stack;
+    }
+    
+    return json(res, 200, {
+      isPlaywrightAvailable,
+      playwrightStartupError,
+      nekoOutput,
+      nekoErr,
+      wavesOutput,
+      wavesErr
+    });
   }
 
   if (pathname === '/api/anineko-servers') {
