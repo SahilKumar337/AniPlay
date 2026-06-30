@@ -50,6 +50,19 @@ export default function WatchPage() {
       .catch(e => { setAnimeErr(e.message); setLoadAnime(false); });
   }, [id]);
 
+  // Auto-redirect if trying to watch an unreleased episode
+  useEffect(() => {
+    if (anime) {
+      const max = anime.nextAiringEpisode 
+        ? anime.nextAiringEpisode.episode - 1 
+        : (anime.episodes || 999);
+      if (episode > max) {
+        console.log(`[WatchPage] Episode ${episode} is unreleased (max is ${max}). Redirecting to latest episode ${max}...`);
+        navigate(`/watch/${id}/${max}`, { replace: true });
+      }
+    }
+  }, [anime, episode, id, navigate]);
+
   // Robust server selection with automatic fallback to next server on error
   const selectServer = useCallback(async (srv, srvList) => {
     setActiveServer(srv);

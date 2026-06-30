@@ -82,6 +82,7 @@ export default function AnimePage() {
       ? anime.nextAiringEpisode.episode - 1 
       : (eps || 12)
   );
+  const resumeEp = prog?.episode ? Math.min(prog.episode, totalEps) : 1;
   const allEps   = Array.from({ length: totalEps }, (_, i) => i + 1);
   const filtered = epQuery ? allEps.filter(n => String(n).includes(epQuery.trim())) : allEps;
   const recs     = anime.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [];
@@ -213,16 +214,16 @@ export default function AnimePage() {
               className="btn btn-primary"
               id={`play-${anime.id}`}
               style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10 }}
-              onClick={() => navigate(`/watch/${anime.id}/${prog?.episode || 1}`)}
+              onClick={() => navigate(`/watch/${anime.id}/${resumeEp}`)}
             >
               <Play size={17} fill="#fff" />
-              {prog ? `Resume Ep ${prog.episode}` : 'Play'}
+              {prog && resumeEp > 0 ? `Resume Ep ${resumeEp}` : 'Play'}
             </button>
             <button
               className="btn btn-primary"
               id={`dl-${anime.id}`}
               style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10, background: '#b50010' }}
-              onClick={() => navigate(`/watch/${anime.id}/${prog?.episode || 1}`)}
+              onClick={() => navigate(`/watch/${anime.id}/${resumeEp}`)}
             >
               <Download size={17} />
               Download
