@@ -1488,7 +1488,13 @@ export async function handleRequest(req, res) {
       let proto = req.headers['x-forwarded-proto'];
       if (!proto) {
         const hostHeader = req.headers['host'] || '';
-        proto = (hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1')) ? 'http' : 'https';
+        const isLocalHost = 
+          hostHeader.includes('localhost') || 
+          hostHeader.includes('127.0.0.1') || 
+          hostHeader.includes('192.168.') || 
+          hostHeader.includes('10.') || 
+          hostHeader.includes('172.');
+        proto = isLocalHost ? 'http' : 'https';
       }
       const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
       const selfBase = `${proto}://${host}`;
@@ -1555,7 +1561,13 @@ export async function handleRequest(req, res) {
       let proto = req.headers['x-forwarded-proto'];
       if (!proto) {
         const hostHeader = req.headers['host'] || '';
-        proto = (hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1')) ? 'http' : 'https';
+        const isLocalHost = 
+          hostHeader.includes('localhost') || 
+          hostHeader.includes('127.0.0.1') || 
+          hostHeader.includes('192.168.') || 
+          hostHeader.includes('10.') || 
+          hostHeader.includes('172.');
+        proto = isLocalHost ? 'http' : 'https';
       }
       const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
       const selfBase = `${proto}://${host}`;
