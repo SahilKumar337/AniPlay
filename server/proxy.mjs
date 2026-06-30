@@ -1154,13 +1154,8 @@ async function getServers(titles, episode) {
     return null;
   })();
 
-  // 2. Define AniWaves scraper execution (uses Playwright-backed xfetch)
+  // 2. Define AniWaves scraper execution (xfetch falls back to plain fetch if Playwright unavailable)
   const wavesPromise = (async () => {
-    // If playwright failed to initialize (e.g. on Render free tier), skip AniWaves immediately to prevent loading delays
-    if (!isPlaywrightAvailable) {
-      console.log('[Engine] Playwright is unavailable on this server. Skipping AniWaves.');
-      return null;
-    }
     for (const title of titles) {
       try {
         console.log(`[Engine] AniWaves trying: "${title}" ep ${episode}`);
