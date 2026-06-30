@@ -543,7 +543,18 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
             label={track.label}
             src={track.file}
             srcLang="en"
-            default={track.id === 0}
+            default={track.id === activeSub}
+            onLoad={(e) => {
+              console.log('[AniPlayer] Native subtitle track loaded:', track.label);
+              try {
+                e.target.track.mode = 'showing';
+              } catch (err) {
+                console.warn('[AniPlayer] Failed to set track mode:', err.message);
+              }
+            }}
+            onError={(e) => {
+              console.error('[AniPlayer] Native subtitle track failed to load:', track.file);
+            }}
           />
         ))}
       </video>
