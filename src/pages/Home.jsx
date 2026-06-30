@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Bell, Play, X, Calendar } from 'lucide-react';
+import { Search, Bell, Play, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   getTrending, getSeasonal, getTopRated,
@@ -223,11 +223,10 @@ export default function Home() {
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginTop: 1 }}>Next 7 days</span>
               </div>
               <button
-                className="see-all-btn"
+                className="see-all"
                 onClick={() => navigate('/schedule')}
-                style={{ display: 'flex', alignItems: 'center', gap: 4 }}
               >
-                <Calendar size={12} /> Full Schedule
+                See all
               </button>
             </div>
             <div className="h-scroll">
