@@ -78,7 +78,7 @@ export default function WatchPage() {
     if (srv.videoUrl && srv.videoUrl.includes('iframe-proxy')) {
       let embedUrl = srv.videoUrl;
       try {
-        const proxyUrlObj = new URL(srv.videoUrl);
+        const proxyUrlObj = new URL(srv.videoUrl, window.location.origin);
         embedUrl = proxyUrlObj.searchParams.get('url') || srv.videoUrl;
       } catch {}
 

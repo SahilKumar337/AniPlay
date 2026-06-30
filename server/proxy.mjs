@@ -103,8 +103,10 @@ async function getPlaywrightBrowser() {
 
   try {
     console.log('[Playwright] Launching shared browser instance...');
+    const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
     playwrightBrowser = await chromium.launch({
       headless: true,
+      ...(execPath ? { executablePath: execPath } : {}),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -140,16 +142,62 @@ async function getPlaywrightContext() {
     await playwrightContext.addInitScript(() => {
       // Hide webdriver automation signature
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+      // Mock User Agent Client Hints to look like official Chrome
+      const userAgentData = {
+        brands: [
+          { brand: 'Google Chrome', version: '125' },
+          { brand: 'Chromium', version: '125' },
+          { brand: 'Not.A/Brand', version: '24' }
+        ],
+        mobile: false,
+        platform: 'Windows'
+      };
+      Object.defineProperty(navigator, 'userAgentData', { get: () => userAgentData });
+
       // Mimic Chrome runtime environment
-      window.chrome = { runtime: {} };
+      window.chrome = {
+        app: { isInstalled: false },
+        runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {} }
+      };
+
       // Override permissions query
       const originalQuery = navigator.permissions.query;
       navigator.permissions.query = (parameters) =>
         parameters.name === 'notifications'
           ? Promise.resolve({ state: Notification.permission })
           : originalQuery(parameters);
+
       // Mock languages
       Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+      // Mock WebGL Parameters to prevent headless detection
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(parameter) {
+        if (parameter === 37445) return 'Intel Open Source Technology Center'; // UNMASKED_VENDOR_WEBGL
+        if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 620 (Kaby Lake GT2)'; // UNMASKED_RENDERER_WEBGL
+        return getParameter.apply(this, arguments);
+      };
+      if (window.WebGL2RenderingContext) {
+        const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
+        WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+          if (parameter === 37445) return 'Intel Open Source Technology Center';
+          if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 620 (Kaby Lake GT2)';
+          return getParameter2.apply(this, arguments);
+        };
+      }
+
+      // Mock hardware specifications
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+      Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+      // Mock Plugins (Headless has 0, real has PDF viewers, etc.)
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [
+          { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' }
+        ]
+      });
     });
 
     console.log('[Playwright] Priming shared context with AniWaves homepage...');
@@ -163,20 +211,24 @@ async function getPlaywrightContext() {
       // Check for Cloudflare Turnstile challenge page
       let title = await page.title();
       if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
-        console.log('[Playwright] Cloudflare verification page detected on homepage. Searching for challenge iframe...');
+        console.log('[Playwright] Cloudflare verification page detected on homepage. Waiting for Turnstile container...');
         
-        // Find Turnstile iframe inside challenges.cloudflare.com
-        const frame = page.frames().find(f => f.url().includes('challenges.cloudflare.com'));
-        if (frame) {
-          console.log('[Playwright] Found Turnstile iframe. Waiting for checkbox wrapper...');
-          // Checkbox wrapper is usually #challenge-stage or input[type=checkbox]
-          const box = await frame.waitForSelector('input[type="checkbox"], #challenge-stage, .ctp-checkbox-label', { timeout: 4000 }).catch(() => null);
-          if (box) {
-            console.log('[Playwright] Clicking Cloudflare verification checkbox...');
-            await box.click();
-            await page.waitForTimeout(3000);
-          }
+        // Wait for Turnstile container to render on screen
+        const container = page.locator('#naeL5, div[style*="display: grid"]').first();
+        const box = await container.boundingBox().catch(() => null);
+        if (box) {
+          console.log('[Playwright] Found Turnstile container bounding box:', JSON.stringify(box));
+          // Click exactly in the center of the checkbox (x+16, y+34 relative to container)
+          const clickX = box.x + 16;
+          const clickY = box.y + 34;
+          console.log(`[Playwright] Clicking Turnstile checkbox at X: ${clickX}, Y: ${clickY}...`);
+          await page.mouse.click(clickX, clickY);
+          
+          // Wait for verification and reload/redirect
+          console.log('[Playwright] Verification clicked. Waiting 10 seconds for redirect/reload...');
+          await page.waitForTimeout(10000);
         } else {
+          console.warn('[Playwright] Turnstile container bounding box not found.');
           await page.waitForTimeout(3000);
         }
       }
@@ -1357,10 +1409,12 @@ export async function handleRequest(req, res) {
       });
       return res.end(html);
     } catch (e) {
-      // Do NOT redirect to the target URL — that would cause X-Frame-Options blocks (🚫 icon)
-      console.error(`[Iframe Proxy] Failed to fetch embed page: ${e.message}`);
-      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-      return res.end(JSON.stringify({ error: 'embed_fetch_failed', message: e.message }));
+      console.warn(`[Iframe Proxy] Failed to fetch embed page: ${e.message}. Redirecting directly to target URL as fallback.`);
+      res.writeHead(302, { 
+        'Location': targetUrl,
+        'Access-Control-Allow-Origin': '*'
+      });
+      return res.end();
     }
   }
 
