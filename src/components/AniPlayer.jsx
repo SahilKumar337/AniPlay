@@ -666,21 +666,17 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
           </span>
         </div>
 
-        {/* ── Centered Controls (Play, Pause, Skip) ── */}
-        <div className="anip__center-ctrls" onClick={e => e.stopPropagation()}>
-          {/* Rewind 10s */}
-          <button className="anip__center-btn anip__center-btn--skip" onClick={() => skip(-10)}>
-            <RotateCcw size={22} />
-          </button>
-          
+        {/* ── Centered Controls (Play / Pause Only) ── */}
+        <div className="anip__center-ctrls" 
+          onClick={e => e.stopPropagation()}
+          onMouseDown={e => e.stopPropagation()}
+          onMouseUp={e => e.stopPropagation()}
+          onTouchStart={e => e.stopPropagation()}
+          onTouchEnd={e => e.stopPropagation()}
+        >
           {/* Play / Pause */}
           <button className="anip__center-btn anip__center-btn--play" onClick={togglePlay}>
             {playing ? <Pause size={28} fill="#fff" strokeWidth={0} /> : <Play size={28} fill="#fff" strokeWidth={0} style={{ marginLeft: 4 }} />}
-          </button>
-
-          {/* Forward 10s */}
-          <button className="anip__center-btn anip__center-btn--skip" onClick={() => skip(10)}>
-            <RotateCw size={22} />
           </button>
         </div>
 
