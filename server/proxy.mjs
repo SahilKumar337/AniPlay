@@ -1637,8 +1637,21 @@ export async function handleRequest(req, res) {
           if (apiKeyParam) hlsUrl += `&api_key=${encodeURIComponent(apiKeyParam)}`;
           return hlsUrl;
         } else {
-          // Direct Play: Return the raw segment URL so the phone downloads it directly from the CDN
-          return absoluteUrl;
+          // Hybrid Stream: Direct Play for Neko CDN segments (saves 99.9% bandwidth),
+          // but proxy for Waves segments that require strict Referer headers to play.
+          const isNekoSegment = 
+            absoluteUrl.includes('ibyteimg.com') || 
+            absoluteUrl.includes('vivibebe.site') || 
+            absoluteUrl.includes('bibiemb.xyz') || 
+            absoluteUrl.includes('anizara.store');
+
+          if (isNekoSegment) {
+            return absoluteUrl;
+          } else {
+            let segmentUrl = `${selfBase}/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+            if (apiKeyParam) segmentUrl += `&api_key=${encodeURIComponent(apiKeyParam)}`;
+            return segmentUrl;
+          }
         }
       }).join('\n');
 
