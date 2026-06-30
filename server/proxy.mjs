@@ -1251,8 +1251,7 @@ async function getServers(titles, episode) {
   const result = {
     servers: combinedServers,
     animeTitle: aniNekoData?.animeTitle || aniWavesData?.animeTitle || titles[0],
-    slug: aniNekoData?.slug || aniWavesData?.slug || '',
-    errors
+    slug: aniNekoData?.slug || aniWavesData?.slug || ''
   };
 
   // Resolve M3U8 streams concurrently
@@ -1588,34 +1587,6 @@ export async function handleRequest(req, res) {
     }
   }
 
-  if (pathname === '/api/diagnose') {
-    cors(res);
-    let nekoOutput = null;
-    let wavesOutput = null;
-    let nekoErr = null;
-    let wavesErr = null;
-    
-    try {
-      nekoOutput = await scrapeAniNeko('MARRIAGETOXIN', '1');
-    } catch (e) {
-      nekoErr = e.message + '\n' + e.stack;
-    }
-    
-    try {
-      wavesOutput = await scrapeAniWaves('MARRIAGETOXIN', '1');
-    } catch (e) {
-      wavesErr = e.message + '\n' + e.stack;
-    }
-    
-    return json(res, 200, {
-      isPlaywrightAvailable,
-      playwrightStartupError,
-      nekoOutput,
-      nekoErr,
-      wavesOutput,
-      wavesErr
-    });
-  }
 
   if (pathname === '/api/anineko-servers') {
     const titlesParam = searchParams.get('titles') || searchParams.get('title');
