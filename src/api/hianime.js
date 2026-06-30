@@ -10,10 +10,15 @@
  * This is exactly how Anilab works: scrape → decrypt → proxy → play
  */
 
+const isCapacitor = typeof window !== 'undefined' && (
+  !!window.Capacitor || 
+  (!window.location.port && window.location.hostname === 'localhost')
+);
+
 const PROXY_BASE = import.meta.env.VITE_PROXY_URL || (
-  window.location.port === '3000'
+  !isCapacitor && window.location.port === '3000'
     ? `http://${window.location.hostname}:4000`
-    : window.location.origin
+    : 'https://anilab-backend.onrender.com'
 );
 
 const PROXY = `${PROXY_BASE}/aniwatch`;

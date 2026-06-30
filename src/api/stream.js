@@ -3,12 +3,18 @@
  * v5: sends all title variants, handles SUB + DUB server types
  */
 
-const isLocal = 
+const isCapacitor = typeof window !== 'undefined' && (
+  !!window.Capacitor || 
+  (!window.location.port && window.location.hostname === 'localhost')
+);
+
+const isLocal = !isCapacitor && (
   window.location.hostname === 'localhost' || 
   window.location.hostname === '127.0.0.1' ||
   window.location.hostname.startsWith('192.168.') ||
   window.location.hostname.startsWith('10.') ||
-  window.location.hostname.startsWith('172.');
+  window.location.hostname.startsWith('172.')
+);
 
 export const PROXY = import.meta.env.VITE_PROXY_URL || (
   isLocal
