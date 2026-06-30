@@ -1249,6 +1249,16 @@ export async function handleRequest(req, res) {
 
   if (req.method === 'OPTIONS') { cors(res); res.writeHead(200); return res.end(); }
 
+  // API Key Validation: If API_KEY is set in environment, require X-API-Key header or api_key query param (except for /api/ping)
+  const envApiKey = process.env.API_KEY;
+  if (envApiKey && pathname.startsWith('/api/') && pathname !== '/api/ping') {
+    const requestKey = req.headers['x-api-key'] || searchParams.get('api_key');
+    if (requestKey !== envApiKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ error: 'Unauthorized: Invalid or missing API key' }));
+    }
+  }
+
   const refererHeader = req.headers.referer || '';
   const isIframeProxy = refererHeader.includes('/api/iframe-proxy');
   const myApis = ['/api/anineko-servers', '/api/ping', '/api/stream/hls', '/api/stream/segment', '/api/stream/subtitle', '/api/iframe-proxy'];
@@ -1524,7 +1534,8 @@ export async function handleRequest(req, res) {
       }
       const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
       const selfBase = `${proto}://${host}`;
-      const proxied = `${selfBase}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+      const apiKeyParam = searchParams.get('api_key') ? `&api_key=${encodeURIComponent(searchParams.get('api_key'))}` : '';
+      const proxied = `${selfBase}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}${apiKeyParam}`;
       return json(res, 200, { ok: true, url: proxied, rawUrl: m3u8Url });
     } catch (e) {
       console.error('[Extract Stream]', e.message);
@@ -1576,6 +1587,7 @@ export async function handleRequest(req, res) {
     cors(res);
     const targetUrl = searchParams.get('url');
     const referer = searchParams.get('referer') || new URL(targetUrl).origin;
+    const apiKeyParam = searchParams.get('api_key') || '';
     try {
       const raw = await xfetch(targetUrl, { referer });
       const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
@@ -1607,7 +1619,8 @@ export async function handleRequest(req, res) {
             if (match) {
               let keyUrl = match[1];
               if (!keyUrl.startsWith('http')) keyUrl = new URL(keyUrl, baseUrl).href;
-              const proxiedKey = `${selfBase}/api/stream/segment?url=${encodeURIComponent(keyUrl)}&referer=${encodeURIComponent(referer)}`;
+              let proxiedKey = `${selfBase}/api/stream/segment?url=${encodeURIComponent(keyUrl)}&referer=${encodeURIComponent(referer)}`;
+              if (apiKeyParam) proxiedKey += `&api_key=${encodeURIComponent(apiKeyParam)}`;
               return line.replace(match[1], proxiedKey);
             }
           }
@@ -1620,7 +1633,9 @@ export async function handleRequest(req, res) {
         }
 
         if (absoluteUrl.includes('.m3u8')) {
-          return `${selfBase}/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+          let hlsUrl = `${selfBase}/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
+          if (apiKeyParam) hlsUrl += `&api_key=${encodeURIComponent(apiKeyParam)}`;
+          return hlsUrl;
         } else {
           // Direct Play: Return the raw segment URL so the phone downloads it directly from the CDN
           return absoluteUrl;

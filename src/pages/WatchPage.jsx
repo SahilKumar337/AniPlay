@@ -298,7 +298,11 @@ export default function WatchPage() {
             src={activeUrl}
             onBack={() => navigate(`/anime/${id}`, { replace: true })}
             onStreamCaptured={(m3u8Url, referer) => {
-              const proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+              const apiKey = import.meta.env.VITE_API_KEY || '';
+              let proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+              if (apiKey) {
+                proxied += `&api_key=${encodeURIComponent(apiKey)}`;
+              }
               console.log('[WatchPage] IframePlayer captured stream, switching to native player');
               setActiveUrl(proxied);
               setIsActiveHLS(true);

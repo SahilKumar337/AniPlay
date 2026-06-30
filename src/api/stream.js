@@ -25,7 +25,12 @@ export const PROXY = import.meta.env.VITE_PROXY_URL || (
 export function formatServerUrl(url) {
   if (!url) return '';
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  return `${PROXY}${url.startsWith('/') ? '' : '/'}${url}`;
+  let fullUrl = `${PROXY}${url.startsWith('/') ? '' : '/'}${url}`;
+  const apiKey = import.meta.env.VITE_API_KEY || '';
+  if (apiKey) {
+    fullUrl += (fullUrl.includes('?') ? '&' : '?') + `api_key=${encodeURIComponent(apiKey)}`;
+  }
+  return fullUrl;
 }
 
 export async function getAniNekoServers(anime, episode) {
@@ -42,7 +47,13 @@ export async function getAniNekoServers(anime, episode) {
   const titlesParam = titles.join('|||');
   const url = `${PROXY}/api/anineko-servers?titles=${encodeURIComponent(titlesParam)}&episode=${episode}${isLocal ? '&nocache=true' : ''}`;
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
+  const apiKey = import.meta.env.VITE_API_KEY || '';
+  const headers = apiKey ? { 'X-API-Key': apiKey } : {};
+  
+  const res = await fetch(url, { 
+    headers,
+    signal: AbortSignal.timeout(90000) 
+  });
   
   if (!res.ok) {
     throw new Error(`Server returned status ${res.status}`);
@@ -73,9 +84,14 @@ export async function getAniNekoServers(anime, episode) {
 
 /** Check if the proxy server is running */
 export async function checkProxy() {
+  const apiKey = import.meta.env.VITE_API_KEY || '';
+  const headers = apiKey ? { 'X-API-Key': apiKey } : {};
   for (let i = 0; i < 3; i++) {
     try {
-      const res = await fetch(`${PROXY}/api/ping`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${PROXY}/api/ping`, { 
+        headers,
+        signal: AbortSignal.timeout(2000) 
+      });
       if (res.ok) return true;
     } catch {
       if (i < 2) await new Promise(r => setTimeout(r, 800));
