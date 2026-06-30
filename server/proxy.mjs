@@ -994,9 +994,7 @@ async function scrapeAniNeko(title, episode) {
     })
   );
 
-  const servers = [];
-  let subCount = 0;
-  let dubCount = 0;
+  const rawServers = [];
   for (const page of fetchedPages) {
     if (page.status !== 'fulfilled') continue;
     const { html, isDubPage } = page.value;
@@ -1011,24 +1009,38 @@ async function scrapeAniNeko(title, episode) {
       // Restrict to HD-1 and HD-2 only, as requested by the user
       if (name.includes('HD-1') || name.includes('HD-2')) {
         const isDub = /dub/i.test(name) || isDubPage;
-        let displayName = name.includes('HD-1') ? 'HD1' : 'HD2';
-
-        if (isDub) {
-          dubCount++;
-          servers.push({
-            name: displayName.endsWith('DUB') ? displayName : `${displayName} (DUB)`,
-            videoUrl,
-            type: 'dub'
-          });
-        } else {
-          subCount++;
-          servers.push({
-            name: displayName,
-            videoUrl,
-            type: 'sub'
-          });
-        }
+        rawServers.push({ videoUrl, isDub });
       }
+    }
+  }
+
+  // Deduplicate by videoUrl to prevent duplicate buttons
+  const seenUrls = new Set();
+  const uniqueRawServers = [];
+  for (const s of rawServers) {
+    if (seenUrls.has(s.videoUrl)) continue;
+    seenUrls.add(s.videoUrl);
+    uniqueRawServers.push(s);
+  }
+
+  const servers = [];
+  let subCount = 0;
+  let dubCount = 0;
+  for (const s of uniqueRawServers) {
+    if (s.isDub) {
+      dubCount++;
+      servers.push({
+        name: `HD${dubCount} (DUB)`,
+        videoUrl: s.videoUrl,
+        type: 'dub'
+      });
+    } else {
+      subCount++;
+      servers.push({
+        name: `HD${subCount}`,
+        videoUrl: s.videoUrl,
+        type: 'sub'
+      });
     }
   }
 
