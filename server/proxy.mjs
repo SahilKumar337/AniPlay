@@ -927,21 +927,39 @@ function getLongestWord(title) {
 
 async function scrapeAniNeko(title, episode) {
   const domain  = ANINEKO;
-  const keyword = getLongestWord(title);
-  console.log(`[AniNeko] Searching: "${keyword}" (original: "${title}")`);
-
-  let searchHtml = await xfetch(`${domain}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: domain, timeout: 55000 });
+  
+  // 1. Clean the title and split into words for keyword permutation fallbacks
+  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = cleanTitle.split(' ').filter(w => w.length > 1);
+  
+  let searchQueries = [];
+  if (words.length > 1) {
+    searchQueries.push(words.slice(0, 3).join(' ')); // Try first 3 words (e.g. "Komi-san wa")
+    searchQueries.push(words.slice(0, 2).join(' ')); // Try first 2 words
+  }
+  searchQueries.push(getLongestWord(title)); // Try longest word
+  searchQueries.push(cleanTitle); // Try full clean title
+  
+  // Remove duplicates from queries list
+  searchQueries = [...new Set(searchQueries)].filter(Boolean);
+  
   let results = [];
   const re = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
-  let m;
-  while ((m = re.exec(searchHtml)) !== null) results.push({ slug: m[1], title: m[2].trim() });
-
-  if (!results.length) {
-    const cleaned = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    console.log(`[AniNeko] No results for "${keyword}", retrying with: "${cleaned}"`);
-    searchHtml = await xfetch(`${domain}/browser?keyword=${encodeURIComponent(cleaned)}`, { referer: domain, timeout: 55000 });
-    re.lastIndex = 0;
-    while ((m = re.exec(searchHtml)) !== null) results.push({ slug: m[1], title: m[2].trim() });
+  
+  // Try search queries in sequence until we get results
+  for (const keyword of searchQueries) {
+    console.log(`[AniNeko] Searching: "${keyword}" (original: "${title}")`);
+    try {
+      const searchHtml = await xfetch(`${domain}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: domain, timeout: 35000 });
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(searchHtml)) !== null) {
+        results.push({ slug: m[1], title: m[2].trim() });
+      }
+      if (results.length > 0) break;
+    } catch (e) {
+      console.warn(`[AniNeko] Search failed for "${keyword}": ${e.message}`);
+    }
   }
 
   if (!results.length) throw new Error(`Anime "${title}" not found on AniNeko`);
@@ -985,24 +1003,26 @@ async function scrapeAniNeko(title, episode) {
       let videoUrl = m[1];
       if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
       const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      // Only keep HD-1 and HD-2 servers
-      if (name.includes('HD-1') || name.includes('HD-2')) {
-        const isDub = /dub/i.test(name) || isDubPage;
-        if (isDub) {
-          dubCount++;
-          servers.push({
-            name: `HD${dubCount}`,
-            videoUrl,
-            type: 'dub'
-          });
-        } else {
-          subCount++;
-          servers.push({
-            name: `HD${subCount}`,
-            videoUrl,
-            type: 'sub'
-          });
-        }
+      
+      const isDub = /dub/i.test(name) || isDubPage;
+      let displayName = name;
+      if (name.includes('HD-1')) displayName = 'HD1';
+      else if (name.includes('HD-2')) displayName = 'HD2';
+
+      if (isDub) {
+        dubCount++;
+        servers.push({
+          name: displayName.endsWith('DUB') ? displayName : `${displayName} (DUB)`,
+          videoUrl,
+          type: 'dub'
+        });
+      } else {
+        subCount++;
+        servers.push({
+          name: displayName,
+          videoUrl,
+          type: 'sub'
+        });
       }
     }
   }
