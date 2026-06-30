@@ -1544,18 +1544,21 @@ export async function handleRequest(req, res) {
 
   if (pathname === '/api/diagnose') {
     cors(res);
-    let wavesResult = null;
-    let wavesError = null;
+    let xfetchResult = null;
+    let xfetchError = null;
     try {
-      wavesResult = await scrapeAniWaves('MARRIAGETOXIN', '1');
+      xfetchResult = await xfetch('https://aniwaves.ru/ajax/anime/search?keyword=marriagetoxin', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
+        referer: 'https://aniwaves.ru/'
+      });
     } catch (e) {
-      wavesError = e.message + '\n' + e.stack;
+      xfetchError = e.message + '\n' + e.stack;
     }
     return json(res, 200, {
       isPlaywrightAvailable,
       playwrightStartupError,
-      wavesResult,
-      wavesError
+      xfetchResult,
+      xfetchError
     });
   }
 
