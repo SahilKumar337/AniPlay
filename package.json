@@ -7,6 +7,8 @@
     "dev": "concurrently --names \"VITE,PROXY\" --prefix-colors \"cyan,magenta\" \"vite --host\" \"node server/proxy.mjs\"",
     "proxy": "node server/proxy.mjs",
     "build": "vite build",
+    "build:prod": "vite build --mode production",
+    "build:local": "vite build --mode local",
     "start": "node server/proxy.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
