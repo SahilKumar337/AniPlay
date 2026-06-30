@@ -1666,7 +1666,6 @@ export async function handleRequest(req, res) {
             absoluteUrl.includes('ibyteimg.com') || 
             absoluteUrl.includes('vivibebe.site') || 
             absoluteUrl.includes('bibiemb.xyz') || 
-            absoluteUrl.includes('workers.dev') || 
             absoluteUrl.includes('anizara.store');
 
           if (isNekoSegment) {
