@@ -6,22 +6,25 @@ import { getTitle, getCover } from '../api/anilist';
 
 
 const TABS = [
-  { id: 'all',           label: 'All',          icon: Bookmark   },
-  { id: 'watching',      label: 'Watching',      icon: Clock      },
-  { id: 'plan_to_watch', label: 'Plan to Watch', icon: Heart      },
-  { id: 'completed',     label: 'Completed',     icon: CheckCircle },
-  { id: 'dropped',       label: 'Dropped',       icon: XCircle    },
+  { id: 'all',           label: 'All',          icon: Bookmark    },
+  { id: 'favourites',    label: 'Favourites',   icon: Heart       },
+  { id: 'watching',      label: 'Watching',     icon: Clock       },
+  { id: 'plan_to_watch', label: 'Plan',         icon: Heart       },
+  { id: 'completed',     label: 'Completed',    icon: CheckCircle },
+  { id: 'dropped',       label: 'Dropped',      icon: XCircle     },
 ];
 
 export default function MyList() {
   const navigate = useNavigate();
-  const { watchlist, removeFromWatchlist, updateWatchlistStatus, progress } = useApp();
+  const { watchlist, removeFromWatchlist, updateWatchlistStatus, progress, isFavorite, toggleFavorite } = useApp();
   const [activeTab, setActiveTab] = useState('all');
 
   const items = Object.values(watchlist);
   const filtered = activeTab === 'all'
     ? items
-    : items.filter(item => item.status === activeTab);
+    : activeTab === 'favourites'
+      ? items.filter(item => isFavorite(item.anime.id))
+      : items.filter(item => item.status === activeTab);
 
   return (
     <div className="page">
@@ -54,7 +57,7 @@ export default function MyList() {
           <div className="empty-state">
             <Bookmark size={48} className="empty-icon" />
             <p className="empty-title">No anime here</p>
-            <p className="empty-sub">Add anime to your list from the home or browse page</p>
+            <p className="empty-sub">Tap the <strong>🔖 bookmark icon</strong> on any anime page to add it here</p>
             <button
               className="btn btn-primary"
               style={{ marginTop: 12 }}
@@ -115,13 +118,26 @@ export default function MyList() {
                     )}
                   </div>
 
+                  {/* Favourite heart overlay */}
+                  {isFavorite(anime.id) && (
+                    <div style={{
+                      position: 'absolute', bottom: 6, left: 6,
+                      background: 'rgba(0,0,0,0.55)', borderRadius: '50%',
+                      width: 20, height: 20,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      zIndex: 4,
+                    }}>
+                      <Heart size={11} color="#e50914" fill="#e50914" />
+                    </div>
+                  )}
+
                   {/* Long-press context: quick actions */}
                   <div style={{
                     position: 'absolute', top: 6, right: 6,
                     display: 'flex', flexDirection: 'column', gap: 4,
                   }}>
                     <button
-                      onClick={e => { e.stopPropagation(); removeFromWatchlist(anime.id); }}
+                      onClick={e => { e.stopPropagation(); removeFromWatchlist(anime.id); toggleFavorite(anime.id); }}
                       id={`remove-${anime.id}`}
                       aria-label="Remove from list"
                       style={{

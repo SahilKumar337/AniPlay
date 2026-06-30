@@ -126,7 +126,7 @@ export default function AnimePage() {
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
           <button
-            onClick={() => toggleFavorite(anime.id)} id={`fav-${anime.id}`}
+            onClick={() => toggleFavorite(anime.id, anime)} id={`fav-${anime.id}`}
             aria-label="Bookmark"
             className="floating-btn"
           >

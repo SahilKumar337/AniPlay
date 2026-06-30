@@ -81,11 +81,29 @@ export function AppProvider({ children }) {
 
   const isInWatchlist = useCallback((animeId) => Boolean(watchlist[animeId]), [watchlist]);
 
-  const toggleFavorite = useCallback((animeId) => {
+  const toggleFavorite = useCallback((animeId, anime = null) => {
     setFavorites(prev => {
       const next = new Set(prev);
-      if (next.has(animeId)) { next.delete(animeId); showToast('Removed from favorites'); }
-      else { next.add(animeId); showToast('Added to favorites ❤'); }
+      if (next.has(animeId)) {
+        next.delete(animeId);
+        // Also remove from watchlist so My List stays in sync
+        setWatchlist(w => {
+          const wNext = { ...w };
+          delete wNext[animeId];
+          return wNext;
+        });
+        showToast('Removed from My List');
+      } else {
+        next.add(animeId);
+        // Also add to watchlist so it appears in My List
+        if (anime) {
+          setWatchlist(w => ({
+            ...w,
+            [animeId]: { anime, status: 'plan_to_watch', addedAt: Date.now() },
+          }));
+        }
+        showToast('Added to My List ✓');
+      }
       return next;
     });
   }, [showToast]);
