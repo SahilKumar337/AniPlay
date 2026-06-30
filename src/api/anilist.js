@@ -62,6 +62,16 @@ const MEDIA_FIELDS = `
   nextAiringEpisode { episode airingAt }
 `;
 
+/* ── Lightweight fields for card-only queries (no description) ─── */
+const CARD_FIELDS = `
+  id idMal
+  title { romaji english native }
+  coverImage { large extraLarge color }
+  genres averageScore episodes status format
+  startDate { year }
+  nextAiringEpisode { episode airingAt }
+`;
+
 /* ── Trending ─────────────────────────────────────────────────── */
 export async function getTrending(page = 1, perPage = 15) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(sort:TRENDING_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
@@ -101,18 +111,16 @@ export async function getAiring(page = 1, perPage = 15) {
 export async function getNewReleases(page = 1, perPage = 20) {
   const now      = Math.floor(Date.now() / 1000);
   const twoWeeks = now - 14 * 86400;
-  // Fetch recent airing schedule entries and deduplicate by media id
   const q = `query($p:Int,$n:Int,$from:Int,$to:Int){
     Page(page:$p,perPage:$n){
       airingSchedules(airingAt_greater:$from,airingAt_lesser:$to,sort:TIME_DESC){
         airingAt episode
-        media{ ${MEDIA_FIELDS} isAdult }
+        media{ ${CARD_FIELDS} isAdult }
       }
     }
   }`;
   const d = await gql(q, { p: page, n: perPage, from: twoWeeks, to: now });
   const schedules = (d?.Page?.airingSchedules || []).filter(s => !s.media?.isAdult && getCover(s.media));
-  // Deduplicate: keep the most recent airing per media
   const seen = new Set();
   const unique = [];
   for (const s of schedules) {

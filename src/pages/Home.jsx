@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { Search, Bell, Play, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
-  getTrending, getSeasonal, getTopRated,
-  getAiring, getMovies, getMostPopular,
+  getTrending, getTopRated,
+  getAiring, getMovies,
   getNewReleases, getPopularThisSeason,
   getSchedule, getCurrentSeason, getCover, getTitle,
 } from '../api/anilist';
@@ -51,28 +51,22 @@ export default function Home() {
       await load(getTrending, setTrending, 1, 15);
       if (live) setReady(true);
 
-      // All other sections in parallel
-      const { season, year } = getCurrentSeason();
+      // Wave 1: most important rows (stagger to avoid AniList 429s)
       await Promise.allSettled([
-        // Top Airing: currently releasing sorted by trending score
-        load(getAiring, setAiring, 1, 20),
+        load(getAiring,            setAiring,        1, 20),
+        load(getNewReleases,       setNewReleases,   1, 20),
+        load(getPopularThisSeason, setPopularSeason, 1, 15),
+      ]);
 
-        // New Episode Releases: actual episodes aired in the past 2 weeks
-        load(getNewReleases, setNewReleases, 1, 25),
+      // Small pause between waves so AniList rate-limit window resets
+      await new Promise(r => setTimeout(r, 500));
 
-        // Popular This Season: what's trending THIS specific season
-        load(getPopularThisSeason, setPopularSeason, 1, 20),
-
-        // All-time top rated TV series (finished shows)
+      // Wave 2: supplementary rows
+      await Promise.allSettled([
         load(getTopRated, setTopRated, 1, 15),
-
-        // Movies sorted by popularity
-        load(getMovies, setMovies, 1, 12),
-
-        // This week's airing schedule for the schedule teaser row
+        load(getMovies,   setMovies,   1, 12),
         load(async () => {
           const sched = await getSchedule(1, 30);
-          // Map to media objects with episode info
           return sched
             .filter(s => getCover(s.media))
             .map(s => ({ ...s.media, _schedEp: s.episode, _schedAt: s.airingAt }));
