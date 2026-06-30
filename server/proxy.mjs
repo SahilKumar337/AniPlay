@@ -1026,8 +1026,8 @@ async function scrapeAniNeko(title, episode) {
         if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
         const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
         
-        // Restrict to HD-1 and HD-2 only, as requested by the user
-        if (name.includes('HD-1') || name.includes('HD-2')) {
+        // Only use HD-1 (HD-2 has been removed due to streaming issues)
+        if (name.includes('HD-1')) {
           const isDub = !!(isDubPage || panelId === 'dub' || name.toLowerCase().includes('dub'));
           rawServers.push({ videoUrl, isDub });
         }
@@ -1064,19 +1064,19 @@ async function scrapeAniNeko(title, episode) {
     }] : [];
 
     if (s.isDub) {
-      if (dubCount >= 2) continue;
+      if (dubCount >= 1) continue; // Only keep HD1 DUB
       dubCount++;
       servers.push({
-        name: `HD${dubCount} (DUB)`,
+        name: `HD1 (DUB)`,
         videoUrl: s.videoUrl,
         type: 'dub',
         subtitles
       });
     } else {
-      if (subCount >= 2) continue;
+      if (subCount >= 1) continue; // Only keep HD1
       subCount++;
       servers.push({
-        name: `HD${subCount}`,
+        name: `HD1`,
         videoUrl: s.videoUrl,
         type: 'sub',
         subtitles
