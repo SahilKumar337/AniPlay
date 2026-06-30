@@ -1,7 +1,6 @@
 FROM node:20-slim
 
 # Install latest chrome dev package and fonts to support major charsets (Chinese, Japanese, Arabic, Hebrew, Thai and a few others)
-# Note: this installs all the necessary libs so that bundled/downloaded Chromium can run as well.
 RUN apt-get update \
     && apt-get install -y wget gnupg \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
@@ -11,17 +10,26 @@ RUN apt-get update \
       --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Set env path for Puppeteer
+# Set env path for Puppeteer/Playwright
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-ENV PORT=4000
+ENV PORT=7860
 
-WORKDIR /app
+# Create user with UID 1000 (required for Hugging Face Spaces)
+RUN useradd -m -u 1000 user
+WORKDIR /home/user/app
 
-COPY package*.json ./
+# Copy dependency files first
+COPY --chown=user:user package*.json ./
 RUN npm install
 
-COPY . .
+# Copy application code
+COPY --chown=user:user . .
 
-EXPOSE 4000
+# Switch to non-root user
+USER user
+ENV HOME=/home/user
+ENV PATH=/home/user/.local/bin:$PATH
+
+EXPOSE 7860
 
 CMD ["node", "server/proxy.mjs"]
