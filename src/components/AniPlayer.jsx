@@ -515,7 +515,19 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         playsInline
         preload="auto"
         autoPlay
-      />
+        crossOrigin="anonymous"
+      >
+        {(subs || []).map((track) => (
+          <track
+            key={track.id}
+            kind="subtitles"
+            label={track.label}
+            src={track.file}
+            srcLang="en"
+            default={track.id === 0}
+          />
+        ))}
+      </video>
 
       {/* ── Tap-to-play overlay (autoplay blocked by browser) ── */}
       {needsTap && !hlsErr && (

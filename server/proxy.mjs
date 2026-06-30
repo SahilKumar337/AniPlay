@@ -1011,19 +1011,26 @@ async function scrapeAniNeko(title, episode) {
   const rawServers = [];
   for (const page of fetchedPages) {
     if (page.status !== 'fulfilled') continue;
-    const { html, isDubPage } = page.value;
+    const { html } = page.value;
 
-    const btnRe = /<button class="nv-server-btn server-video server[^"]*"[^>]*data-video="([^"]+)"[^>]*>([\s\S]+?)<\/button>/g;
-    let m;
-    while ((m = btnRe.exec(html)) !== null) {
-      let videoUrl = m[1];
-      if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
-      const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      
-      // Restrict to HD-1 and HD-2 only, as requested by the user
-      if (name.includes('HD-1') || name.includes('HD-2')) {
-        const isDub = /dub/i.test(name) || isDubPage;
-        rawServers.push({ videoUrl, isDub });
+    const panelsRe = /<div[^>]+data-id="(sub|dub)"[\s\S]*?<\/div>\s*<\/div>/g;
+    let pMatch;
+    while ((pMatch = panelsRe.exec(html)) !== null) {
+      const panelId = pMatch[1]; // 'sub' or 'dub'
+      const panelHtml = pMatch[0];
+
+      const btnRe = /<button class="nv-server-btn server-video server[^"]*"[^>]*data-video="([^"]+)"[^>]*>([\s\S]+?)<\/button>/g;
+      let m;
+      while ((m = btnRe.exec(panelHtml)) !== null) {
+        let videoUrl = m[1];
+        if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
+        const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        // Restrict to HD-1 and HD-2 only, as requested by the user
+        if (name.includes('HD-1') || name.includes('HD-2')) {
+          const isDub = panelId === 'dub';
+          rawServers.push({ videoUrl, isDub });
+        }
       }
     }
   }
@@ -1041,19 +1048,36 @@ async function scrapeAniNeko(title, episode) {
   let subCount = 0;
   let dubCount = 0;
   for (const s of uniqueRawServers) {
+    // Extract subtitle track URL if present in videoUrl parameters (sub, caption_1, c1_file)
+    let subtitleUrl = '';
+    try {
+      const urlObj = new URL(s.videoUrl);
+      subtitleUrl = urlObj.searchParams.get('sub') || 
+                    urlObj.searchParams.get('caption_1') || 
+                    urlObj.searchParams.get('c1_file') || '';
+    } catch {}
+
+    const subtitles = subtitleUrl ? [{
+      id: 0,
+      label: 'English',
+      file: subtitleUrl
+    }] : [];
+
     if (s.isDub) {
       dubCount++;
       servers.push({
         name: `HD${dubCount} (DUB)`,
         videoUrl: s.videoUrl,
-        type: 'dub'
+        type: 'dub',
+        subtitles
       });
     } else {
       subCount++;
       servers.push({
         name: `HD${subCount}`,
         videoUrl: s.videoUrl,
-        type: 'sub'
+        type: 'sub',
+        subtitles
       });
     }
   }
