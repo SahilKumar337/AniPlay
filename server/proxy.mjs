@@ -1590,12 +1590,23 @@ export async function handleRequest(req, res) {
     const apiKeyParam = searchParams.get('api_key') || '';
     try {
       const hHeaders = {
-        'User-Agent': UA,
-        'Referer': referer
+        'User-Agent': UA
       };
-      try {
-        hHeaders['Origin'] = new URL(referer).origin;
-      } catch {}
+      
+      const needsReferer = 
+        targetUrl.includes('echovideo.ru') || 
+        targetUrl.includes('aniwaves.ru') || 
+        targetUrl.includes('play.echovideo.ru') ||
+        referer.includes('aniwaves.ru') ||
+        referer.includes('echovideo.ru');
+        
+      if (needsReferer) {
+        hHeaders['Referer'] = referer;
+        try {
+          hHeaders['Origin'] = new URL(referer).origin;
+        } catch {}
+      }
+
       const response = await fetch(targetUrl, {
         signal: AbortSignal.timeout(45000),
         headers: hHeaders
