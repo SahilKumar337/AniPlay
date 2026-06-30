@@ -1566,19 +1566,52 @@ export async function handleRequest(req, res) {
 
   if (pathname === '/api/diagnose') {
     cors(res);
-    let wavesResult = null;
-    let wavesError = null;
+    const trace = [];
+    const log = (msg) => {
+      const time = new Date().toISOString();
+      console.log(`[Trace] ${msg}`);
+      trace.push({ time, msg });
+    };
+    
     try {
-      wavesResult = await scrapeAniWaves('MARRIAGETOXIN', '1');
+      log('Starting AniWaves scrape diagnostics...');
+      log('Step 1: Searching for MARRIAGETOXIN...');
+      const { slug, animeId, animeTitle } = await awSearch('MARRIAGETOXIN');
+      log(`Search succeeded: slug=${slug}, animeId=${animeId}, title=${animeTitle}`);
+      
+      log('Step 2: Fetching server list...');
+      const rawServers = await awGetServers(animeId, '1', slug);
+      log(`Fetch servers succeeded: found ${rawServers.length} raw servers`);
+      
+      log('Step 3: Resolving embed URLs...');
+      const toResolve = rawServers.filter(s => s.type === 'sub').slice(0, 2);
+      log(`Resolving ${toResolve.length} sub servers...`);
+      
+      const resolved = [];
+      for (const s of toResolve) {
+        log(`Resolving server: name=${s.serverName}, linkId=${s.linkId.slice(0, 30)}...`);
+        try {
+          const embedUrl = await awGetEmbedUrl(s.linkId, slug);
+          log(`Resolved embedUrl: ${embedUrl.slice(0, 80)}`);
+          resolved.push({ serverName: s.serverName, embedUrl });
+        } catch (err) {
+          log(`Failed to resolve embedUrl: ${err.message}`);
+        }
+      }
+      
+      return json(res, 200, {
+        ok: true,
+        trace,
+        resolved
+      });
     } catch (e) {
-      wavesError = e.message + '\n' + e.stack;
+      log(`Scrape crashed: ${e.message}`);
+      return json(res, 200, {
+        ok: false,
+        trace,
+        error: e.message + '\n' + e.stack
+      });
     }
-    return json(res, 200, {
-      isPlaywrightAvailable,
-      playwrightStartupError,
-      wavesResult,
-      wavesError
-    });
   }
 
   if (pathname === '/api/anineko-servers') {
