@@ -91,6 +91,7 @@ async function getBrowser() {
 
 let playwrightBrowser = null;
 let isPlaywrightAvailable = true;
+let playwrightStartupError = '';
 
 async function getPlaywrightBrowser() {
   if (playwrightBrowser) {
@@ -123,6 +124,7 @@ async function getPlaywrightBrowser() {
     console.warn('[Playwright] Failed to launch browser:', e.message);
     playwrightBrowser = null;
     isPlaywrightAvailable = false;
+    playwrightStartupError = e.message + '\n' + e.stack;
     return null;
   }
 }
@@ -135,10 +137,12 @@ getPlaywrightBrowser().then(browser => {
   } else {
     console.log('[Playwright] Startup check: Browser failed to launch. Disabling Playwright scrapers.');
     isPlaywrightAvailable = false;
+    if (!playwrightStartupError) playwrightStartupError = 'Browser was null after getPlaywrightBrowser';
   }
 }).catch(err => {
   console.warn('[Playwright] Startup check error:', err.message);
   isPlaywrightAvailable = false;
+  playwrightStartupError = err.message + '\n' + err.stack;
 });
 
 let playwrightContext = null;
@@ -1536,6 +1540,23 @@ export async function handleRequest(req, res) {
       console.error('[Extract Stream]', e.message);
       return json(res, 502, { ok: false, error: e.message });
     }
+  }
+
+  if (pathname === '/api/diagnose') {
+    cors(res);
+    let wavesResult = null;
+    let wavesError = null;
+    try {
+      wavesResult = await scrapeAniWaves('MARRIAGETOXIN', '1');
+    } catch (e) {
+      wavesError = e.message + '\n' + e.stack;
+    }
+    return json(res, 200, {
+      isPlaywrightAvailable,
+      playwrightStartupError,
+      wavesResult,
+      wavesError
+    });
   }
 
   if (pathname === '/api/anineko-servers') {
