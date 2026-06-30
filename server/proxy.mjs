@@ -1543,6 +1543,32 @@ export async function handleRequest(req, res) {
     }
   }
 
+  if (pathname === '/api/test-fetch') {
+    cors(res);
+    const targetUrl = searchParams.get('url');
+    try {
+      console.log(`[Diagnostic Fetch] Fetching ${targetUrl}...`);
+      const r = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': UA
+        }
+      });
+      return json(res, 200, {
+        ok: r.ok,
+        status: r.status,
+        headers: Object.fromEntries(r.headers),
+        text: (await r.text()).slice(0, 500)
+      });
+    } catch (e) {
+      console.error(`[Diagnostic Fetch] Failed:`, e);
+      return json(res, 500, {
+        ok: false,
+        error: e.message,
+        stack: e.stack
+      });
+    }
+  }
+
   if (pathname === '/api/anineko-servers') {
     const titlesParam = searchParams.get('titles') || searchParams.get('title');
     const ep          = searchParams.get('episode') || '1';
