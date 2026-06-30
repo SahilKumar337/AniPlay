@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
+import { StatusBar, Style } from '@capacitor/status-bar';
+import { Capacitor } from '@capacitor/core';
 import WelcomeScreen from './components/WelcomeScreen';
 import Home          from './pages/Home';
 import Browse        from './pages/Browse';
@@ -16,6 +18,21 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
     return !sessionStorage.getItem('anilab_welcomed');
   });
+
+  useEffect(() => {
+    const initDeviceSettings = async () => {
+      if (Capacitor.isNativePlatform()) {
+        try {
+          // Style native status bar to match our theme and background
+          await StatusBar.setBackgroundColor({ color: '#0f0f0f' });
+          await StatusBar.setStyle({ style: Style.Dark });
+        } catch (e) {
+          console.warn('[Capacitor] StatusBar settings error:', e);
+        }
+      }
+    };
+    initDeviceSettings();
+  }, []);
 
   const handleEnter = () => {
     sessionStorage.setItem('anilab_welcomed', '1');
