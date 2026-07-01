@@ -406,7 +406,7 @@ export async function scrapeAniNeko(title, episode) {
 // Fetches a stream URL from Animetsu — all servers race in PARALLEL, fastest wins.
 async function fetchAnimetsuStream(animeId, episode, sourceType) {
   const proxyBase = 'https://swiftstream.top/proxy';
-  const SERVERS = ['pahe', 'hd1', 'vidstream', 'filemoon'];
+  const SERVERS = ['hd1', 'vidstream', 'filemoon'];
 
   const attempts = SERVERS.map(async (server) => {
     const url = `${ANIMETSU}/v2/api/anime/oppai/${animeId}/${episode}?server=${server}&source_type=${sourceType}`;
