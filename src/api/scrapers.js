@@ -102,9 +102,50 @@ function getLongestWord(title) {
 // ── Generic Fetch Helper with Headers ──
 
 async function clientFetch(url, opts = {}) {
+  // If we have a backend PROXY configured, route the fetch through the backend's /api/scrape to bypass Cloudflare/CORS!
+  if (PROXY) {
+    try {
+      const apiKey = import.meta.env.VITE_API_KEY || '';
+      let proxyUrl = `${PROXY}/api/scrape?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(opts.referer || new URL(url).origin)}`;
+      if (apiKey) {
+        proxyUrl += `&api_key=${encodeURIComponent(apiKey)}`;
+      }
+      console.log(`[ClientEngine] Proxying scrape: ${url} -> ${proxyUrl}`);
+
+      if (isCapacitorApp) {
+        // Native mobile request to backend proxy (to bypass CORS & local network hurdles)
+        const response = await CapacitorHttp.request({
+          url: proxyUrl,
+          method: 'GET',
+          headers: {
+            'User-Agent': UA,
+            ...(opts.headers || {}),
+          },
+          connectTimeout: opts.timeout || 25000,
+          readTimeout: opts.timeout || 25000
+        });
+        if (response.status >= 300) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+      } else {
+        // Desktop browser fetch to backend proxy
+        const res = await fetch(proxyUrl, {
+          signal: AbortSignal.timeout(opts.timeout || 25000),
+          headers: opts.headers
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status} from proxy`);
+        return res.text();
+      }
+    } catch (e) {
+      console.warn(`[ClientEngine] Proxy fetch failed for ${url}, falling back to direct request:`, e.message);
+    }
+  }
+
+  // Fallback direct request (for local dev, or if proxy is down)
   if (isCapacitorApp) {
     try {
-      console.log(`[CapacitorHttp] Fetching: ${url} (referer: ${opts.referer || 'none'})`);
+      console.log(`[CapacitorHttp] Direct Fetching (Fallback): ${url}`);
       const response = await CapacitorHttp.request({
         url,
         method: 'GET',
@@ -123,29 +164,11 @@ async function clientFetch(url, opts = {}) {
       }
       return text;
     } catch (e) {
-      console.error(`[CapacitorHttp] Request failed for ${url}:`, e.message);
+      console.error(`[CapacitorHttp] Direct Request failed for ${url}:`, e.message);
       throw e;
     }
   }
 
-  // If running in local desktop browser dev environment, proxy through the local backend proxy to bypass CORS!
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    try {
-      const proxyUrl = `/api/scrape?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(opts.referer || new URL(url).origin)}`;
-      console.log(`[LocalProxy] Scraping via backend proxy: ${url}`);
-      const res = await fetch(proxyUrl, {
-        signal: AbortSignal.timeout(opts.timeout || 25000),
-        headers: opts.headers
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} from proxy`);
-      return res.text();
-    } catch (e) {
-      console.warn(`[LocalProxy] Fetch failed for ${url} via proxy:`, e.message);
-      // Fallback to direct fetch in case proxy is down
-    }
-  }
-
-  // Fallback for production/direct fetches (subject to CORS in browser, but works inside phone WebView)
   const headers = { ...opts.headers };
   const res = await fetch(url, {
     signal: AbortSignal.timeout(opts.timeout || 15000),
