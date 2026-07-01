@@ -76,12 +76,10 @@ export default function AnimePage() {
   const inList  = isInWatchlist(anime.id);
   const fav     = isFavorite(anime.id);
   const prog    = getEpisodeProgress(anime.id);
-  const isNotReleased = anime.status === 'NOT_YET_RELEASED';
-  const totalEps = isNotReleased ? 0 : (
-    anime.nextAiringEpisode 
-      ? anime.nextAiringEpisode.episode - 1 
-      : (eps || 12)
-  );
+  const isNotReleased = false;
+  const totalEps = anime.nextAiringEpisode 
+    ? anime.nextAiringEpisode.episode - 1 
+    : (eps || 12);
   const resumeEp = prog?.episode ? Math.min(prog.episode, totalEps) : 1;
   const allEps   = Array.from({ length: totalEps }, (_, i) => i + 1);
   const filtered = epQuery ? allEps.filter(n => String(n).includes(epQuery.trim())) : allEps;

@@ -138,14 +138,8 @@ export default function WatchPage() {
     setExtracting(false);
   }, []);
 
-  // Fetch streaming servers
   const fetchStream = useCallback(async () => {
     if (!anime) return;
-
-    if (anime.status === 'NOT_YET_RELEASED') {
-      setStreamErr('This anime has not been released yet.');
-      return;
-    }
 
     // Check synchronous cache first to achieve instant rendering
     const cachedResult = getCachedServers(anime, episode);
