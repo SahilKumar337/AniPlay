@@ -11,7 +11,12 @@ import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
 import { useApp }  from '../context/AppContext';
 
+const PROXY_URL = import.meta.env.VITE_PROXY_URL || '';
 
+function formatServerUrl(path) {
+  if (path.startsWith('http')) return path;
+  return `${PROXY_URL}${path.startsWith('/') ? path : '/' + path}`;
+}
 
 export default function WatchPage() {
   const { id, ep } = useParams();
@@ -300,7 +305,7 @@ export default function WatchPage() {
             onBack={() => navigate(`/anime/${id}`, { replace: true })}
             onStreamCaptured={(m3u8Url, referer) => {
               const apiKey = import.meta.env.VITE_API_KEY || '';
-              let proxied = `${PROXY}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
+              let proxied = `${PROXY_URL}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
               if (apiKey) {
                 proxied += `&api_key=${encodeURIComponent(apiKey)}`;
               }
