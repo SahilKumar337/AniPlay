@@ -58,6 +58,9 @@ export default function VideoPlayer({ src, isM3U8 = false, poster, onError, titl
         lowLatencyMode: false,
         backBufferLength: 90,
         startLevel: -1,
+        highBufferWatchdogPeriod: 2,
+        nudgeOffset: 0.1,
+        nudgeMaxRetries: 10,
       });
       hls.loadSource(src);
       hls.attachMedia(video);

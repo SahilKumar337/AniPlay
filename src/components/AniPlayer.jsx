@@ -150,13 +150,16 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         // enableWorker:false — avoids Web Worker CSP issues inside Capacitor WebView
         enableWorker: false,
         startLevel: -1,
-        maxMaxBufferLength: 30,
-        manifestLoadingMaxRetry: 3,
+        maxMaxBufferLength: 60,
+        manifestLoadingMaxRetry: 5,
         manifestLoadingRetryDelay: 1500,
-        levelLoadingMaxRetry: 3,
+        levelLoadingMaxRetry: 5,
         levelLoadingRetryDelay: 1500,
-        fragLoadingMaxRetry: 3,
+        fragLoadingMaxRetry: 5,
         fragLoadingRetryDelay: 1500,
+        highBufferWatchdogPeriod: 2,
+        nudgeOffset: 0.1,
+        nudgeMaxRetries: 10,
       });
       hlsRef.current = hls;
 
