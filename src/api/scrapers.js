@@ -403,25 +403,29 @@ export async function scrapeAniNeko(title, episode) {
 
 // ── Animetsu Scraper ──
 
-// Fetches a stream URL from Animetsu, trying multiple servers until one returns sources.
+// Fetches a stream URL from Animetsu — all servers race in PARALLEL, fastest wins.
 async function fetchAnimetsuStream(animeId, episode, sourceType) {
   const proxyBase = 'https://swiftstream.top/proxy';
   const SERVERS = ['pahe', 'hd1', 'vidstream', 'filemoon'];
-  for (const server of SERVERS) {
-    try {
-      const url = `${ANIMETSU}/v2/api/anime/oppai/${animeId}/${episode}?server=${server}&source_type=${sourceType}`;
-      const html = await clientFetch(url, { referer: `${ANIMETSU}/watch/${animeId}`, timeout: 12000 });
-      const data = JSON.parse(html);
-      if (data.sources?.length > 0) {
-        const source = data.sources[0];
-        const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
-        return { rawVideoUrl, subs: data.subs || [], server };
-      }
-    } catch (e) {
-      console.warn(`[Animetsu] ${sourceType}/${server} failed: ${e.message}`);
-    }
+
+  const attempts = SERVERS.map(async (server) => {
+    const url = `${ANIMETSU}/v2/api/anime/oppai/${animeId}/${episode}?server=${server}&source_type=${sourceType}`;
+    const html = await clientFetch(url, { referer: `${ANIMETSU}/watch/${animeId}`, timeout: 12000 });
+    const data = JSON.parse(html);
+    if (!data.sources?.length) throw new Error(`${server}: no sources`);
+    const source = data.sources[0];
+    const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
+    console.log(`[Animetsu] ${sourceType} resolved via server: ${server}`);
+    return { rawVideoUrl, subs: data.subs || [], server };
+  });
+
+  try {
+    // Promise.any returns the FIRST fulfilled promise — fastest server wins
+    return await Promise.any(attempts);
+  } catch {
+    // AggregateError: all servers failed
+    return null;
   }
-  return null;
 }
 
 export async function scrapeAnimetsu(title, episode) {
