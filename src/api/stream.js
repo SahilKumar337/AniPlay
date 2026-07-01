@@ -144,7 +144,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   const results = await Promise.allSettled([
     runWithTimeout(nekoPromise, 18000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
     runWithTimeout(wavesPromise, 18000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(animetsuPromise, 22000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(animetsuPromise, 35000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
   ]);
 
   if (combinedServers.length === 0) {

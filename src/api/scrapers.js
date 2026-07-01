@@ -37,6 +37,7 @@ function formatIframeProxyUrl(targetUrl, referer) {
 const wavesSearchCache = new Map();
 const nekoSearchCache = new Map();
 const animetsuSearchCache = new Map();
+const animetsuEpsCache = new Map(); // Cache episode list per anime ID to skip re-fetch
 
 // ── Helper Matching Functions ──
 
@@ -402,6 +403,27 @@ export async function scrapeAniNeko(title, episode) {
 
 // ── Animetsu Scraper ──
 
+// Fetches a stream URL from Animetsu, trying multiple servers until one returns sources.
+async function fetchAnimetsuStream(animeId, episode, sourceType) {
+  const proxyBase = 'https://swiftstream.top/proxy';
+  const SERVERS = ['pahe', 'hd1', 'vidstream', 'filemoon'];
+  for (const server of SERVERS) {
+    try {
+      const url = `${ANIMETSU}/v2/api/anime/oppai/${animeId}/${episode}?server=${server}&source_type=${sourceType}`;
+      const html = await clientFetch(url, { referer: `${ANIMETSU}/watch/${animeId}`, timeout: 12000 });
+      const data = JSON.parse(html);
+      if (data.sources?.length > 0) {
+        const source = data.sources[0];
+        const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
+        return { rawVideoUrl, subs: data.subs || [], server };
+      }
+    } catch (e) {
+      console.warn(`[Animetsu] ${sourceType}/${server} failed: ${e.message}`);
+    }
+  }
+  return null;
+}
+
 export async function scrapeAnimetsu(title, episode) {
   let best = animetsuSearchCache.get(title);
   if (!best) {
@@ -419,7 +441,7 @@ export async function scrapeAnimetsu(title, episode) {
     for (const query of searchQueries) {
       try {
         const searchUrl = `${ANIMETSU}/v2/api/anime/search/?query=${encodeURIComponent(query)}`;
-        const searchHtml = await clientFetch(searchUrl, { referer: `${ANIMETSU}/watch/`, timeout: 15000 });
+        const searchHtml = await clientFetch(searchUrl, { referer: `${ANIMETSU}/watch/`, timeout: 10000 });
         const searchData = JSON.parse(searchHtml);
         if (searchData.results && searchData.results.length > 0) {
           searchData.results.forEach(r => {
@@ -443,47 +465,41 @@ export async function scrapeAnimetsu(title, episode) {
     animetsuSearchCache.set(title, best);
   }
 
-  const epsUrl = `${ANIMETSU}/v2/api/anime/eps/${best.id}`;
-  const epsHtml = await clientFetch(epsUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
-  const epsData = JSON.parse(epsHtml);
+  // Use cached episode list if available (saves 1 round-trip per episode click)
+  let epsData = animetsuEpsCache.get(best.id);
+  if (!epsData) {
+    const epsUrl = `${ANIMETSU}/v2/api/anime/eps/${best.id}`;
+    const epsHtml = await clientFetch(epsUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 10000 });
+    epsData = JSON.parse(epsHtml);
+    if (epsData && epsData.length) {
+      animetsuEpsCache.set(best.id, epsData);
+    }
+  }
   if (!epsData || !epsData.length) throw new Error(`No episodes found`);
 
   const epItem = epsData.find(x => Number(x.ep_num) === Number(episode));
   if (!epItem) throw new Error(`Episode not found`);
 
-  const servers = [];
-  const proxyBase = 'https://swiftstream.top/proxy';
-
-  const [subRes, dubRes] = await Promise.allSettled([
-    (async () => {
-      const subUrl = `${ANIMETSU}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=sub`;
-      const subHtml = await clientFetch(subUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
-      const subData = JSON.parse(subHtml);
-      if (subData.sources?.length > 0) {
-        const source = subData.sources[0];
-        const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
-        const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-        const subtitles = (subData.subs || []).map((sub, i) => ({ id: i, label: sub.lang || 'English', file: formatProxyUrl(sub.url, `${ANIMETSU}/`) }));
-        return { name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, subtitles, isHLS: true };
-      }
-      return null;
-    })(),
-    (async () => {
-      const dubUrl = `${ANIMETSU}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=dub`;
-      const dubHtml = await clientFetch(dubUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
-      const dubData = JSON.parse(dubHtml);
-      if (dubData.sources?.length > 0) {
-        const source = dubData.sources[0];
-        const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
-        const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-        return { name: 'AniHD1 (DUB)', videoUrl, type: 'dub', embedUrl: rawVideoUrl, subtitles: [], isHLS: true };
-      }
-      return null;
-    })()
+  // Fetch sub and dub streams in parallel, each trying multiple servers
+  const [subResult, dubResult] = await Promise.allSettled([
+    fetchAnimetsuStream(best.id, episode, 'sub'),
+    fetchAnimetsuStream(best.id, episode, 'dub'),
   ]);
 
-  if (subRes.status === 'fulfilled' && subRes.value) servers.push(subRes.value);
-  if (dubRes.status === 'fulfilled' && dubRes.value) servers.push(dubRes.value);
+  const servers = [];
+  if (subResult.status === 'fulfilled' && subResult.value) {
+    const { rawVideoUrl, subs } = subResult.value;
+    const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
+    const subtitles = subs.map((sub, i) => ({ id: i, label: sub.lang || 'English', file: formatProxyUrl(sub.url, `${ANIMETSU}/`) }));
+    servers.push({ name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, subtitles, isHLS: true });
+  }
+  if (dubResult.status === 'fulfilled' && dubResult.value) {
+    const { rawVideoUrl } = dubResult.value;
+    const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
+    servers.push({ name: 'AniHD1 (DUB)', videoUrl, type: 'dub', embedUrl: rawVideoUrl, subtitles: [], isHLS: true });
+  }
+
+  if (!servers.length) throw new Error(`No sources available from Animetsu for episode ${episode}`);
 
   return { servers, animeTitle: best.title, slug: best.id };
 }
