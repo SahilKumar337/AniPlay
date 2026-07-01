@@ -5,7 +5,7 @@ import {
   AlertCircle, RefreshCw, Wifi, WifiOff, Loader, Tv
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
-import { getAniNekoServers, checkProxy, formatServerUrl, PROXY } from '../api/stream';
+import { getAniNekoServers, checkProxy } from '../api/stream';
 import Navbar      from '../components/Navbar';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';

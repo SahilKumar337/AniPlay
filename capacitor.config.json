@@ -12,7 +12,14 @@
       "anilab-backend.onrender.com",
       "*.burntburst45.store",
       "*.echovideo.ru",
-      "aniwaves.ru"
+      "aniwaves.ru",
+      "animetsu.net",
+      "anineko.to"
     ]
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
   }
 }
