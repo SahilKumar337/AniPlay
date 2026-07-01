@@ -14,11 +14,18 @@ const STREAM_PROXY = import.meta.env.VITE_STREAM_PROXY_URL || '';
 
 function formatProxyUrl(targetUrl, referer) {
   if (!STREAM_PROXY) return targetUrl;
-  // Handle various formats of STREAM_PROXY URL (with or without query, with or without trailing slash)
   const hasQuery = STREAM_PROXY.includes('?');
+  if (hasQuery) {
+    return `${STREAM_PROXY}&url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+  }
   const endsWithSlash = STREAM_PROXY.endsWith('/');
-  const separator = hasQuery ? '&' : (endsWithSlash ? '' : '/');
-  return `${STREAM_PROXY}${separator}?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+  if (endsWithSlash) {
+    return `${STREAM_PROXY}?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+  }
+  if (STREAM_PROXY.endsWith('hls') || STREAM_PROXY.endsWith('segment')) {
+    return `${STREAM_PROXY}?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+  }
+  return `${STREAM_PROXY}/?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
 }
 
 // ── Helper Matching Functions ──
@@ -257,10 +264,10 @@ export async function scrapeAniWaves(title, episode) {
   for (const s of working) {
     if (s.type === 'sub' && subCount < 1) {
       subCount++;
-      servers.push({ name: `Waves HD${subCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: true });
+      servers.push({ name: `Waves HD${subCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: false });
     } else if (s.type === 'dub' && dubCount < 1) {
       dubCount++;
-      servers.push({ name: `Waves HD${dubCount} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: true });
+      servers.push({ name: `Waves HD${dubCount} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: false });
     }
   }
   return { servers, animeTitle, slug };
@@ -355,10 +362,10 @@ export async function scrapeAniNeko(title, episode) {
 
     if (s.isDub && dubCount < 1) {
       dubCount++;
-      servers.push({ name: `Neko HD1 (DUB)`, videoUrl: proxiedUrl, type: 'dub', subtitles, isHLS: true });
+      servers.push({ name: `Neko HD1 (DUB)`, videoUrl: proxiedUrl, type: 'dub', subtitles, isHLS: false });
     } else if (!s.isDub && subCount < 1) {
       subCount++;
-      servers.push({ name: `Neko HD1`, videoUrl: proxiedUrl, type: 'sub', subtitles, isHLS: true });
+      servers.push({ name: `Neko HD1`, videoUrl: proxiedUrl, type: 'sub', subtitles, isHLS: false });
     }
   }
 
