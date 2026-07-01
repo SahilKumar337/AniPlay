@@ -6,6 +6,9 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
+    watch: {
+      ignored: ['**/.playwright_profile/**'],
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:4000',

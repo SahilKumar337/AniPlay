@@ -43,7 +43,8 @@
 html { 
   scroll-behavior: smooth; 
   -webkit-text-size-adjust: 100%;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
 
 body {
@@ -53,8 +54,15 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  
+  /* Disable select & callouts completely */
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   user-select: none;
-  overscroll-behavior-y: contain;
+  
+  /* Disable pull-to-refresh & overscroll bounce */
+  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
 
 img { display: block; max-width: 100%; }
@@ -1181,6 +1189,7 @@ ul, ol { list-style: none; }
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   border-bottom: 1px solid var(--border);
   transition: all 0.3s ease;
+  padding-top: env(safe-area-inset-top);
 }
 
 .floating-btn {
@@ -1222,9 +1231,6 @@ ul, ol { list-style: none; }
 @media (max-width: 1024px) {
   .app-container {
     max-width: 100%;
-  }
-  .navbar {
-    max-width: 398px;
   }
 }
 

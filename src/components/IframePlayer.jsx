@@ -111,18 +111,12 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
       {status === 'loading' && (
         <div style={{
           position: 'absolute', inset: 0,
-          display: 'flex', flexDirection: 'column',
+          display: 'flex',
           alignItems: 'center', justifyContent: 'center',
-          gap: 14, background: 'rgba(0,0,0,0.82)',
+          background: '#000',
           zIndex: 10, pointerEvents: 'none',
         }}>
-          <Loader size={44} color="#e50914" style={{ animation: 'spin 0.9s linear infinite' }} />
-          <p style={{ color: '#fff', fontSize: 13, fontWeight: 600, margin: 0 }}>
-            Loading stream…
-          </p>
-          <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 11, margin: 0 }}>
-            Connecting to server
-          </p>
+          <Loader size={38} color="rgba(255,255,255,0.7)" style={{ animation: 'spin 1s linear infinite' }} />
         </div>
       )}
 

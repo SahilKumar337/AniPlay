@@ -39,6 +39,28 @@
         var msg = e.reason ? (e.reason.message || e.reason) : 'Promise rejection';
         errBox.innerHTML = '<h2>🚨 Fatal Promise Rejection</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msg + '</pre>';
       });
+
+      // ── Disable browser context menu (Right-click / Long press save) ──
+      document.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+      });
+
+      // ── Disable pinch-to-zoom ──────────────────────────────────────────
+      document.addEventListener('touchmove', function(e) {
+        if (e.scale !== undefined && e.scale !== 1) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // ── Disable double-tap to zoom ─────────────────────────────────────
+      var lastTouchEnd = 0;
+      document.addEventListener('touchend', function(e) {
+        var now = (new Date()).getTime();
+        if (now - lastTouchEnd <= 300) {
+          e.preventDefault();
+        }
+        lastTouchEnd = now;
+      }, false);
     </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>

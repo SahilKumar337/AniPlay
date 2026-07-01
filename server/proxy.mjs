@@ -20,11 +20,21 @@
 
 import { createServer }    from 'node:http';
 import { URL, fileURLToPath } from 'node:url';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, extname }   from 'node:path';
 import { Readable }        from 'node:stream';
-import puppeteer from 'puppeteer-core';
-import { chromium } from 'playwright';
+import puppeteerExtra from 'puppeteer-extra';
+import puppeteerVanilla from 'puppeteer-core';
+import playwrightExtra from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+
+// Initialize puppeteer-extra with the core browser engine
+const puppeteer = puppeteerExtra.vanilla ? puppeteerExtra : puppeteerExtra.addExtra(puppeteerVanilla);
+puppeteer.use(StealthPlugin());
+
+// Initialize playwright-extra with the playwright chromium engine
+const chromium = playwrightExtra.chromium;
+chromium.use(StealthPlugin());
 
 const PORT     = process.env.PORT || 4000;
 const AW       = 'https://aniwaves.ru';
@@ -34,6 +44,9 @@ const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || 'C:\\Program Files\
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DIST_DIR  = join(__dirname, '../dist');
+// Persistent profile directory — Cloudflare cookies survive server restarts
+const PROFILE_DIR = join(__dirname, '../.playwright_profile');
+try { mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
 
@@ -116,6 +129,7 @@ async function getPlaywrightBrowser() {
         '--disable-web-security',
         '--disable-gpu',
         '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
       ]
     });
     isPlaywrightAvailable = true;
@@ -129,34 +143,199 @@ async function getPlaywrightBrowser() {
   }
 }
 
+// Domain-specific Cookie Jar to avoid leaking cookies across different providers
+const cookieJar = {
+  'aniwaves.ru': '',
+  'animepahe.pw': '',
+  'anineko.to': '',
+  'play.echovideo.ru': '',
+  'kwik.cx': '',
+  'megacloud.club': '',
+  'megacloud.tv': '',
+  'rapid-cloud.co': '',
+  'rabbitstream.net': '',
+  'myvidplay.com': '',
+  'sb1254w9megshle.org': '',
+  'vidplay.online': '',
+  'mcloud.to': '',
+  'filemoon.sx': '',
+  'streamwish.to': '',
+  'vidmoly.to': ''
+};
+
+let globalCookie = '';
+
+// Sync cookies from Playwright's shared browser context to cookieJar and globalCookie
+async function syncCookiesFromPlaywright() {
+  if (!playwrightContext) return;
+  try {
+    const cookies = await playwrightContext.cookies();
+    for (const domain of Object.keys(cookieJar)) {
+      const matched = cookies.filter(c => c.domain.includes(domain));
+      if (matched.length) {
+        cookieJar[domain] = matched.map(c => `${c.name}=${c.value}`).join('; ');
+      }
+    }
+    globalCookie = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    console.log(`[Playwright Cookies Sync] Synchronized ${cookies.length} cookies to domain jars.`);
+  } catch (e) {
+    console.warn('[Playwright Cookies Sync] Failed to sync cookies:', e.message);
+  }
+}
+
+/**
+ * Read cookies directly from the user's real Chrome browser cookie store (SQLite).
+ * Chrome must NOT be running (or the DB is locked). We copy the file to a temp location first.
+ * This bypasses CDP detection — we're just reading a file.
+ */
+async function readRealChromeCookies() {
+  try {
+    const { copyFileSync, unlinkSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const chromeCookieDb = join(
+      process.env.LOCALAPPDATA || 'C:\\Users\\Default\\AppData\\Local',
+      'Google', 'Chrome', 'User Data', 'Default', 'Network', 'Cookies'
+    );
+    if (!existsSync(chromeCookieDb)) {
+      console.log('[ChromeCookies] Chrome cookie file not found, skipping.');
+      return;
+    }
+    // Copy to temp (Chrome locks the original)
+    const tmpDb = join(tmpdir(), `anilab_chrome_cookies_${Date.now()}.sqlite`);
+    try { copyFileSync(chromeCookieDb, tmpDb); } catch (e) {
+      console.log('[ChromeCookies] Could not copy cookie file (Chrome may be running with lock):', e.message);
+      return;
+    }
+
+    // Use better-sqlite3 if available, else skip
+    let db;
+    try {
+      const { default: Database } = await import('better-sqlite3');
+      db = new Database(tmpDb, { readonly: true, fileMustExist: true });
+    } catch (e) {
+      console.log('[ChromeCookies] better-sqlite3 not available, skipping Chrome cookie read.');
+      try { unlinkSync(tmpDb); } catch {}
+      return;
+    }
+
+    // Query relevant domains
+    const targets = ['animepahe.pw', 'animepahe.ru', 'animepahe.com'];
+    let foundCookies = [];
+    for (const host of targets) {
+      try {
+        const rows = db.prepare(
+          `SELECT name, value, host_key FROM cookies WHERE host_key LIKE ? OR host_key LIKE ?`
+        ).all(`%${host}`, `.${host}`);
+        foundCookies.push(...rows);
+      } catch {}
+    }
+    db.close();
+    try { unlinkSync(tmpDb); } catch {}
+
+    if (foundCookies.length) {
+      // Note: Chrome encrypts cookie values on Windows (DPAPI). We can only read unencrypted ones.
+      // cf_clearance is typically not encrypted (it's a session cookie set by Cloudflare JS).
+      const cfClearance = foundCookies.find(c => c.name === 'cf_clearance' && c.value && !c.value.startsWith('v10'));
+      if (cfClearance) {
+        const cookieStr = foundCookies
+          .filter(c => c.value && !c.value.startsWith('v10'))
+          .map(c => `${c.name}=${c.value}`)
+          .join('; ');
+        cookieJar['animepahe.pw'] = cookieStr;
+        console.log(`[ChromeCookies] ✅ Injected ${foundCookies.length} AnimePahe cookies from real Chrome (cf_clearance found!)`);
+      } else {
+        console.log('[ChromeCookies] AnimePahe cookies found but cf_clearance missing or encrypted. Manual injection may be needed.');
+      }
+    } else {
+      console.log('[ChromeCookies] No AnimePahe cookies in real Chrome profile. Visit animepahe.pw in Chrome to enable AniHD.');
+    }
+  } catch (e) {
+    console.warn('[ChromeCookies] Error reading Chrome cookies:', e.message);
+  }
+}
+
+/** Manually inject cookies for a domain — called via POST /api/inject-cookie */
+function injectCookiesManually(domain, cookieString) {
+  if (cookieJar.hasOwnProperty(domain)) {
+    cookieJar[domain] = cookieString;
+    console.log(`[Cookie Inject] Injected ${cookieString.split(';').length} cookies for ${domain}`);
+    return true;
+  }
+  return false;
+}
+
+// Generic solver — waits for managed Turnstile to auto-pass or visible checkbox to appear
+async function solvePageTurnstile(page, siteName) {
+  let title = await page.title();
+  if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
+    console.log(`[Playwright] Cloudflare challenge detected on ${siteName}. Waiting up to 2 minutes for auto-solve...`);
+    let solved = false;
+    for (let i = 0; i < 240; i++) { // 240 x 500ms = 2 minutes
+      await page.waitForTimeout(500);
+      title = await page.title();
+      if (!title.includes('Cloudflare') && !title.includes('Just a moment') && !title.includes('Attention Required!')) {
+        solved = true;
+        break;
+      }
+      // Also check if navigated away from challenge page (managed mode redirects)
+      const url = page.url();
+      if (!url.includes('challenges.cloudflare.com') && !title.includes('Just a moment')) {
+        solved = true;
+        break;
+      }
+    }
+    if (solved) {
+      console.log(`[Playwright ${siteName}] Cloudflare solved! New title: "${await page.title()}"`);
+    } else {
+      console.warn(`[Playwright ${siteName}] Cloudflare solve timed out after 2 minutes.`);
+    }
+  }
+}
+
 let playwrightContext = null;
 let isPriming = false;
 
+/**
+ * Prime Playwright using a PERSISTENT browser profile (userDataDir).
+ * The first run will open a visible browser window so Cloudflare's managed
+ * Turnstile (behavioural, invisible) can auto-pass. Subsequent runs reuse
+ * saved cookies from disk and stay headless.
+ */
 async function primePlaywrightContext() {
   if (isPriming) return null;
   isPriming = true;
   try {
-    const browser = await getPlaywrightBrowser();
-    if (!browser) {
-      isPriming = false;
-      return null;
-    }
-    console.log('[Playwright] Creating fresh context for AniWaves...');
-    const context = await browser.newContext({
+    // Check if we already have a saved session (profile dir non-empty)
+    const hasSavedProfile = existsSync(join(PROFILE_DIR, 'Default', 'Cookies'));
+    // Use headless:false on first run so managed Turnstile can auto-pass via real display
+    const launchHeadless = hasSavedProfile;
+    // Prefer the real system Chrome for better Cloudflare compatibility
+    const REAL_CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    const execPath = process.env.PUPPETEER_EXECUTABLE_PATH
+      || (existsSync(REAL_CHROME) ? REAL_CHROME : null);
+
+    console.log(`[Playwright] Launching persistent context (headless=${launchHeadless}, chrome=${execPath || 'bundled'}, profile=${PROFILE_DIR})...`);
+    const newContext = await chromium.launchPersistentContext(PROFILE_DIR, {
+      headless: launchHeadless,
+      ...(execPath ? { executablePath: execPath } : {}),
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
       deviceScaleFactor: 1,
       hasTouch: false,
       locale: 'en-US',
-      timezoneId: 'America/New_York'
+      timezoneId: 'America/New_York',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+        ...(launchHeadless ? ['--disable-gpu'] : []),
+      ]
     });
 
-    // Add robust stealth script before any page loads
-    await context.addInitScript(() => {
-      // Hide webdriver automation signature
+    // Stealth init script for every page
+    await newContext.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-      // Mock User Agent Client Hints to look like official Chrome
       const userAgentData = {
         brands: [
           { brand: 'Google Chrome', version: '125' },
@@ -167,44 +346,15 @@ async function primePlaywrightContext() {
         platform: 'Windows'
       };
       Object.defineProperty(navigator, 'userAgentData', { get: () => userAgentData });
-
-      // Mimic Chrome runtime environment
-      window.chrome = {
-        app: { isInstalled: false },
-        runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {} }
-      };
-
-      // Override permissions query
+      window.chrome = { app: { isInstalled: false }, runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {} } };
       const originalQuery = navigator.permissions.query;
       navigator.permissions.query = (parameters) =>
         parameters.name === 'notifications'
           ? Promise.resolve({ state: Notification.permission })
           : originalQuery(parameters);
-
-      // Mock languages
       Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-
-      // Mock WebGL Parameters to prevent headless detection
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function(parameter) {
-        if (parameter === 37445) return 'Intel Open Source Technology Center'; // UNMASKED_VENDOR_WEBGL
-        if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 620 (Kaby Lake GT2)'; // UNMASKED_RENDERER_WEBGL
-        return getParameter.apply(this, arguments);
-      };
-      if (window.WebGL2RenderingContext) {
-        const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-        WebGL2RenderingContext.prototype.getParameter = function(parameter) {
-          if (parameter === 37445) return 'Intel Open Source Technology Center';
-          if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 620 (Kaby Lake GT2)';
-          return getParameter2.apply(this, arguments);
-        };
-      }
-
-      // Mock hardware specifications
       Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
       Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-
-      // Mock Plugins (Headless has 0, real has PDF viewers, etc.)
       Object.defineProperty(navigator, 'plugins', {
         get: () => [
           { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
@@ -213,64 +363,40 @@ async function primePlaywrightContext() {
       });
     });
 
-    console.log('[Playwright] Loading AniWaves homepage to acquire cookies...');
-    const page = await context.newPage();
+    console.log('[Playwright] Visiting AniWaves to acquire cookies...');
+    const page = await newContext.newPage();
     try {
-      await page.goto(AW, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(4000);
-      
-      let title = await page.title();
-      if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
-        console.log('[Playwright] Cloudflare verification page detected on AniWaves. Waiting for Turnstile...');
-        const container = page.locator('#naeL5, div[style*="display: grid"]').first();
-        const box = await container.boundingBox().catch(() => null);
-        if (box) {
-          console.log('[Playwright] Clicking AniWaves Turnstile checkbox...');
-          await page.mouse.click(box.x + 16, box.y + 34);
-          await page.waitForTimeout(10000);
-        } else {
-          await page.waitForTimeout(4000);
-        }
-      }
+      await page.goto(AW, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await page.waitForTimeout(5000);
+      await solvePageTurnstile(page, 'AniWaves');
       console.log(`[Playwright] AniWaves primed. Title: "${await page.title()}"`);
     } catch (e) {
       console.warn('[Playwright] AniWaves priming failed:', e.message);
     }
 
-    console.log('[Playwright] Loading AnimePahe homepage to acquire cookies...');
+    console.log('[Playwright] Visiting Animetsu to acquire cookies...');
     try {
-      await page.goto('https://animepahe.pw/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(4000);
-      
-      let title = await page.title();
-      if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
-        console.log('[Playwright] Cloudflare verification page detected on AnimePahe. Waiting for Turnstile...');
-        const container = page.locator('#naeL5, div[style*="display: grid"]').first();
-        const box = await container.boundingBox().catch(() => null);
-        if (box) {
-          console.log('[Playwright] Clicking AnimePahe Turnstile checkbox...');
-          await page.mouse.click(box.x + 16, box.y + 34);
-          await page.waitForTimeout(10000);
-        } else {
-          await page.waitForTimeout(4000);
-        }
-      }
-      console.log(`[Playwright] AnimePahe primed. Title: "${await page.title()}"`);
+      await page.goto('https://animetsu.net/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await page.waitForTimeout(5000);
+      await solvePageTurnstile(page, 'Animetsu');
+      console.log(`[Playwright] Animetsu primed. Title: "${await page.title()}"`);
     } catch (e) {
-      console.warn('[Playwright] AnimePahe priming failed:', e.message);
+      console.warn('[Playwright] Animetsu priming failed:', e.message);
     }
 
-    const cookies = await context.cookies();
-    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-    globalCookie = cookieStr;
-    console.log(`[Playwright] Saved ${cookies.length} cookies to globalCookie.`);
+    // NOTE: AnimePahe (animepahe.pw) uses Cloudflare managed Turnstile that detects CDP even
+    // in headless:false mode with real Chrome. We don't prime it here — instead we use
+    // readRealChromeCookies() to harvest the cf_clearance from the user's actual Chrome profile.
+
+    // Keep the browser context open for subsequent requests
+    playwrightContext = newContext;
+    playwrightBrowser = newContext.browser();
+    isPlaywrightAvailable = true;
+
+    await syncCookiesFromPlaywright();
     await page.close().catch(() => {});
 
-    const oldContext = playwrightContext;
-    playwrightContext = context;
-    if (oldContext) {
-      await oldContext.close().catch(() => {});
-    }
+    console.log(`[Playwright] Priming complete. globalCookie length: ${globalCookie.length}`);
     return playwrightContext;
   } catch (e) {
     console.error('[Playwright] Context priming crashed:', e.message);
@@ -282,35 +408,45 @@ async function primePlaywrightContext() {
 
 async function getPlaywrightContext() {
   if (!playwrightContext) {
+    if (isPriming) {
+      console.log('[Playwright] Context is already priming. Waiting for it to finish...');
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (playwrightContext) return playwrightContext;
+      }
+      throw new Error('Timeout waiting for Playwright context to prime');
+    }
     console.log('[Playwright] Context not ready yet. Priming now synchronously...');
     await primePlaywrightContext();
   }
   return playwrightContext;
 }
 
-// Background Context Refresh Timer (every 8 minutes)
-setInterval(() => {
-  if (isPlaywrightAvailable) {
-    console.log('[Playwright] Periodic background context refresh starting...');
-    primePlaywrightContext();
+// Background Cookie Sync Timer (every 10 minutes — just syncs cookies, context persists)
+setInterval(async () => {
+  if (isPlaywrightAvailable && playwrightContext) {
+    console.log('[Playwright] Periodic cookie sync...');
+    await syncCookiesFromPlaywright();
   }
-}, 8 * 60 * 1000);
+}, 10 * 60 * 1000);
 
-// Perform an immediate async startup check to verify if browser launches
-getPlaywrightBrowser().then(browser => {
-  if (browser) {
-    console.log('[Playwright] Startup check: Browser launched successfully. Priming context in background...');
+// Direct startup priming: open persistent context (visible window on first run for Turnstile)
+primePlaywrightContext().then(async () => {
+  if (playwrightContext) {
+    console.log('[Playwright] Startup priming complete.');
     isPlaywrightAvailable = true;
-    primePlaywrightContext();
   } else {
-    console.log('[Playwright] Startup check: Browser failed to launch. Disabling Playwright scrapers.');
+    console.warn('[Playwright] Startup priming returned null. Playwright scrapers disabled.');
     isPlaywrightAvailable = false;
-    if (!playwrightStartupError) playwrightStartupError = 'Browser was null after getPlaywrightBrowser';
   }
+  // Try to harvest AnimePahe cf_clearance from the user's real Chrome cookie store
+  await readRealChromeCookies();
 }).catch(err => {
-  console.warn('[Playwright] Startup check error:', err.message);
+  console.warn('[Playwright] Startup priming failed:', err.message);
   isPlaywrightAvailable = false;
   playwrightStartupError = err.message + '\n' + err.stack;
+  // Still try Chrome cookies even if priming fails
+  readRealChromeCookies().catch(() => {});
 });
 
 async function playwrightFetch(url, referer = '') {
@@ -329,34 +465,7 @@ async function playwrightFetch(url, referer = '') {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
     // Check if we hit a Cloudflare challenge on the API/Target URL
-    let title = await page.title();
-    let isChallenge = title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!');
-
-    if (isChallenge) {
-      console.log(`[Playwright Fetch] Cloudflare challenge detected for ${url}. Attempting Turnstile solve...`);
-      // Try to solve Turnstile checkbox if visible
-      const container = page.locator('#naeL5, div[style*="display: grid"]').first();
-      const box = await container.boundingBox().catch(() => null);
-      if (box) {
-        console.log('[Playwright Fetch] Clicking Turnstile checkbox...');
-        await page.mouse.click(box.x + 16, box.y + 34);
-      }
-      
-      let solved = false;
-      for (let i = 0; i < 250; i++) {
-        await page.waitForTimeout(100);
-        title = await page.title();
-        if (!title.includes('Cloudflare') && !title.includes('Just a moment') && !title.includes('Attention Required!')) {
-          solved = true;
-          break;
-        }
-      }
-      if (solved) {
-        console.log(`[Playwright Fetch] Cloudflare solved! New title: "${title}"`);
-      } else {
-        console.warn(`[Playwright Fetch] Cloudflare challenge timed out.`);
-      }
-    }
+    await solvePageTurnstile(page, 'Fetch API Target');
 
     const bodyText = await page.evaluate(() => document.body.innerText || '');
     let content;
@@ -366,6 +475,7 @@ async function playwrightFetch(url, referer = '') {
       content = await page.content();
     }
 
+    await syncCookiesFromPlaywright();
     await page.close();
     return content;
   } catch (e) {
@@ -384,22 +494,17 @@ async function playwrightExtractM3U8(embedUrl) {
     return cached;
   }
 
-  const browser = await getPlaywrightBrowser();
-  if (!browser) {
-    throw new Error('Playwright browser is not initialized');
+  const context = await getPlaywrightContext();
+  if (!context) {
+    throw new Error('Playwright persistent context is not initialized');
   }
 
-  console.log(`[Playwright] Launching isolated page context for: ${embedUrl.slice(0, 100)}`);
+  console.log(`[Playwright] Opening extraction page in persistent context for: ${embedUrl.slice(0, 100)}`);
   
-  // Create isolated context with user agent and referer
   let refererHeader = AW + '/';
   if (embedUrl.includes('kwik.cx')) {
     refererHeader = 'https://animepahe.pw/';
   }
-  const context = await browser.newContext({
-    userAgent: UA,
-    extraHTTPHeaders: { 'Referer': refererHeader }
-  });
 
   return new Promise(async (resolve, reject) => {
     let page = null;
@@ -409,7 +514,6 @@ async function playwrightExtractM3U8(embedUrl) {
       if (page) {
         try { await page.close(); } catch (e) {}
       }
-      try { await context.close(); } catch (e) {}
     };
 
     const finish = (result) => {
@@ -420,15 +524,25 @@ async function playwrightExtractM3U8(embedUrl) {
       resolve(result);
     };
 
-    const fail = (err) => {
+    const fail = async (err) => {
       if (resolved) return;
       resolved = true;
+      if (page) {
+        try {
+          const screenshotPath = join(__dirname, `../scratch/extract_fail_${Date.now()}.png`);
+          await page.screenshot({ path: screenshotPath });
+          console.log(`[Playwright] Saved failure screenshot to: ${screenshotPath}`);
+        } catch (e) {
+          console.warn('[Playwright] Failed to save failure screenshot:', e.message);
+        }
+      }
       cleanup().catch(() => {});
       reject(err);
     };
 
     try {
       page = await context.newPage();
+      await page.setExtraHTTPHeaders({ 'Referer': refererHeader });
 
       // Intercept and block unnecessary resources for high performance
       await page.route('**/*', (route) => {
@@ -681,9 +795,42 @@ function json(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
+function shouldUsePlaywright(url) {
+  const u = url.toLowerCase();
+  return u.includes('aniwaves.ru') || 
+         u.includes('aniwave.') || 
+         u.includes('animepahe.') || 
+         u.includes('kwik.cx') || 
+         u.includes('echovideo.ru') || 
+         u.includes('megacloud') || 
+         u.includes('rapid-cloud') || 
+         u.includes('rabbitstream') || 
+         u.includes('myvidplay') || 
+         u.includes('sb1254w9megshle') || 
+         u.includes('vidplay') || 
+         u.includes('mcloud.to') || 
+         u.includes('filemoon') || 
+         u.includes('streamwish') || 
+         u.includes('vidmoly') ||
+         u.includes('animetsu.');
+}
+
 // ── Smart fetch with cookie persistence ──────────────────────────
-let globalCookie = '';
 async function xfetch(url, opts = {}) {
+  // Determine domain key
+  let domainKey = '';
+  try {
+    const parsedUrl = new URL(url);
+    for (const domain of Object.keys(cookieJar)) {
+      if (parsedUrl.hostname === domain || parsedUrl.hostname.endsWith('.' + domain)) {
+        domainKey = domain;
+        break;
+      }
+    }
+  } catch {}
+
+  const domainCookie = domainKey ? cookieJar[domainKey] : '';
+
   // Try standard fetch first (using cookies from background priming)
   try {
     const r = await fetch(url, {
@@ -693,7 +840,7 @@ async function xfetch(url, opts = {}) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Connection': 'keep-alive',
-        ...(globalCookie ? { 'Cookie': globalCookie } : {}),
+        ...(domainCookie ? { 'Cookie': domainCookie } : {}),
         ...(opts.referer ? { 'Referer': opts.referer, 'Origin': new URL(opts.referer).origin } : {}),
         ...(opts.headers || {}),
       },
@@ -710,9 +857,16 @@ async function xfetch(url, opts = {}) {
       
       if (!hasCf && !(isJsonUrl && isHtmlResponse)) {
         const setCookies = r.headers.getSetCookie?.() || [];
-        if (setCookies.length) {
-          const newCookies = setCookies.map(c => c.split(';')[0]).join('; ');
-          globalCookie = globalCookie ? `${globalCookie}; ${newCookies}` : newCookies;
+        if (setCookies.length && domainKey) {
+          const newCookies = setCookies.map(c => c.split(';')[0]);
+          const existing = cookieJar[domainKey] ? cookieJar[domainKey].split('; ') : [];
+          for (const nc of newCookies) {
+            const name = nc.split('=')[0];
+            const filtered = existing.filter(x => !x.startsWith(name + '='));
+            filtered.push(nc);
+            cookieJar[domainKey] = filtered.join('; ');
+          }
+          globalCookie = Object.values(cookieJar).filter(Boolean).join('; ');
         }
         return text;
       }
@@ -722,7 +876,9 @@ async function xfetch(url, opts = {}) {
   }
 
   // Fallback to Playwright if standard fetch was blocked/failed
-  if ((url.includes('aniwaves.ru') || url.includes('aniwave.') || url.includes('animepahe.') || url.includes('kwik.cx')) && isPlaywrightAvailable) {
+  // ⚠️ Skip for AnimePahe API calls — Cloudflare detects CDP and the 2-min wait blocks other requests
+  const isAnimePaheApi = url.includes('animepahe.pw/api') || url.includes('animepahe.ru/api') || url.includes('animepahe.com/api');
+  if (!isAnimePaheApi && shouldUsePlaywright(url) && isPlaywrightAvailable) {
     try {
       return await playwrightFetch(url, opts.referer);
     } catch (e) {
@@ -774,14 +930,25 @@ function titleScore(resultTitle, queryTitle) {
   const qSeason = extractSeason(qn);
   if (rSeason !== qSeason) return 0;
 
-  // Strip season suffix for word matching
-  const strip = t => t.replace(/\b(season|part|s)\s*\d+\b/gi, '').replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '').trim();
-  const qWords = strip(qn).split(/\s+/).filter(w => w.length > 1);
-  if (!qWords.length) return 0.5;
+  // Strip season suffix and other generic metadata tags for precise word matching
+  const strip = t => t
+    .replace(/\b(season|part|s)\s*\d+\b/gi, '')
+    .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
+    .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio)\b/gi, '')
+    .trim();
 
-  let matched = 0;
-  for (const w of qWords) if (rn.includes(w)) matched++;
-  return matched / qWords.length;
+  const qWords = strip(qn).split(/\s+/).filter(w => w.length > 1);
+  const rWords = strip(rn).split(/\s+/).filter(w => w.length > 1);
+
+  if (!qWords.length || !rWords.length) return 0;
+
+  // Calculate intersection
+  const intersection = qWords.filter(w => rWords.includes(w));
+  if (intersection.length === 0) return 0;
+
+  // Dice's Coefficient: 2 * |A ∩ B| / (|A| + |B|)
+  const score = (2 * intersection.length) / (qWords.length + rWords.length);
+  return score;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -867,10 +1034,14 @@ async function awSearch(title) {
     if (score > maxScore) { maxScore = score; best = r; }
   }
 
-  // If still no confident match — accept if ≤2 results (keyword was selective enough)
-  if (maxScore === 0 && results.length <= 2) { maxScore = 0.4; best = results[0]; }
-  if (maxScore === 0 && results.length > 2) {
-    throw new Error(`No confident match for "${title}" (${results.length} candidates on AniWaves)`);
+  const ConfidentThreshold = 0.75;
+  if (!best || maxScore < ConfidentThreshold) {
+    // If still no confident match — accept if ≤2 results and score is somewhat reasonable (keyword was selective enough)
+    if (maxScore >= 0.4 && results.length <= 2) {
+      console.log(`[AW] Accepting low-score match for selective search (score: ${maxScore.toFixed(2)}, candidates: ${results.length})`);
+    } else {
+      throw new Error(`No confident match on AniWaves for "${title}" (best score: ${maxScore.toFixed(2)}, candidates: ${results.length})`);
+    }
   }
 
   console.log(`[AW] Best match: "${best.animeTitle}" (id=${best.animeId}, score=${maxScore.toFixed(2)})`);
@@ -954,14 +1125,19 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
   return parsed.result.url;
 }
 
-// Embed providers known to be extractable via Puppeteer/iframe proxy
-// Providers NOT on this list will be skipped silently
 const KNOWN_WORKING_PROVIDERS = [
   'play.echovideo.ru',   // Vidstream — extractable via Puppeteer ✅
   'megacloud.club',      // MegaCloud — extractable via Puppeteer ✅  
   'megacloud.tv',        // MegaCloud alt domain ✅
   'rapid-cloud.co',      // RapidCloud ✅
   'rabbitstream.net',    // RabbitStream ✅
+  'myvidplay.com',
+  'sb1254w9megshle.org',
+  'vidplay.online',
+  'mcloud.to',
+  'filemoon.sx',
+  'streamwish.to',
+  'vidmoly.to'
 ];
 
 /**
@@ -1003,18 +1179,21 @@ async function scrapeAniWaves(title, episode) {
     .filter(r => r.status === 'fulfilled')
     .map(r => r.value);
 
-  // Assign sequential display names
+  // Assign sequential display names (keep only HD1 for sub and dub)
   let subCount = 0;
   let dubCount = 0;
-  const servers = workingServers.map(s => {
+  const servers = [];
+  for (const s of workingServers) {
     if (s.type === 'sub') {
+      if (subCount >= 1) continue;
       subCount++;
-      return { name: `HD${subCount}`, videoUrl: s.videoUrl, type: s.type };
+      servers.push({ name: `HD${subCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl });
     } else {
+      if (dubCount >= 1) continue;
       dubCount++;
-      return { name: `HD${dubCount}`, videoUrl: s.videoUrl, type: s.type };
+      servers.push({ name: `HD${dubCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl });
     }
-  });
+  }
 
   if (servers.length === 0) throw new Error(`No supported streaming servers found for episode ${episode}`);
 
@@ -1035,8 +1214,8 @@ function getLongestWord(title) {
 // ══════════════════════════════════════════════════════════════════
 // ANIMEPAHE FALLBACK SCRAPER (AniHD)
 // ══════════════════════════════════════════════════════════════════
-async function scrapeAnimePahe(title, episode) {
-  const domain = 'https://animepahe.pw';
+async function scrapeAnimetsu(title, episode) {
+  const domain = 'https://animetsu.net';
   
   // Clean the title and split into words for keyword permutation fallbacks
   const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1053,111 +1232,160 @@ async function scrapeAnimePahe(title, episode) {
   
   let results = [];
   
-  // 1. Search for anime on AnimePahe
+  // 1. Search for anime on Animetsu
   for (const query of searchQueries) {
-    console.log(`[AnimePahe] Searching: "${query}" (original: "${title}")`);
+    console.log(`[Animetsu] Searching: "${query}" (original: "${title}")`);
     try {
-      const searchUrl = `${domain}/api?m=search&q=${encodeURIComponent(query)}`;
-      const searchHtml = await xfetch(searchUrl, { referer: domain, timeout: 25000 });
+      const searchUrl = `${domain}/v2/api/anime/search/?query=${encodeURIComponent(query)}`;
+      const searchHtml = await xfetch(searchUrl, {
+        referer: domain,
+        timeout: 15000,
+        headers: {
+          'Origin': domain,
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
       const searchData = JSON.parse(searchHtml);
-      if (searchData.data && searchData.data.length > 0) {
-        searchData.data.forEach(r => {
-          results.push({ id: r.id, title: r.title.trim(), session: r.session });
+      if (searchData.results && searchData.results.length > 0) {
+        searchData.results.forEach(r => {
+          results.push({
+            id: r.id,
+            title: r.title.english || r.title.romaji || r.title.native || ''
+          });
         });
         break;
       }
     } catch (e) {
-      console.warn(`[AnimePahe] Search failed for "${query}": ${e.message}`);
+      console.warn(`[Animetsu] Search failed for "${query}": ${e.message}`);
     }
   }
   
-  if (!results.length) throw new Error(`Anime "${title}" not found on AnimePahe`);
+  if (!results.length) throw new Error(`Anime "${title}" not found on Animetsu`);
   
   // Find best match by scoring
-  let best = results[0], maxScore = -1;
+  let best = null, maxScore = -1;
   for (const r of results) {
     const score = titleScore(r.title, title);
     if (score > maxScore) { maxScore = score; best = r; }
   }
   
-  console.log(`[AnimePahe] Matched: "${best.title}" (session=${best.session})`);
+  const ConfidentThreshold = 0.75;
+  if (!best || maxScore < ConfidentThreshold) {
+    throw new Error(`No confident match on Animetsu for "${title}" (best score: ${maxScore.toFixed(2)})`);
+  }
   
-  // 2. Fetch episodes list direct to the calculated page
-  const page = Math.floor((Number(episode) - 1) / 30) + 1;
-  const releaseUrl = `${domain}/api?m=release&id=${best.session}&sort=episode_asc&page=${page}`;
+  console.log(`[Animetsu] Matched: "${best.title}" (id=${best.id}, score=${maxScore.toFixed(2)})`);
   
-  let releaseHtml;
+  // 2. Fetch episodes list
+  const epsUrl = `${domain}/v2/api/anime/eps/${best.id}`;
+  let epsHtml;
   try {
-    releaseHtml = await xfetch(releaseUrl, { referer: domain, timeout: 25000 });
+    epsHtml = await xfetch(epsUrl, {
+      referer: domain,
+      timeout: 15000,
+      headers: {
+        'Origin': domain,
+        'Accept': 'application/json, text/plain, */*'
+      }
+    });
   } catch (e) {
     throw new Error(`Failed to fetch episodes list for "${best.title}": ${e.message}`);
   }
   
-  const releaseData = JSON.parse(releaseHtml);
-  if (!releaseData.data || !releaseData.data.length) {
-    throw new Error(`No episodes found for "${best.title}" on page ${page}`);
+  const epsData = JSON.parse(epsHtml);
+  if (!epsData || !epsData.length) {
+    throw new Error(`No episodes found for "${best.title}"`);
   }
   
-  // Find exact episode match
-  const epItem = releaseData.data.find(x => Number(x.episode) === Number(episode));
+  // Find exact episode match (ep_num matches episode)
+  const epItem = epsData.find(x => Number(x.ep_num) === Number(episode));
   if (!epItem) {
-    throw new Error(`Episode ${episode} not found for "${best.title}" on page ${page}`);
+    throw new Error(`Episode ${episode} not found for "${best.title}"`);
   }
   
-  console.log(`[AnimePahe] Episode ${episode} found! Session: ${epItem.session}`);
+  console.log(`[Animetsu] Episode ${episode} found!`);
   
-  // 3. Fetch play page HTML
-  const playUrl = `${domain}/play/${best.session}/${epItem.session}`;
-  let playHtml;
-  try {
-    playHtml = await xfetch(playUrl, { referer: domain, timeout: 25000 });
-  } catch (e) {
-    throw new Error(`Failed to fetch play page for episode ${episode}: ${e.message}`);
-  }
-  
-  // 4. Parse resolutions and Kwik URLs
-  const rawServers = [];
-  const re = /(?:href|data-src|data-video)="([^"]*kwik[^"]*)"[^>]*>([\s\S]*?)<\/(?:a|button)/gi;
-  let m;
-  while ((m = re.exec(playHtml)) !== null) {
-    const kwikUrl = m[1];
-    const label = m[2].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim(); // e.g. "720p" or "1080p"
-    rawServers.push({ kwikUrl, label });
-  }
-  
-  // Fallback if regex fails to match resolutions
-  if (rawServers.length === 0) {
-    const fallbackRe = /https:\/\/kwik\.cx\/e\/[a-zA-Z0-9]+/g;
-    const matches = playHtml.match(fallbackRe) || [];
-    for (const link of matches) {
-      rawServers.push({ kwikUrl: link, label: '720p' });
-    }
-  }
-  
-  if (rawServers.length === 0) {
-    throw new Error(`No video links found for episode ${episode} on AnimePahe`);
-  }
-  
-  // Deduplicate and format as server options
-  const seenUrls = new Set();
+  // 3. Fetch play sources for SUB and DUB
   const servers = [];
-  for (const s of rawServers) {
-    if (seenUrls.has(s.kwikUrl)) continue;
-    seenUrls.add(s.kwikUrl);
-    
-    // Format the URL as an iframe-proxy so WatchPage knows it's an embed
-    const proxiedIframeUrl = `/api/stream/iframe-proxy?url=${encodeURIComponent(s.kwikUrl)}&referer=${encodeURIComponent('https://animepahe.pw/')}`;
-    
-    servers.push({
-      name: `AniHD (${s.label})`,
-      videoUrl: proxiedIframeUrl,
-      type: 'sub',
-      subtitles: []
+  const proxyBase = 'https://swiftstream.top/proxy';
+  
+  // SUB query
+  try {
+    const subUrl = `${domain}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=sub`;
+    const subHtml = await xfetch(subUrl, {
+      referer: domain,
+      timeout: 15000,
+      headers: {
+        'Origin': domain,
+        'Accept': 'application/json, text/plain, */*'
+      }
     });
+    const subData = JSON.parse(subHtml);
+    if (subData.sources && subData.sources.length > 0) {
+      const source = subData.sources[0];
+      const rawVideoUrl = source.url.startsWith('http')
+        ? source.url
+        : `${proxyBase}${source.url}`;
+      const videoUrl = `/api/stream/hls?url=${encodeURIComponent(rawVideoUrl)}&referer=${encodeURIComponent('https://animetsu.net/')}`;
+      
+      const subtitles = (subData.subs || []).map((sub, i) => ({
+        id: i,
+        label: sub.lang || 'English',
+        file: sub.url
+      }));
+      
+      servers.push({
+        name: 'AniHD1',
+        videoUrl: videoUrl,
+        type: 'sub',
+        embedUrl: rawVideoUrl,
+        subtitles: subtitles,
+        isHLS: true
+      });
+    }
+  } catch (e) {
+    console.warn(`[Animetsu] Failed to fetch SUB streams: ${e.message}`);
   }
   
-  return { servers, animeTitle: best.title, slug: best.session };
+  // DUB query
+  try {
+    const dubUrl = `${domain}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=dub`;
+    const dubHtml = await xfetch(dubUrl, {
+      referer: domain,
+      timeout: 15000,
+      headers: {
+        'Origin': domain,
+        'Accept': 'application/json, text/plain, */*'
+      }
+    });
+    const dubData = JSON.parse(dubHtml);
+    if (dubData.sources && dubData.sources.length > 0) {
+      const source = dubData.sources[0];
+      const rawVideoUrl = source.url.startsWith('http')
+        ? source.url
+        : `${proxyBase}${source.url}`;
+      const videoUrl = `/api/stream/hls?url=${encodeURIComponent(rawVideoUrl)}&referer=${encodeURIComponent('https://animetsu.net/')}`;
+      
+      servers.push({
+        name: 'AniHD1 (DUB)',
+        videoUrl: videoUrl,
+        type: 'dub',
+        embedUrl: rawVideoUrl,
+        subtitles: [],
+        isHLS: true
+      });
+    }
+  } catch (e) {
+    console.warn(`[Animetsu] Failed to fetch DUB streams: ${e.message}`);
+  }
+  
+  if (servers.length === 0) {
+    throw new Error(`No video streams found for episode ${episode} on Animetsu`);
+  }
+  
+  return { servers, animeTitle: best.title, slug: best.id };
 }
+
 
 async function scrapeAniNeko(title, episode) {
   const domain  = ANINEKO;
@@ -1198,14 +1426,18 @@ async function scrapeAniNeko(title, episode) {
 
   if (!results.length) throw new Error(`Anime "${title}" not found on AniNeko`);
 
-  let best = results[0], maxScore = -1;
+  let best = null, maxScore = -1;
   for (const r of results) {
     const score = titleScore(r.title, title);
     if (score > maxScore) { maxScore = score; best = r; }
   }
-  if (maxScore === 0) best = results[0];
+  
+  const ConfidentThreshold = 0.75;
+  if (!best || maxScore < ConfidentThreshold) {
+    throw new Error(`No confident match on AniNeko for "${title}" (best score: ${maxScore.toFixed(2)})`);
+  }
 
-  console.log(`[AniNeko] Matched: "${best.title}" (slug=${best.slug})`);
+  console.log(`[AniNeko] Matched: "${best.title}" (slug=${best.slug}, score=${maxScore.toFixed(2)})`);
 
   const subUrl = `${domain}/watch/${best.slug}/ep-${episode}`;
   const urlsToFetch = [{ url: subUrl, isDubPage: best.slug.endsWith('-dub') }];
@@ -1385,17 +1617,17 @@ async function getServers(titles, episode) {
     return null;
   })();
 
-  // 3. Define AnimePahe scraper execution
+  // 3. Define Animetsu scraper execution
   const pahePromise = (async () => {
     for (const title of titles) {
       if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
       try {
-        console.log(`[Engine] AnimePahe trying: "${title}" ep ${episode}`);
-        const data = await scrapeAnimePahe(title, episode);
+        console.log(`[Engine] Animetsu trying: "${title}" ep ${episode}`);
+        const data = await scrapeAnimetsu(title, episode);
         if (data?.servers?.length) return data;
       } catch (e) {
-        console.warn(`[Engine] AnimePahe failed for "${title}": ${e.message}`);
-        errors.push(`AP[${title.slice(0, 30)}]: ${e.message}`);
+        console.warn(`[Engine] Animetsu failed for "${title}": ${e.message}`);
+        errors.push(`AM[${title.slice(0, 30)}]: ${e.message}`);
       }
     }
     return null;
@@ -1405,16 +1637,16 @@ async function getServers(titles, episode) {
   const [aniNekoData, aniWavesData, animePaheData] = await Promise.all([
     runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
     runWithTimeout(wavesPromise, 20000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(pahePromise, 35000, 'AnimePahe').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(pahePromise, 35000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
   ]);
 
-  // 5. Combine servers (AnimePahe / AniHD first, then AniNeko, then AniWaves)
+  // 5. Combine servers (Animetsu / AniHD first, then AniNeko, then AniWaves)
   const combinedServers = [];
   if (animePaheData?.servers?.length) {
     animePaheData.servers.forEach(s => {
       combinedServers.push({
         ...s,
-        name: s.name // AniHD (720p/1080p)
+        name: s.name // AniHD1 / AniHD1 (DUB)
       });
     });
   }
@@ -1446,13 +1678,14 @@ async function getServers(titles, episode) {
     isPartial: !aniNekoData || !aniWavesData || !animePaheData
   };
 
-  // Resolve M3U8 streams concurrently
+  // Resolve M3U8 streams concurrently (fast regex-only resolution on startup)
   console.log(`[Engine] Resolving HLS streams for ${result.servers.length} servers...`);
   const resolvedServers = await Promise.all(
     result.servers.map(async s => {
-      // Skip iframe-proxy URLs for resolveServerM3U8 (they're relative paths, not real URLs)
+      // If it's an iframe-proxy URL, skip startup resolution and let the client trigger on-demand extraction
       if (s.videoUrl.startsWith('/api/')) return s;
 
+      // Only attempt regex/plain-text resolve for direct URLs on startup (extremely fast)
       const m3u8Url = await resolveServerM3U8(s.videoUrl);
       if (m3u8Url) {
         let referer;
@@ -1464,7 +1697,8 @@ async function getServers(titles, episode) {
           isHLS: true
         };
       }
-      return s; // Fallback to iframe
+      
+      return s; // Fallback
     })
   );
 
@@ -1497,8 +1731,97 @@ export async function handleRequest(req, res) {
 
   const refererHeader = req.headers.referer || '';
   const isIframeProxy = refererHeader.includes('/api/iframe-proxy');
-  const myApis = ['/api/anineko-servers', '/api/ping', '/api/stream/hls', '/api/stream/segment', '/api/stream/subtitle', '/api/iframe-proxy'];
+  const myApis = ['/api/anineko-servers', '/api/ping', '/api/stream/hls', '/api/stream/segment', '/api/stream/subtitle', '/api/iframe-proxy', '/api/inject-cookie', '/api/solve-pahe'];
   const isMyApi = myApis.includes(pathname);
+
+  // GET /api/solve-pahe — Opens a visible headed tab to solve AnimePahe Cloudflare on-demand
+  if (pathname === '/api/solve-pahe') {
+    cors(res);
+    console.log('[Solver] User requested AnimePahe manual solve window...');
+    try {
+      const context = await getPlaywrightContext();
+      if (!context) throw new Error('Playwright context is not initialized');
+      
+      const page = await context.newPage();
+      console.log('[Solver] New solver tab opened, navigating to AnimePahe...');
+      await page.goto('https://animepahe.pw/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      console.log('[Solver] Loaded homepage, waiting for Turnstile solving...');
+      
+      let solved = false;
+      // Wait up to 60 seconds (120 * 500ms) for Turnstile to solve
+      for (let i = 0; i < 120; i++) {
+        await page.waitForTimeout(500);
+        
+        // If user manually closed the tab, abort
+        const isClosed = await page.evaluate(() => false).catch(() => true);
+        if (isClosed) {
+          console.log('[Solver] User closed the solver tab. Aborting solve.');
+          break;
+        }
+        
+        const title = await page.title().catch(() => '');
+        const cookies = await context.cookies().catch(() => []);
+        const hasClearance = cookies.some(c => c.name === 'cf_clearance');
+        if (hasClearance && !title.includes('Just a moment') && !title.includes('Cloudflare')) {
+          solved = true;
+          console.log('[Solver] Turnstile solved! clearance cookie captured.');
+          await syncCookiesFromPlaywright();
+          break;
+        }
+      }
+      
+      const isClosed = await page.evaluate(() => false).catch(() => true);
+      if (!isClosed) {
+        await page.close().catch(() => {});
+        console.log('[Solver] Solver tab closed.');
+      }
+      
+      if (solved) {
+        console.log('[Solver] Solve finished successfully!');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, message: 'AnimePahe Cloudflare challenge solved successfully!' }));
+      } else {
+        console.log('[Solver] Solve failed or timed out.');
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Solve timed out or browser tab was closed.' }));
+      }
+    } catch (e) {
+      console.error('[Solver] Error occurred:', e.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: e.message }));
+    }
+  }
+
+  // POST /api/inject-cookie — manually inject cookies for a domain (e.g. AnimePahe cf_clearance)
+  if (pathname === '/api/inject-cookie' && req.method === 'POST') {
+    cors(res);
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { domain, cookies } = JSON.parse(body);
+        if (!domain || !cookies) throw new Error('domain and cookies are required');
+        const ok = injectCookiesManually(domain, cookies);
+        res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok, message: ok ? `Cookies injected for ${domain}` : `Unknown domain: ${domain}` }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // GET /api/inject-cookie — check current cookieJar status
+  if (pathname === '/api/inject-cookie' && req.method === 'GET') {
+    cors(res);
+    const status = {};
+    for (const [domain, val] of Object.entries(cookieJar)) {
+      status[domain] = val ? `${val.split(';').length} cookies` : 'none';
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ status }));
+  }
 
   // Intercept relative assets from iframe-proxy
   if (isIframeProxy && !isMyApi) {
@@ -1532,10 +1855,21 @@ export async function handleRequest(req, res) {
         headersToForward['Origin'] = targetOrigin;
       }
       let clientCookie = req.headers.cookie || '';
-      let mergedCookie = '';
-      if (globalCookie) {
-        mergedCookie = globalCookie;
-      }
+
+      // Find domain-specific cookies from cookieJar for targetUrl
+      let targetDomain = '';
+      try {
+        const parsedTarget = new URL(targetUrl);
+        for (const d of Object.keys(cookieJar)) {
+          if (parsedTarget.hostname === d || parsedTarget.hostname.endsWith('.' + d)) {
+            targetDomain = d;
+            break;
+          }
+        }
+      } catch {}
+
+      const domainCookie = targetDomain ? cookieJar[targetDomain] : '';
+      let mergedCookie = domainCookie || globalCookie || '';
       if (clientCookie) {
         mergedCookie = mergedCookie ? `${mergedCookie}; ${clientCookie}` : clientCookie;
       }
@@ -1556,8 +1890,20 @@ export async function handleRequest(req, res) {
       
       const setCookieHeaders = sRes.headers.getSetCookie?.() || [];
       if (setCookieHeaders.length) {
-        const newCookies = setCookieHeaders.map(c => c.split(';')[0]).join('; ');
-        globalCookie = globalCookie ? `${globalCookie}; ${newCookies}` : newCookies;
+        const newCookies = setCookieHeaders.map(c => c.split(';')[0]);
+        if (targetDomain) {
+          const existing = cookieJar[targetDomain] ? cookieJar[targetDomain].split('; ') : [];
+          for (const nc of newCookies) {
+            const name = nc.split('=')[0];
+            const filtered = existing.filter(x => !x.startsWith(name + '='));
+            filtered.push(nc);
+            cookieJar[targetDomain] = filtered.join('; ');
+          }
+          globalCookie = Object.values(cookieJar).filter(Boolean).join('; ');
+        } else {
+          const newCookiesStr = newCookies.join('; ');
+          globalCookie = globalCookie ? `${globalCookie}; ${newCookiesStr}` : newCookiesStr;
+        }
         console.log(`[Iframe Proxy Asset] Captured cookies from ${req.url}:`, globalCookie);
         res.setHeader('Set-Cookie', setCookieHeaders);
       }
@@ -1849,8 +2195,12 @@ export async function handleRequest(req, res) {
         targetUrl.includes('echovideo.ru') || 
         targetUrl.includes('aniwaves.ru') || 
         targetUrl.includes('play.echovideo.ru') ||
+        targetUrl.includes('swiftstream.top') ||
+        targetUrl.includes('animetsu.net') ||
         referer.includes('aniwaves.ru') ||
-        referer.includes('echovideo.ru');
+        referer.includes('echovideo.ru') ||
+        referer.includes('swiftstream.top') ||
+        referer.includes('animetsu.net');
         
       if (needsReferer) {
         hHeaders['Referer'] = referer;
@@ -1885,10 +2235,18 @@ export async function handleRequest(req, res) {
       const host  = req.headers['x-forwarded-host'] || req.headers['host'] || 'anilab-backend.onrender.com';
       const selfBase = `${proto}://${host}`;
 
-      const lines = raw.split('\n').map(line => {
-        line = line.trim();
-        if (!line) return '';
+      const rawLines = raw.split('\n');
+      const processedLines = [];
+      let lastTag = '';
+      for (let i = 0; i < rawLines.length; i++) {
+        let line = rawLines[i].trim();
+        if (!line) {
+          processedLines.push('');
+          continue;
+        }
+        
         if (line.startsWith('#')) {
+          lastTag = line;
           if (line.startsWith('#EXT-X-KEY:')) {
             const match = line.match(/URI="([^"]+)"/);
             if (match) {
@@ -1896,10 +2254,11 @@ export async function handleRequest(req, res) {
               if (!keyUrl.startsWith('http')) keyUrl = new URL(keyUrl, baseUrl).href;
               let proxiedKey = `${selfBase}/api/stream/segment?url=${encodeURIComponent(keyUrl)}&referer=${encodeURIComponent(referer)}`;
               if (apiKeyParam) proxiedKey += `&api_key=${encodeURIComponent(apiKeyParam)}`;
-              return line.replace(match[1], proxiedKey);
+              line = line.replace(match[1], proxiedKey);
             }
           }
-          return line;
+          processedLines.push(line);
+          continue;
         }
 
         let absoluteUrl = line;
@@ -1907,10 +2266,12 @@ export async function handleRequest(req, res) {
           absoluteUrl = new URL(absoluteUrl, baseUrl).href;
         }
 
-        if (absoluteUrl.includes('.m3u8')) {
+        const isSubPlaylist = lastTag.startsWith('#EXT-X-STREAM-INF') || absoluteUrl.includes('.m3u8');
+        
+        if (isSubPlaylist) {
           let hlsUrl = `${selfBase}/api/stream/hls?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
           if (apiKeyParam) hlsUrl += `&api_key=${encodeURIComponent(apiKeyParam)}`;
-          return hlsUrl;
+          processedLines.push(hlsUrl);
         } else {
           // Hybrid Stream: Direct Play for Neko CDN segments (saves 99.9% bandwidth),
           // but proxy for Waves segments that require strict Referer headers to play.
@@ -1921,14 +2282,15 @@ export async function handleRequest(req, res) {
             absoluteUrl.includes('anizara.store');
 
           if (isNekoSegment) {
-            return absoluteUrl;
+            processedLines.push(absoluteUrl);
           } else {
             let segmentUrl = `${selfBase}/api/stream/segment?url=${encodeURIComponent(absoluteUrl)}&referer=${encodeURIComponent(referer)}`;
             if (apiKeyParam) segmentUrl += `&api_key=${encodeURIComponent(apiKeyParam)}`;
-            return segmentUrl;
+            processedLines.push(segmentUrl);
           }
         }
-      }).join('\n');
+      }
+      const lines = processedLines.join('\n');
 
       res.writeHead(200, {
         'Content-Type': 'application/vnd.apple.mpegurl',
@@ -2109,11 +2471,13 @@ export async function handleRequest(req, res) {
 
 export const server = createServer(handleRequest);
 
-if (process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1') {
-  server.listen(PORT, () => {
+// Start the HTTP server unless running as a Vercel serverless function.
+// NOTE: Hugging Face Spaces uses Docker/Node — it always needs server.listen().
+if (process.env.VERCEL !== '1') {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('  🚀 AniLab Stream Engine v5 (AniWaves + AniNeko)');
-    console.log(`  ➜  http://localhost:${PORT}`);
+    console.log(`  ➜  http://0.0.0.0:${PORT}`);
     console.log('');
   });
 
@@ -2122,3 +2486,4 @@ if (process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1') {
     else console.error(e.message);
   });
 }
+

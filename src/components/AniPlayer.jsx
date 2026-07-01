@@ -506,6 +506,52 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     setTimeout(() => { setSwipeBri(false); setSwipeVol(false); }, 900);
   }, [handleTap]);
 
+  // Programmatic touch event binding to support preventDefault() during swipes on Android
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+
+    const handleTouchStart = (e) => {
+      lastTouchTime.current = Date.now();
+      const t = e.touches[0];
+      if (t) onGestureStart(t.clientX, t.clientY);
+    };
+
+    const handleTouchMove = (e) => {
+      // Prevent Android scroll/bounce if actively swiping volume/brightness or dragging seek
+      if (seekDrag.current || (gesture.current && gesture.current.moved)) {
+        if (e.cancelable) e.preventDefault();
+      }
+      const t = e.touches[0];
+      if (t) onGestureMove(t.clientX, t.clientY);
+    };
+
+    const handleTouchEnd = (e) => {
+      lastTouchTime.current = Date.now();
+      if (seekDrag.current) {
+        seekDrag.current = false;
+        return;
+      }
+      const t = e.changedTouches[0] || e.touches[0];
+      if (t) {
+        onGestureEnd(t.clientX, t.clientY);
+      } else {
+        gesture.current = null;
+        setTimeout(() => { setSwipeBri(false); setSwipeVol(false); }, 900);
+      }
+    };
+
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [onGestureStart, onGestureMove, onGestureEnd]);
+
   /* ─── Derived ─────────────────────────────────────────────── */
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
@@ -520,23 +566,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       className={['anip', fs ? 'anip--fs' : '', ctrlVis ? 'anip--ctrl' : '', isTouch() ? 'anip--touch' : ''].filter(Boolean).join(' ')}
       onMouseMove={() => { if (!isTouch()) showCtrl(); }}
       onMouseLeave={() => { if (!isTouch() && playing) setCtrlVis(false); }}
-      /* touch */
-      onTouchStart={e => {
-        lastTouchTime.current = Date.now();
-        const t = e.touches[0];
-        onGestureStart(t.clientX, t.clientY);
-      }}
-      onTouchMove={e => {
-        if (seekDrag.current) return;
-        const t = e.touches[0];
-        onGestureMove(t.clientX, t.clientY);
-      }}
-      onTouchEnd={e => {
-        lastTouchTime.current = Date.now();
-        if (seekDrag.current) { seekDrag.current = false; return; }
-        const t = e.changedTouches[0];
-        onGestureEnd(t.clientX, t.clientY);
-      }}
       /* mouse */
       onMouseDown={e => {
         if (Date.now() - lastTouchTime.current < 800) return;
@@ -558,8 +587,15 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       />
 
       {/* ── BLACK LOADING BG: Covers grey browser poster/play icon ── */}
-      {!hasStarted && !hlsErr && !needsTap && (
-        <div className="anip__loading-bg" />
+      {(!hasStarted || needsTap) && !hlsErr && (
+        <div 
+          className="anip__loading-bg" 
+          onClick={() => {
+            const v = videoRef.current;
+            if (v) v.play().then(() => setNeedsTap(false)).catch(e => console.log('Tap to play failed:', e));
+          }}
+          style={{ cursor: 'pointer' }}
+        />
       )}
 
       {/* ── Custom Subtitle Overlay ─────────────────────────── */}
@@ -573,22 +609,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
               </span>
             ))}
           </span>
-        </div>
-      )}
-
-      {/* ── Tap-to-play overlay (autoplay blocked by browser) ── */}
-      {needsTap && !hlsErr && (
-        <div
-          className="anip__tap-play"
-          onClick={() => {
-            const v = videoRef.current;
-            if (v) v.play().then(() => setNeedsTap(false)).catch(() => {});
-          }}
-        >
-          <div className="anip__tap-play__circle">
-            <Play size={38} fill="#fff" strokeWidth={0} />
-          </div>
-          <span className="anip__tap-play__label">Tap to Play</span>
         </div>
       )}
 
@@ -613,8 +633,8 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         </div>
       )}
 
-      {/* ── buffering spinner ───────────────────────────────── */}
-      {waiting && (
+      {/* ── buffering spinner / loading spinner ─────────────── */}
+      {(waiting || !hasStarted || needsTap) && !hlsErr && (
         <div className="anip__spinner">
           <div className="anip__spinner-ring" />
         </div>
@@ -666,19 +686,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
           </span>
         </div>
 
-        {/* ── Centered Controls (Play / Pause Only) ── */}
-        <div className="anip__center-ctrls" 
-          onClick={e => e.stopPropagation()}
-          onMouseDown={e => e.stopPropagation()}
-          onMouseUp={e => e.stopPropagation()}
-          onTouchStart={e => e.stopPropagation()}
-          onTouchEnd={e => e.stopPropagation()}
-        >
-          {/* Play / Pause */}
-          <button className="anip__center-btn anip__center-btn--play" onClick={togglePlay}>
-            {playing ? <Pause size={28} fill="#fff" strokeWidth={0} /> : <Play size={28} fill="#fff" strokeWidth={0} style={{ marginLeft: 4 }} />}
-          </button>
-        </div>
 
         {/* ── Spacer (click to toggle controls) ────────────── */}
         <div className="anip__spacer" />

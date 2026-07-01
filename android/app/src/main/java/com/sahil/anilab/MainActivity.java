@@ -50,5 +50,18 @@ public class MainActivity extends BridgeActivity {
         // LAYER_TYPE_HARDWARE causes a separate GPU texture that blocks video output.
         // LAYER_TYPE_SOFTWARE is too slow for 720p decode.
         webView.setLayerType(WebView.LAYER_TYPE_NONE, null);
+
+        // ── Native Feel Optimizations ──────────────────────────────────
+        // Disable scroll overscroll bounce/glow effect
+        webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
+
+        // Disable native Android long-press selection menu/handlers
+        webView.setOnLongClickListener(new android.view.View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(android.view.View v) {
+                return true; // Consume the long-press event
+            }
+        });
+        webView.setLongClickable(false);
     }
 }

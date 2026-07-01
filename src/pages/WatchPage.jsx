@@ -39,6 +39,8 @@ export default function WatchPage() {
 
   const episode = Math.max(1, parseInt(ep) || 1);
 
+
+
   // Check proxy status
   useEffect(() => { checkProxy().then(setProxyUp); }, []);
 
@@ -245,13 +247,12 @@ export default function WatchPage() {
 
         {/* Loading state */}
         {(loadAnime || loadStream) && (
-          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:18, padding:24, position:'relative' }}>
+          <div style={{ aspectRatio:'16/9', background:'#000', display:'flex', alignItems:'center', justifyContent:'center', position:'relative' }}>
             {/* Back button on loading screen */}
             <button onClick={() => navigate(`/anime/${id}`, { replace: true })} id="watch-back"
-              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff' }}
+              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff', zIndex: 10 }}
             ><ArrowLeft size={17} color="#fff"/></button>
-            <Loader size={44} color="#e50914" style={{ animation:'spin 0.9s linear infinite' }}/>
-            <p style={{ color:'#fff', fontSize:14, fontWeight:600 }}>Loading...</p>
+            <Loader size={38} color="rgba(255,255,255,0.7)" style={{ animation:'spin 1s linear infinite' }}/>
           </div>
         )}
 
@@ -272,12 +273,11 @@ export default function WatchPage() {
 
         {/* Extracting state (Puppeteer running) */}
         {!loadAnime && !loadStream && extracting && !streamErr && (
-          <div style={{ aspectRatio:'16/9', background:'#070707', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:18, padding:24, position:'relative' }}>
+          <div style={{ aspectRatio:'16/9', background:'#000', display:'flex', alignItems:'center', justifyContent:'center', position:'relative' }}>
             <button onClick={() => navigate(`/anime/${id}`, { replace: true })}
-              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff' }}
+              style={{ position:'absolute', top:12, left:12, width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.15)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', color:'#fff', zIndex: 10 }}
             ><ArrowLeft size={17} color="#fff"/></button>
-            <Loader size={44} color="#e50914" style={{ animation:'spin 0.9s linear infinite' }}/>
-            <p style={{ color:'#fff', fontSize:14, fontWeight:600 }}>Loading...</p>
+            <Loader size={38} color="rgba(255,255,255,0.7)" style={{ animation:'spin 1s linear infinite' }}/>
           </div>
         )}
 
@@ -328,50 +328,58 @@ export default function WatchPage() {
               Select Server
             </p>
 
-            {/* Segmented Control for Sub / Dub if both are available */}
-            {hasDub && (
-              <div style={{
-                display: 'flex',
-                background: 'rgba(255,255,255,0.03)',
-                borderRadius: 24,
-                padding: 3,
-                marginBottom: 14,
-                border: '1px solid var(--border)'
-              }}>
-                <button
-                  onClick={() => {
-                    localStorage.setItem('anilab_preferred_track', 'sub');
-                    setAudioTrack('sub');
-                    if (subServers.length > 0) selectServer(subServers[0]);
-                  }}
-                  style={{
-                    flex: 1, padding: '7px 0', border: 'none',
-                    background: audioTrack === 'sub' ? 'var(--accent)' : 'transparent',
-                    color: audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)',
-                    fontSize: 12, fontWeight: 700, borderRadius: 20,
-                    cursor: 'pointer', transition: 'all 0.2s'
-                  }}
-                >
-                  Subtitled (SUB)
-                </button>
-                <button
-                  onClick={() => {
-                    localStorage.setItem('anilab_preferred_track', 'dub');
-                    setAudioTrack('dub');
-                    if (dubServers.length > 0) selectServer(dubServers[0]);
-                  }}
-                  style={{
-                    flex: 1, padding: '7px 0', border: 'none',
-                    background: audioTrack === 'dub' ? 'var(--accent)' : 'transparent',
-                    color: audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)',
-                    fontSize: 12, fontWeight: 700, borderRadius: 20,
-                    cursor: 'pointer', transition: 'all 0.2s'
-                  }}
-                >
-                  Dubbed (DUB)
-                </button>
-              </div>
-            )}
+            {/* Segmented Control for Sub / Dub */}
+            <div style={{
+              display: 'flex',
+              background: 'rgba(255,255,255,0.03)',
+              borderRadius: 24,
+              padding: 3,
+              marginBottom: 14,
+              border: '1px solid var(--border)'
+            }}>
+              <button
+                disabled={subServers.length === 0}
+                onClick={() => {
+                  localStorage.setItem('anilab_preferred_track', 'sub');
+                  setAudioTrack('sub');
+                  if (subServers.length > 0) selectServer(subServers[0]);
+                }}
+                style={{
+                  flex: 1, padding: '7px 0', border: 'none',
+                  background: audioTrack === 'sub' ? 'var(--accent)' : 'transparent',
+                  color: subServers.length === 0 
+                    ? 'rgba(255,255,255,0.15)' 
+                    : (audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)'),
+                  opacity: subServers.length === 0 ? 0.35 : 1,
+                  fontSize: 12, fontWeight: 700, borderRadius: 20,
+                  cursor: subServers.length === 0 ? 'not-allowed' : 'pointer', 
+                  transition: 'all 0.2s'
+                }}
+              >
+                Subtitled (SUB)
+              </button>
+              <button
+                disabled={dubServers.length === 0}
+                onClick={() => {
+                  localStorage.setItem('anilab_preferred_track', 'dub');
+                  setAudioTrack('dub');
+                  if (dubServers.length > 0) selectServer(dubServers[0]);
+                }}
+                style={{
+                  flex: 1, padding: '7px 0', border: 'none',
+                  background: audioTrack === 'dub' ? 'var(--accent)' : 'transparent',
+                  color: dubServers.length === 0 
+                    ? 'rgba(255,255,255,0.15)' 
+                    : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
+                  opacity: dubServers.length === 0 ? 0.35 : 1,
+                  fontSize: 12, fontWeight: 700, borderRadius: 20,
+                  cursor: dubServers.length === 0 ? 'not-allowed' : 'pointer', 
+                  transition: 'all 0.2s'
+                }}
+              >
+                Dubbed (DUB)
+              </button>
+            </div>
 
             {/* Active Track Server List */}
             <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -397,6 +405,9 @@ export default function WatchPage() {
                 );
               })}
             </div>
+
+
+
           </div>
         )}
 

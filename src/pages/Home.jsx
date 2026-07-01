@@ -92,8 +92,8 @@ export default function Home() {
 
       {/* ── Fixed Premium Header ─────────────────────────────────── */}
       <div style={{
-        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', right: 0, zIndex: 90,
-        width: '100%', maxWidth: 430,
+        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', zIndex: 90,
+        width: '100%', maxWidth: 480,
         padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: scrolled ? 'rgba(15, 15, 15, 0.75)' : 'rgba(15, 15, 15, 0)',
