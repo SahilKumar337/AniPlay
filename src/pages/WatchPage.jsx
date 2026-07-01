@@ -284,6 +284,7 @@ export default function WatchPage() {
         {/* ── Native HLS Player (AniPlayer) ───────────────── */}
         {!loadAnime && !loadStream && !extracting && activeUrl && isActiveHLS && !streamErr && (
           <AniPlayer
+            key={activeUrl}
             url={activeUrl}
             title={`${title} – Episode ${episode}`}
             subtitleTracks={activeServer?.subtitles || []}
