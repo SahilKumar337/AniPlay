@@ -54,7 +54,7 @@
   inset: 0;
   background: #000;
   z-index: 9;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 /* ── Buffering spinner ─────────────────────────────────────── */

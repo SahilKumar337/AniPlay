@@ -246,23 +246,71 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     }
   }, [activeSub]);
 
-  // Fetch JSON subtitles from proxied URL when activeSub changes
+  // Fetch and parse subtitles when activeSub changes
   useEffect(() => {
-    if (activeSub !== -1 && subs[activeSub] && subs[activeSub].file) {
-      log(`Fetching JSON subtitles from: ${subs[activeSub].file}`);
-      fetch(subs[activeSub].file)
-        .then(r => r.json())
-        .then(data => {
-          log(`Loaded ${data.length} subtitle cues`);
-          setCues(data);
-        })
-        .catch(err => {
-          log(`Failed to fetch subtitles: ${err.message}`);
-          setCues([]);
-        });
-    } else {
+    if (activeSub === -1 || !subs[activeSub]?.file) {
       setCues([]);
+      return;
     }
+
+    const url = subs[activeSub].file;
+    log(`Fetching subtitles from: ${url}`);
+
+    fetch(url)
+      .then(r => r.text())
+      .then(text => {
+        // Try JSON first (some scrapers return [{startTime, endTime, text}])
+        if (text.trimStart().startsWith('[') || text.trimStart().startsWith('{')) {
+          try {
+            const data = JSON.parse(text);
+            log(`Loaded ${data.length} subtitle cues (JSON format)`);
+            setCues(Array.isArray(data) ? data : []);
+            return;
+          } catch {}
+        }
+
+        // Parse WebVTT format
+        if (text.includes('WEBVTT') || text.includes('-->')) {
+          const parsed = [];
+          // Split on double newline (cue separator)
+          const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
+          for (const block of blocks) {
+            const lines = block.trim().split('\n');
+            // Find the timestamp line
+            const tsIdx = lines.findIndex(l => l.includes('-->'));
+            if (tsIdx === -1) continue;
+            const tsParts = lines[tsIdx].split('-->');
+            if (tsParts.length < 2) continue;
+
+            const parseTime = (t) => {
+              // Handle HH:MM:SS.mmm or MM:SS.mmm
+              const parts = t.trim().replace(',', '.').split(':');
+              let secs = 0;
+              if (parts.length === 3) secs = +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
+              else if (parts.length === 2) secs = +parts[0] * 60 + parseFloat(parts[1]);
+              return secs;
+            };
+
+            const startTime = parseTime(tsParts[0]);
+            const endTime = parseTime(tsParts[1].split(' ')[0]);
+            const text = lines.slice(tsIdx + 1).join('\n').trim();
+
+            if (text && isFinite(startTime) && isFinite(endTime)) {
+              parsed.push({ startTime, endTime, text });
+            }
+          }
+          log(`Loaded ${parsed.length} subtitle cues (WebVTT format)`);
+          setCues(parsed);
+          return;
+        }
+
+        log('Unknown subtitle format — could not parse');
+        setCues([]);
+      })
+      .catch(err => {
+        log(`Failed to fetch subtitles: ${err.message}`);
+        setCues([]);
+      });
   }, [activeSub, subs, log]);
 
   /* ── Video events ─────────────────────────────────────────── */
@@ -290,9 +338,12 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     const onPlay = (e) => {
       log(`Video event: playing/canplay (event: ${e.type})`);
       setWaiting(false);
-      setNeedsTap(false);
-      setHasStarted(true);
+      if (e.type === 'playing') {
+        setNeedsTap(false);
+        setHasStarted(true);
+      }
     };
+
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
     v.addEventListener('timeupdate',      sync);
