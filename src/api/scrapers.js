@@ -34,6 +34,10 @@ function formatIframeProxyUrl(targetUrl, referer) {
   return `${PROXY}/api/iframe-proxy?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
 }
 
+const wavesSearchCache = new Map();
+const nekoSearchCache = new Map();
+const animetsuSearchCache = new Map();
+
 // ── Helper Matching Functions ──
 
 function norm(s) {
@@ -246,7 +250,12 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
 }
 
 export async function scrapeAniWaves(title, episode) {
-  const { slug, animeId, animeTitle } = await awSearch(title);
+  let searchResult = wavesSearchCache.get(title);
+  if (!searchResult) {
+    searchResult = await awSearch(title);
+    wavesSearchCache.set(title, searchResult);
+  }
+  const { slug, animeId, animeTitle } = searchResult;
   const rawServers = await awGetServers(animeId, episode, slug);
   const subServers = rawServers.filter(s => s.type === 'sub');
   const dubServers = rawServers.filter(s => s.type === 'dub');
@@ -282,39 +291,49 @@ export async function scrapeAniWaves(title, episode) {
 // ── AniNeko Scraper ──
 
 export async function scrapeAniNeko(title, episode) {
-  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const words = cleanTitle.split(' ').filter(w => w.length > 1);
-  let searchQueries = [cleanTitle];
-  if (words.length > 1) {
-    searchQueries.push(words.slice(0, 3).join(' '));
-    searchQueries.push(words.slice(0, 2).join(' '));
+  let best, results;
+  const cached = nekoSearchCache.get(title);
+  if (cached) {
+    best = cached.best;
+    results = cached.results;
+  } else {
+    const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const words = cleanTitle.split(' ').filter(w => w.length > 1);
+    let searchQueries = [cleanTitle];
+    if (words.length > 1) {
+      searchQueries.push(words.slice(0, 3).join(' '));
+      searchQueries.push(words.slice(0, 2).join(' '));
+    }
+    searchQueries.push(getLongestWord(title));
+    searchQueries = [...new Set(searchQueries)].filter(Boolean);
+
+    results = [];
+    const re = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
+
+    for (const keyword of searchQueries) {
+      try {
+        const searchHtml = await clientFetch(`${ANINEKO}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: ANINEKO, timeout: 20000 });
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(searchHtml)) !== null) {
+          results.push({ slug: m[1], title: m[2].trim() });
+        }
+        if (results.length > 0) break;
+      } catch {}
+    }
+
+    if (!results.length) throw new Error(`Anime not found on AniNeko`);
+
+    best = results[0];
+    let maxScore = -1;
+    for (const r of results) {
+      const score = titleScore(r.title, title);
+      if (score > maxScore) { maxScore = score; best = r; }
+    }
+    if (!best || maxScore < 0.4) throw new Error(`No match on AniNeko`);
+
+    nekoSearchCache.set(title, { best, results });
   }
-  searchQueries.push(getLongestWord(title));
-  searchQueries = [...new Set(searchQueries)].filter(Boolean);
-
-  let results = [];
-  const re = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
-
-  for (const keyword of searchQueries) {
-    try {
-      const searchHtml = await clientFetch(`${ANINEKO}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: ANINEKO, timeout: 20000 });
-      re.lastIndex = 0;
-      let m;
-      while ((m = re.exec(searchHtml)) !== null) {
-        results.push({ slug: m[1], title: m[2].trim() });
-      }
-      if (results.length > 0) break;
-    } catch {}
-  }
-
-  if (!results.length) throw new Error(`Anime not found on AniNeko`);
-
-  let best = results[0], maxScore = -1;
-  for (const r of results) {
-    const score = titleScore(r.title, title);
-    if (score > maxScore) { maxScore = score; best = r; }
-  }
-  if (!best || maxScore < 0.4) throw new Error(`No match on AniNeko`);
 
   const subUrl = `${ANINEKO}/watch/${best.slug}/ep-${episode}`;
   const urlsToFetch = [{ url: subUrl, isDubPage: best.slug.endsWith('-dub') }];
@@ -384,39 +403,45 @@ export async function scrapeAniNeko(title, episode) {
 // ── Animetsu Scraper ──
 
 export async function scrapeAnimetsu(title, episode) {
-  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const words = cleanTitle.split(' ').filter(w => w.length > 1);
-  let searchQueries = [cleanTitle];
-  if (words.length > 1) {
-    searchQueries.push(words.slice(0, 3).join(' '));
-    searchQueries.push(words.slice(0, 2).join(' '));
-  }
-  searchQueries.push(getLongestWord(title));
-  searchQueries = [...new Set(searchQueries)].filter(Boolean);
+  let best = animetsuSearchCache.get(title);
+  if (!best) {
+    const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const words = cleanTitle.split(' ').filter(w => w.length > 1);
+    let searchQueries = [cleanTitle];
+    if (words.length > 1) {
+      searchQueries.push(words.slice(0, 3).join(' '));
+      searchQueries.push(words.slice(0, 2).join(' '));
+    }
+    searchQueries.push(getLongestWord(title));
+    searchQueries = [...new Set(searchQueries)].filter(Boolean);
 
-  let results = [];
-  for (const query of searchQueries) {
-    try {
-      const searchUrl = `${ANIMETSU}/v2/api/anime/search/?query=${encodeURIComponent(query)}`;
-      const searchHtml = await clientFetch(searchUrl, { referer: `${ANIMETSU}/watch/`, timeout: 15000 });
-      const searchData = JSON.parse(searchHtml);
-      if (searchData.results && searchData.results.length > 0) {
-        searchData.results.forEach(r => {
-          results.push({ id: r.id, title: r.title.english || r.title.romaji || r.title.native || '' });
-        });
-        break;
-      }
-    } catch {}
-  }
+    let results = [];
+    for (const query of searchQueries) {
+      try {
+        const searchUrl = `${ANIMETSU}/v2/api/anime/search/?query=${encodeURIComponent(query)}`;
+        const searchHtml = await clientFetch(searchUrl, { referer: `${ANIMETSU}/watch/`, timeout: 15000 });
+        const searchData = JSON.parse(searchHtml);
+        if (searchData.results && searchData.results.length > 0) {
+          searchData.results.forEach(r => {
+            results.push({ id: r.id, title: r.title.english || r.title.romaji || r.title.native || '' });
+          });
+          break;
+        }
+      } catch {}
+    }
 
-  if (!results.length) throw new Error(`Anime not found on Animetsu`);
+    if (!results.length) throw new Error(`Anime not found on Animetsu`);
 
-  let best = results[0], maxScore = -1;
-  for (const r of results) {
-    const score = titleScore(r.title, title);
-    if (score > maxScore) { maxScore = score; best = r; }
+    best = results[0];
+    let maxScore = -1;
+    for (const r of results) {
+      const score = titleScore(r.title, title);
+      if (score > maxScore) { maxScore = score; best = r; }
+    }
+    if (!best || maxScore < 0.4) throw new Error(`No match on Animetsu`);
+
+    animetsuSearchCache.set(title, best);
   }
-  if (!best || maxScore < 0.4) throw new Error(`No match on Animetsu`);
 
   const epsUrl = `${ANIMETSU}/v2/api/anime/eps/${best.id}`;
   const epsHtml = await clientFetch(epsUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });

@@ -17,6 +17,17 @@ function runWithTimeout(promise, ms, name) {
   ]);
 }
 
+export function getCachedServers(anime, episode) {
+  const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
+  if (clientStreamCache.has(cacheKey)) {
+    const cached = clientStreamCache.get(cacheKey);
+    if (Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.data;
+    }
+  }
+  return null;
+}
+
 export async function getAniNekoServers(anime, episode) {
   const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}`;
   
@@ -90,9 +101,9 @@ export async function getAniNekoServers(anime, episode) {
 
   // Run all scrapers concurrently
   const [nekoData, wavesData, animetsuData] = await Promise.all([
-    runWithTimeout(nekoPromise, 10000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
     runWithTimeout(wavesPromise, 8000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(animetsuPromise, 10000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(animetsuPromise, 12000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
   ]);
 
   // Combine servers in priority order: Animetsu -> Neko -> Waves

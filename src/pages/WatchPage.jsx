@@ -5,7 +5,7 @@ import {
   AlertCircle, RefreshCw, Wifi, WifiOff, Loader, Tv
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
-import { getAniNekoServers, checkProxy } from '../api/stream';
+import { getAniNekoServers, getCachedServers, checkProxy } from '../api/stream';
 import Navbar      from '../components/Navbar';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
@@ -144,6 +144,40 @@ export default function WatchPage() {
 
     if (anime.status === 'NOT_YET_RELEASED') {
       setStreamErr('This anime has not been released yet.');
+      return;
+    }
+
+    // Check synchronous cache first to achieve instant rendering
+    const cachedResult = getCachedServers(anime, episode);
+    if (cachedResult?.servers?.length) {
+      console.log('[WatchPage] [Instant Cache Hit] Bypassing loading state transition');
+      setStreamErr(null);
+      setServers(cachedResult.servers);
+      
+      const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
+      let matchingServers = cachedResult.servers.filter(s => s.type === preferredTrack);
+      if (matchingServers.length === 0) {
+        matchingServers = cachedResult.servers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+      }
+      const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                     || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                     || matchingServers[0]
+                     || cachedResult.servers[0];
+      
+      setActiveType(preferred.type || 'sub');
+      setAudioTrack(preferred.type || 'sub');
+      
+      // Select server directly
+      selectServer(preferred, cachedResult.servers);
+
+      // Trigger background prefetch for the next episode
+      const nextEp = episode + 1;
+      const maxEps = anime.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+      if (nextEp <= maxEps) {
+        getAniNekoServers(anime, nextEp).catch(() => {});
+      }
+      
+      setLoadStream(false);
       return;
     }
 
