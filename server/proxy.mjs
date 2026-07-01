@@ -361,9 +361,13 @@ async function playwrightExtractM3U8(embedUrl) {
   console.log(`[Playwright] Launching isolated page context for: ${embedUrl.slice(0, 100)}`);
   
   // Create isolated context with user agent and referer
+  let refererHeader = AW + '/';
+  if (embedUrl.includes('kwik.cx')) {
+    refererHeader = 'https://animepahe.ru/';
+  }
   const context = await browser.newContext({
     userAgent: UA,
-    extraHTTPHeaders: { 'Referer': AW + '/' }
+    extraHTTPHeaders: { 'Referer': refererHeader }
   });
 
   return new Promise(async (resolve, reject) => {
@@ -668,7 +672,12 @@ async function xfetch(url, opts = {}) {
       const text = await r.text();
       // Check if we hit Turnstile or Cloudflare protection in the response body
       const hasCf = text.includes('Cloudflare') || text.includes('Just a moment') || text.includes('Attention Required!');
-      if (!hasCf) {
+      
+      // If we query a JSON endpoint but receive HTML, standard fetch was blocked/challenged!
+      const isJsonUrl = url.includes('/api?') || url.includes('/api/');
+      const isHtmlResponse = text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html');
+      
+      if (!hasCf && !(isJsonUrl && isHtmlResponse)) {
         const setCookies = r.headers.getSetCookie?.() || [];
         if (setCookies.length) {
           const newCookies = setCookies.map(c => c.split(';')[0]).join('; ');
@@ -682,7 +691,7 @@ async function xfetch(url, opts = {}) {
   }
 
   // Fallback to Playwright if standard fetch was blocked/failed
-  if ((url.includes('aniwaves.ru') || url.includes('aniwave.')) && isPlaywrightAvailable) {
+  if ((url.includes('aniwaves.ru') || url.includes('aniwave.') || url.includes('animepahe.') || url.includes('kwik.cx')) && isPlaywrightAvailable) {
     try {
       return await playwrightFetch(url, opts.referer);
     } catch (e) {
@@ -992,6 +1001,133 @@ function getLongestWord(title) {
   return words.reduce((a, b) => a.length > b.length ? a : b);
 }
 
+// ══════════════════════════════════════════════════════════════════
+// ANIMEPAHE FALLBACK SCRAPER (AniHD)
+// ══════════════════════════════════════════════════════════════════
+async function scrapeAnimePahe(title, episode) {
+  const domain = 'https://animepahe.ru';
+  
+  // Clean the title and split into words for keyword permutation fallbacks
+  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = cleanTitle.split(' ').filter(w => w.length > 1);
+  
+  let searchQueries = [];
+  searchQueries.push(cleanTitle); // Try full clean title first!
+  if (words.length > 1) {
+    searchQueries.push(words.slice(0, 3).join(' ')); // Try first 3 words
+    searchQueries.push(words.slice(0, 2).join(' ')); // Try first 2 words
+  }
+  searchQueries.push(getLongestWord(title)); // Try longest word
+  searchQueries = [...new Set(searchQueries)].filter(Boolean);
+  
+  let results = [];
+  
+  // 1. Search for anime on AnimePahe
+  for (const query of searchQueries) {
+    console.log(`[AnimePahe] Searching: "${query}" (original: "${title}")`);
+    try {
+      const searchUrl = `${domain}/api?m=search&q=${encodeURIComponent(query)}`;
+      const searchHtml = await xfetch(searchUrl, { referer: domain, timeout: 25000 });
+      const searchData = JSON.parse(searchHtml);
+      if (searchData.data && searchData.data.length > 0) {
+        searchData.data.forEach(r => {
+          results.push({ id: r.id, title: r.title.trim(), session: r.session });
+        });
+        break;
+      }
+    } catch (e) {
+      console.warn(`[AnimePahe] Search failed for "${query}": ${e.message}`);
+    }
+  }
+  
+  if (!results.length) throw new Error(`Anime "${title}" not found on AnimePahe`);
+  
+  // Find best match by scoring
+  let best = results[0], maxScore = -1;
+  for (const r of results) {
+    const score = titleScore(r.title, title);
+    if (score > maxScore) { maxScore = score; best = r; }
+  }
+  
+  console.log(`[AnimePahe] Matched: "${best.title}" (session=${best.session})`);
+  
+  // 2. Fetch episodes list direct to the calculated page
+  const page = Math.floor((Number(episode) - 1) / 30) + 1;
+  const releaseUrl = `${domain}/api?m=release&id=${best.session}&sort=episode_asc&page=${page}`;
+  
+  let releaseHtml;
+  try {
+    releaseHtml = await xfetch(releaseUrl, { referer: domain, timeout: 25000 });
+  } catch (e) {
+    throw new Error(`Failed to fetch episodes list for "${best.title}": ${e.message}`);
+  }
+  
+  const releaseData = JSON.parse(releaseHtml);
+  if (!releaseData.data || !releaseData.data.length) {
+    throw new Error(`No episodes found for "${best.title}" on page ${page}`);
+  }
+  
+  // Find exact episode match
+  const epItem = releaseData.data.find(x => Number(x.episode) === Number(episode));
+  if (!epItem) {
+    throw new Error(`Episode ${episode} not found for "${best.title}" on page ${page}`);
+  }
+  
+  console.log(`[AnimePahe] Episode ${episode} found! Session: ${epItem.session}`);
+  
+  // 3. Fetch play page HTML
+  const playUrl = `${domain}/play/${best.session}/${epItem.session}`;
+  let playHtml;
+  try {
+    playHtml = await xfetch(playUrl, { referer: domain, timeout: 25000 });
+  } catch (e) {
+    throw new Error(`Failed to fetch play page for episode ${episode}: ${e.message}`);
+  }
+  
+  // 4. Parse resolutions and Kwik URLs
+  const rawServers = [];
+  const re = /(?:href|data-src|data-video)="([^"]*kwik[^"]*)"[^>]*>([\s\S]*?)<\/(?:a|button)/gi;
+  let m;
+  while ((m = re.exec(playHtml)) !== null) {
+    const kwikUrl = m[1];
+    const label = m[2].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim(); // e.g. "720p" or "1080p"
+    rawServers.push({ kwikUrl, label });
+  }
+  
+  // Fallback if regex fails to match resolutions
+  if (rawServers.length === 0) {
+    const fallbackRe = /https:\/\/kwik\.cx\/e\/[a-zA-Z0-9]+/g;
+    const matches = playHtml.match(fallbackRe) || [];
+    for (const link of matches) {
+      rawServers.push({ kwikUrl: link, label: '720p' });
+    }
+  }
+  
+  if (rawServers.length === 0) {
+    throw new Error(`No video links found for episode ${episode} on AnimePahe`);
+  }
+  
+  // Deduplicate and format as server options
+  const seenUrls = new Set();
+  const servers = [];
+  for (const s of rawServers) {
+    if (seenUrls.has(s.kwikUrl)) continue;
+    seenUrls.add(s.kwikUrl);
+    
+    // Format the URL as an iframe-proxy so WatchPage knows it's an embed
+    const proxiedIframeUrl = `/api/stream/iframe-proxy?url=${encodeURIComponent(s.kwikUrl)}&referer=${encodeURIComponent('https://animepahe.ru/')}`;
+    
+    servers.push({
+      name: `AniHD (${s.label})`,
+      videoUrl: proxiedIframeUrl,
+      type: 'sub',
+      subtitles: []
+    });
+  }
+  
+  return { servers, animeTitle: best.title, slug: best.session };
+}
+
 async function scrapeAniNeko(title, episode) {
   const domain  = ANINEKO;
   
@@ -1218,15 +1354,39 @@ async function getServers(titles, episode) {
     return null;
   })();
 
-  // 3. Execute both scrapers concurrently. Allow AniWaves up to 20s (plain fetch needs more time without a warm browser).
-  const [aniNekoData, aniWavesData] = await Promise.all([
+  // 3. Define AnimePahe scraper execution
+  const pahePromise = (async () => {
+    for (const title of titles) {
+      if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
+      try {
+        console.log(`[Engine] AnimePahe trying: "${title}" ep ${episode}`);
+        const data = await scrapeAnimePahe(title, episode);
+        if (data?.servers?.length) return data;
+      } catch (e) {
+        console.warn(`[Engine] AnimePahe failed for "${title}": ${e.message}`);
+        errors.push(`AP[${title.slice(0, 30)}]: ${e.message}`);
+      }
+    }
+    return null;
+  })();
+
+  // 4. Execute all scrapers concurrently.
+  const [aniNekoData, aniWavesData, animePaheData] = await Promise.all([
     runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 20000, 'AniWaves').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(wavesPromise, 20000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(pahePromise, 15000, 'AnimePahe').catch(e => { console.warn(e.message); return null; })
   ]);
 
-
-  // 3. Combine servers from both scrapers
+  // 5. Combine servers (AnimePahe / AniHD first, then AniNeko, then AniWaves)
   const combinedServers = [];
+  if (animePaheData?.servers?.length) {
+    animePaheData.servers.forEach(s => {
+      combinedServers.push({
+        ...s,
+        name: s.name // AniHD (720p/1080p)
+      });
+    });
+  }
   if (aniNekoData?.servers?.length) {
     aniNekoData.servers.forEach(s => {
       combinedServers.push({
@@ -1250,9 +1410,9 @@ async function getServers(titles, episode) {
 
   const result = {
     servers: combinedServers,
-    animeTitle: aniNekoData?.animeTitle || aniWavesData?.animeTitle || titles[0],
-    slug: aniNekoData?.slug || aniWavesData?.slug || '',
-    isPartial: !aniNekoData || !aniWavesData
+    animeTitle: animePaheData?.animeTitle || aniNekoData?.animeTitle || aniWavesData?.animeTitle || titles[0],
+    slug: animePaheData?.slug || aniNekoData?.slug || aniWavesData?.slug || '',
+    isPartial: !aniNekoData || !aniWavesData || !animePaheData
   };
 
   // Resolve M3U8 streams concurrently
@@ -1627,12 +1787,13 @@ export async function handleRequest(req, res) {
       
       const hasNeko = resData.servers.some(s => s.name.includes('Neko'));
       const hasWaves = resData.servers.some(s => s.name.includes('Waves'));
-      const isComplete = hasNeko && hasWaves;
+      const hasPahe = resData.servers.some(s => s.name.includes('AniHD'));
+      const isComplete = hasNeko || hasWaves || hasPahe;
       
       if (isComplete && !data.isPartial) {
         serverCache.set(cacheKey, { data: resData, timestamp: Date.now() });
       } else {
-        console.log(`[Cache Control] Not caching incomplete results for "${cacheKey}" (Neko=${hasNeko}, Waves=${hasWaves}, isPartial=${!!data.isPartial})`);
+        console.log(`[Cache Control] Not caching incomplete results for "${cacheKey}" (Neko=${hasNeko}, Waves=${hasWaves}, Pahe=${hasPahe}, isPartial=${!!data.isPartial})`);
       }
       
       return json(res, 200, resData);
