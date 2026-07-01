@@ -11,6 +11,7 @@ const ANIMETSU = 'https://animetsu.net';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 const STREAM_PROXY = import.meta.env.VITE_STREAM_PROXY_URL || '';
+const PROXY = import.meta.env.VITE_PROXY_URL || '';
 
 function formatProxyUrl(targetUrl, referer) {
   if (!STREAM_PROXY) return targetUrl;
@@ -26,6 +27,11 @@ function formatProxyUrl(targetUrl, referer) {
     return `${STREAM_PROXY}?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
   }
   return `${STREAM_PROXY}/?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+}
+
+function formatIframeProxyUrl(targetUrl, referer) {
+  if (!PROXY) return targetUrl;
+  return `${PROXY}/api/iframe-proxy?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
 }
 
 // ── Helper Matching Functions ──
@@ -253,7 +259,7 @@ export async function scrapeAniWaves(title, episode) {
       const isSupported = ['play.echovideo.ru', 'megacloud.club', 'megacloud.tv', 'myvidplay.com', 'sb1254w9megshle.org', 'vidplay.online'].some(p => host.includes(p));
       if (!isSupported) throw new Error('Unsupported provider');
       // Direct iframe proxy via Cloudflare Worker or direct load
-      const videoUrl = formatProxyUrl(embedUrl, `${AW}/watch/${slug}`);
+      const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
       return { videoUrl, type: s.type, embedUrl };
     })
   );
@@ -358,7 +364,7 @@ export async function scrapeAniNeko(title, episode) {
     } catch {}
 
     const subtitles = subtitleUrl ? [{ id: 0, label: 'English', file: formatProxyUrl(subtitleUrl, s.videoUrl) }] : [];
-    const proxiedUrl = formatProxyUrl(s.videoUrl, ANINEKO);
+    const proxiedUrl = formatIframeProxyUrl(s.videoUrl, ANINEKO);
 
     if (s.isDub && dubCount < 1) {
       dubCount++;
