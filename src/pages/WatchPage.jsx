@@ -186,6 +186,7 @@ export default function WatchPage() {
       setServers(currentServers);
       
       setActiveServer(prev => {
+        // Only auto-select if nothing is playing yet
         if (prev) return prev;
         
         const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
@@ -202,6 +203,10 @@ export default function WatchPage() {
           setActiveType(preferred.type || 'sub');
           setAudioTrack(preferred.type || 'sub');
           selectServer(preferred, currentServers);
+          // ⚡ First server found — stop the loading spinner immediately!
+          // AniHD and other scrapers keep running in background and will appear in the server list.
+          setLoadStream(false);
+          setStreamErr(null);
         }
         return preferred;
       });
