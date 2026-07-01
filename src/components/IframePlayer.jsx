@@ -74,11 +74,9 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
     };
   }, [src, onStreamCaptured]);
 
-  // Mark as playing once iframe loads (content may start playing)
+  // Mark as playing once iframe loads
   const handleIframeLoad = () => {
-    // Don't hide spinner immediately — wait for postMessage to confirm stream is ready
-    // But do hide after a short grace period in case postMessage already fired
-    setTimeout(() => setStatus(prev => prev === 'loading' ? 'playing' : prev), 5000);
+    // Do nothing: keep the black loading overlay active until stream is captured or timeout occurs.
   };
 
   return (
