@@ -1,8 +1,9 @@
-/**
- * Client-Side Scraper Engine (Way 4)
- * Ported from server/proxy.mjs to run directly in the mobile app.
- * Utilizes Capacitor's Native HTTP stack to bypass CORS restrictions.
- */
+import { CapacitorHttp } from '@capacitor/core';
+
+const isCapacitorApp = typeof window !== 'undefined' && window.Capacitor && (
+  window.Capacitor.isNativePlatform() || 
+  (!window.location.port && window.location.hostname === 'localhost')
+);
 
 const ANINEKO = 'https://anineko.to';
 const AW = 'https://aniwaves.ru';
@@ -83,13 +84,37 @@ function getLongestWord(title) {
 // ── Generic Fetch Helper with Headers ──
 
 async function clientFetch(url, opts = {}) {
+  if (isCapacitorApp) {
+    try {
+      console.log(`[CapacitorHttp] Fetching: ${url} (referer: ${opts.referer || 'none'})`);
+      const response = await CapacitorHttp.request({
+        url,
+        method: 'GET',
+        headers: {
+          'User-Agent': UA,
+          ...(opts.referer ? { 'Referer': opts.referer } : {}),
+          ...(opts.headers || {}),
+        },
+        connectTimeout: opts.timeout || 15000,
+        readTimeout: opts.timeout || 15000
+      });
+      
+      const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+      if (response.status >= 300) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return text;
+    } catch (e) {
+      console.error(`[CapacitorHttp] Request failed for ${url}:`, e.message);
+      throw e;
+    }
+  }
+
+  // Fallback for local desktop browser (no unsafe headers to prevent TypeError crash)
+  const headers = { ...opts.headers };
   const res = await fetch(url, {
     signal: AbortSignal.timeout(opts.timeout || 15000),
-    headers: {
-      'User-Agent': UA,
-      ...(opts.referer ? { 'Referer': opts.referer } : {}),
-      ...(opts.headers || {}),
-    }
+    headers
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();

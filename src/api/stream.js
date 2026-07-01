@@ -94,7 +94,7 @@ export async function getAniNekoServers(anime, episode) {
 
   if (nekoData?.servers?.length) {
     nekoData.servers.forEach(s => {
-      combinedServers.push({ ...s, name: `Neko ${s.name}` });
+      combinedServers.push({ ...s, name: s.name });
     });
     mainTitle = nekoData.animeTitle || mainTitle;
     activeSlug = nekoData.slug || activeSlug;
@@ -102,7 +102,7 @@ export async function getAniNekoServers(anime, episode) {
 
   if (wavesData?.servers?.length) {
     wavesData.servers.forEach(s => {
-      combinedServers.push({ ...s, name: `Waves ${s.name}` });
+      combinedServers.push({ ...s, name: s.name });
     });
     mainTitle = wavesData.animeTitle || mainTitle;
     activeSlug = wavesData.slug || activeSlug;
