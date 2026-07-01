@@ -297,9 +297,8 @@ let isPriming = false;
 
 /**
  * Prime Playwright using a PERSISTENT browser profile (userDataDir).
- * The first run will open a visible browser window so Cloudflare's managed
- * Turnstile (behavioural, invisible) can auto-pass. Subsequent runs reuse
- * saved cookies from disk and stay headless.
+ * On Linux (HF Spaces/Docker) always runs headless since there's no display.
+ * On Windows, allows headless:false on first run for Cloudflare auto-solve.
  */
 async function primePlaywrightContext() {
   if (isPriming) return null;
@@ -307,8 +306,10 @@ async function primePlaywrightContext() {
   try {
     // Check if we already have a saved session (profile dir non-empty)
     const hasSavedProfile = existsSync(join(PROFILE_DIR, 'Default', 'Cookies'));
-    // Use headless:false on first run so managed Turnstile can auto-pass via real display
-    const launchHeadless = hasSavedProfile;
+    // On Linux (Docker/HF Spaces) there's no display — always use headless.
+    // On Windows, allow headless:false on first run so Cloudflare Turnstile can auto-pass.
+    const isLinux = process.platform === 'linux';
+    const launchHeadless = isLinux ? true : hasSavedProfile;
     // Prefer the real system Chrome for better Cloudflare compatibility
     const REAL_CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
     const execPath = process.env.PUPPETEER_EXECUTABLE_PATH
@@ -329,7 +330,7 @@ async function primePlaywrightContext() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
-        ...(launchHeadless ? ['--disable-gpu'] : []),
+        '--disable-gpu',
       ]
     });
 
@@ -374,9 +375,9 @@ async function primePlaywrightContext() {
       console.warn('[Playwright] AniWaves priming failed:', e.message);
     }
 
-    console.log('[Playwright] Visiting Animetsu to acquire cookies...');
+    console.log('[Playwright] Visiting Animetsu watch page to acquire cookies...');
     try {
-      await page.goto('https://animetsu.net/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await page.goto('https://animetsu.net/watch/6989be3929cf95f4eb03fadb', { waitUntil: 'domcontentloaded', timeout: 45000 });
       await page.waitForTimeout(5000);
       await solvePageTurnstile(page, 'Animetsu');
       console.log(`[Playwright] Animetsu primed. Title: "${await page.title()}"`);
@@ -1281,7 +1282,7 @@ async function scrapeAnimetsu(title, episode) {
   let epsHtml;
   try {
     epsHtml = await xfetch(epsUrl, {
-      referer: domain,
+      referer: `${domain}/watch/${best.id}`,
       timeout: 15000,
       headers: {
         'Origin': domain,
@@ -1313,7 +1314,7 @@ async function scrapeAnimetsu(title, episode) {
   try {
     const subUrl = `${domain}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=sub`;
     const subHtml = await xfetch(subUrl, {
-      referer: domain,
+      referer: `${domain}/watch/${best.id}`,
       timeout: 15000,
       headers: {
         'Origin': domain,
@@ -1351,7 +1352,7 @@ async function scrapeAnimetsu(title, episode) {
   try {
     const dubUrl = `${domain}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=dub`;
     const dubHtml = await xfetch(dubUrl, {
-      referer: domain,
+      referer: `${domain}/watch/${best.id}`,
       timeout: 15000,
       headers: {
         'Origin': domain,
@@ -2181,7 +2182,7 @@ export async function handleRequest(req, res) {
   }
 
   // HLS Playlist Proxy
-  if (pathname === '/api/stream/hls') {
+  if (pathname === '/api/stream/hls' || pathname === '/api/stream/hls/') {
     cors(res);
     const targetUrl = searchParams.get('url');
     const referer = searchParams.get('referer') || new URL(targetUrl).origin;
@@ -2304,7 +2305,7 @@ export async function handleRequest(req, res) {
   }
 
   // HLS Segment Proxy — streams bytes directly to client without buffering
-  if (pathname === '/api/stream/segment') {
+  if (pathname === '/api/stream/segment' || pathname === '/api/stream/segment/') {
     cors(res);
     const targetUrl = searchParams.get('url');
     if (!targetUrl) { res.writeHead(400); return res.end('missing url'); }
@@ -2341,7 +2342,6 @@ export async function handleRequest(req, res) {
 
       res.writeHead(sRes.status, {
         'Content-Type': sRes.headers.get('content-type') || 'video/mp2t',
-        'Content-Length': sRes.headers.get('content-length') || '',
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=86400'
       });
