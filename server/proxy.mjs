@@ -363,7 +363,7 @@ async function playwrightExtractM3U8(embedUrl) {
   // Create isolated context with user agent and referer
   let refererHeader = AW + '/';
   if (embedUrl.includes('kwik.cx')) {
-    refererHeader = 'https://animepahe.ru/';
+    refererHeader = 'https://animepahe.pw/';
   }
   const context = await browser.newContext({
     userAgent: UA,
@@ -1005,7 +1005,7 @@ function getLongestWord(title) {
 // ANIMEPAHE FALLBACK SCRAPER (AniHD)
 // ══════════════════════════════════════════════════════════════════
 async function scrapeAnimePahe(title, episode) {
-  const domain = 'https://animepahe.ru';
+  const domain = 'https://animepahe.pw';
   
   // Clean the title and split into words for keyword permutation fallbacks
   const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1115,7 +1115,7 @@ async function scrapeAnimePahe(title, episode) {
     seenUrls.add(s.kwikUrl);
     
     // Format the URL as an iframe-proxy so WatchPage knows it's an embed
-    const proxiedIframeUrl = `/api/stream/iframe-proxy?url=${encodeURIComponent(s.kwikUrl)}&referer=${encodeURIComponent('https://animepahe.ru/')}`;
+    const proxiedIframeUrl = `/api/stream/iframe-proxy?url=${encodeURIComponent(s.kwikUrl)}&referer=${encodeURIComponent('https://animepahe.pw/')}`;
     
     servers.push({
       name: `AniHD (${s.label})`,
