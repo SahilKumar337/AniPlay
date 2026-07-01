@@ -221,27 +221,50 @@ async function primePlaywrightContext() {
       
       let title = await page.title();
       if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
-        console.log('[Playwright] Cloudflare verification page detected. Waiting for Turnstile container...');
+        console.log('[Playwright] Cloudflare verification page detected on AniWaves. Waiting for Turnstile...');
         const container = page.locator('#naeL5, div[style*="display: grid"]').first();
         const box = await container.boundingBox().catch(() => null);
         if (box) {
-          console.log('[Playwright] Clicking Turnstile checkbox...');
+          console.log('[Playwright] Clicking AniWaves Turnstile checkbox...');
           await page.mouse.click(box.x + 16, box.y + 34);
           await page.waitForTimeout(10000);
         } else {
           await page.waitForTimeout(4000);
         }
       }
-      console.log(`[Playwright] Context primed successfully. Title: "${await page.title()}"`);
-      const cookies = await context.cookies();
-      const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      globalCookie = cookieStr;
-      console.log(`[Playwright] Saved ${cookies.length} cookies to globalCookie.`);
+      console.log(`[Playwright] AniWaves primed. Title: "${await page.title()}"`);
     } catch (e) {
-      console.warn('[Playwright] Homepage navigation failed during priming:', e.message);
-    } finally {
-      await page.close().catch(() => {});
+      console.warn('[Playwright] AniWaves priming failed:', e.message);
     }
+
+    console.log('[Playwright] Loading AnimePahe homepage to acquire cookies...');
+    try {
+      await page.goto('https://animepahe.pw/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(4000);
+      
+      let title = await page.title();
+      if (title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!')) {
+        console.log('[Playwright] Cloudflare verification page detected on AnimePahe. Waiting for Turnstile...');
+        const container = page.locator('#naeL5, div[style*="display: grid"]').first();
+        const box = await container.boundingBox().catch(() => null);
+        if (box) {
+          console.log('[Playwright] Clicking AnimePahe Turnstile checkbox...');
+          await page.mouse.click(box.x + 16, box.y + 34);
+          await page.waitForTimeout(10000);
+        } else {
+          await page.waitForTimeout(4000);
+        }
+      }
+      console.log(`[Playwright] AnimePahe primed. Title: "${await page.title()}"`);
+    } catch (e) {
+      console.warn('[Playwright] AnimePahe priming failed:', e.message);
+    }
+
+    const cookies = await context.cookies();
+    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    globalCookie = cookieStr;
+    console.log(`[Playwright] Saved ${cookies.length} cookies to globalCookie.`);
+    await page.close().catch(() => {});
 
     const oldContext = playwrightContext;
     playwrightContext = context;
@@ -310,7 +333,15 @@ async function playwrightFetch(url, referer = '') {
     let isChallenge = title.includes('Cloudflare') || title.includes('Just a moment') || title.includes('Attention Required!');
 
     if (isChallenge) {
-      console.log(`[Playwright Fetch] Cloudflare challenge detected for ${url}. Waiting...`);
+      console.log(`[Playwright Fetch] Cloudflare challenge detected for ${url}. Attempting Turnstile solve...`);
+      // Try to solve Turnstile checkbox if visible
+      const container = page.locator('#naeL5, div[style*="display: grid"]').first();
+      const box = await container.boundingBox().catch(() => null);
+      if (box) {
+        console.log('[Playwright Fetch] Clicking Turnstile checkbox...');
+        await page.mouse.click(box.x + 16, box.y + 34);
+      }
+      
       let solved = false;
       for (let i = 0; i < 250; i++) {
         await page.waitForTimeout(100);
