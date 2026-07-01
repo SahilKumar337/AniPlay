@@ -110,7 +110,24 @@ async function clientFetch(url, opts = {}) {
     }
   }
 
-  // Fallback for local desktop browser (no unsafe headers to prevent TypeError crash)
+  // If running in local desktop browser dev environment, proxy through the local backend proxy to bypass CORS!
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    try {
+      const proxyUrl = `/api/stream/segment?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(opts.referer || new URL(url).origin)}`;
+      console.log(`[LocalProxy] Scraping via backend proxy: ${url}`);
+      const res = await fetch(proxyUrl, {
+        signal: AbortSignal.timeout(opts.timeout || 25000),
+        headers: opts.headers
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} from proxy`);
+      return res.text();
+    } catch (e) {
+      console.warn(`[LocalProxy] Fetch failed for ${url} via proxy:`, e.message);
+      // Fallback to direct fetch in case proxy is down
+    }
+  }
+
+  // Fallback for production/direct fetches (subject to CORS in browser, but works inside phone WebView)
   const headers = { ...opts.headers };
   const res = await fetch(url, {
     signal: AbortSignal.timeout(opts.timeout || 15000),
@@ -240,10 +257,10 @@ export async function scrapeAniWaves(title, episode) {
   for (const s of working) {
     if (s.type === 'sub' && subCount < 1) {
       subCount++;
-      servers.push({ name: `Waves HD${subCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl });
+      servers.push({ name: `Waves HD${subCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: true });
     } else if (s.type === 'dub' && dubCount < 1) {
       dubCount++;
-      servers.push({ name: `Waves HD${dubCount} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl });
+      servers.push({ name: `Waves HD${dubCount} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: true });
     }
   }
   return { servers, animeTitle, slug };
@@ -338,10 +355,10 @@ export async function scrapeAniNeko(title, episode) {
 
     if (s.isDub && dubCount < 1) {
       dubCount++;
-      servers.push({ name: `Neko HD1 (DUB)`, videoUrl: proxiedUrl, type: 'dub', subtitles });
+      servers.push({ name: `Neko HD1 (DUB)`, videoUrl: proxiedUrl, type: 'dub', subtitles, isHLS: true });
     } else if (!s.isDub && subCount < 1) {
       subCount++;
-      servers.push({ name: `Neko HD1`, videoUrl: proxiedUrl, type: 'sub', subtitles });
+      servers.push({ name: `Neko HD1`, videoUrl: proxiedUrl, type: 'sub', subtitles, isHLS: true });
     }
   }
 
