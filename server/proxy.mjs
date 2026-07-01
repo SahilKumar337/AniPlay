@@ -772,10 +772,10 @@ async function awSearch(title) {
   const firstTwo   = cleaned.split(' ').slice(0, 2).join(' ');
   const firstThree = cleaned.split(' ').slice(0, 3).join(' ');
 
-  // Strategy order: best discrimination first, then broader
+  // Strategy order: exact full title first (most precise), then narrower fallbacks
   const strategies = hasJapanese
     ? [title]                     // For Japanese: search full native string
-    : [longestWord, firstTwo, firstThree, cleaned].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
+    : [cleaned, firstThree, firstTwo, longestWord].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
 
   let results = [];
 
@@ -1000,12 +1000,12 @@ async function scrapeAniNeko(title, episode) {
   const words = cleanTitle.split(' ').filter(w => w.length > 1);
   
   let searchQueries = [];
+  searchQueries.push(cleanTitle); // Try full clean title first!
   if (words.length > 1) {
     searchQueries.push(words.slice(0, 3).join(' ')); // Try first 3 words (e.g. "Komi-san wa")
     searchQueries.push(words.slice(0, 2).join(' ')); // Try first 2 words
   }
   searchQueries.push(getLongestWord(title)); // Try longest word
-  searchQueries.push(cleanTitle); // Try full clean title
   
   // Remove duplicates from queries list
   searchQueries = [...new Set(searchQueries)].filter(Boolean);
@@ -1251,7 +1251,8 @@ async function getServers(titles, episode) {
   const result = {
     servers: combinedServers,
     animeTitle: aniNekoData?.animeTitle || aniWavesData?.animeTitle || titles[0],
-    slug: aniNekoData?.slug || aniWavesData?.slug || ''
+    slug: aniNekoData?.slug || aniWavesData?.slug || '',
+    isPartial: !aniNekoData || !aniWavesData
   };
 
   // Resolve M3U8 streams concurrently
@@ -1623,7 +1624,17 @@ export async function handleRequest(req, res) {
     try {
       const data = await getServers(titles, ep);
       const resData = { ok: true, ...data };
-      serverCache.set(cacheKey, { data: resData, timestamp: Date.now() });
+      
+      const hasNeko = resData.servers.some(s => s.name.includes('Neko'));
+      const hasWaves = resData.servers.some(s => s.name.includes('Waves'));
+      const isComplete = hasNeko && hasWaves;
+      
+      if (isComplete && !data.isPartial) {
+        serverCache.set(cacheKey, { data: resData, timestamp: Date.now() });
+      } else {
+        console.log(`[Cache Control] Not caching incomplete results for "${cacheKey}" (Neko=${hasNeko}, Waves=${hasWaves}, isPartial=${!!data.isPartial})`);
+      }
+      
       return json(res, 200, resData);
     } catch (e) {
       console.error('[Engine Error]', e.message);
