@@ -312,7 +312,7 @@ async function playwrightFetch(url, referer = '') {
     if (isChallenge) {
       console.log(`[Playwright Fetch] Cloudflare challenge detected for ${url}. Waiting...`);
       let solved = false;
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 250; i++) {
         await page.waitForTimeout(100);
         title = await page.title();
         if (!title.includes('Cloudflare') && !title.includes('Just a moment') && !title.includes('Attention Required!')) {
