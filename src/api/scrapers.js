@@ -319,7 +319,10 @@ export async function scrapeAniNeko(title, episode) {
   const subUrl = `${ANINEKO}/watch/${best.slug}/ep-${episode}`;
   const urlsToFetch = [{ url: subUrl, isDubPage: best.slug.endsWith('-dub') }];
   if (!best.slug.endsWith('-dub')) {
-    urlsToFetch.push({ url: `${ANINEKO}/watch/${best.slug}-dub/ep-${episode}`, isDubPage: true });
+    const hasDubInSearch = results.some(r => r.slug === `${best.slug}-dub`);
+    if (hasDubInSearch) {
+      urlsToFetch.push({ url: `${ANINEKO}/watch/${best.slug}-dub/ep-${episode}`, isDubPage: true });
+    }
   }
 
   const fetchedPages = await Promise.allSettled(
@@ -426,32 +429,36 @@ export async function scrapeAnimetsu(title, episode) {
   const servers = [];
   const proxyBase = 'https://swiftstream.top/proxy';
 
-  // SUB query
-  try {
-    const subUrl = `${ANIMETSU}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=sub`;
-    const subHtml = await clientFetch(subUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
-    const subData = JSON.parse(subHtml);
-    if (subData.sources?.length > 0) {
-      const source = subData.sources[0];
-      const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
-      const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-      const subtitles = (subData.subs || []).map((sub, i) => ({ id: i, label: sub.lang || 'English', file: formatProxyUrl(sub.url, `${ANIMETSU}/`) }));
-      servers.push({ name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, subtitles, isHLS: true });
-    }
-  } catch {}
+  const [subRes, dubRes] = await Promise.allSettled([
+    (async () => {
+      const subUrl = `${ANIMETSU}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=sub`;
+      const subHtml = await clientFetch(subUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
+      const subData = JSON.parse(subHtml);
+      if (subData.sources?.length > 0) {
+        const source = subData.sources[0];
+        const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
+        const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
+        const subtitles = (subData.subs || []).map((sub, i) => ({ id: i, label: sub.lang || 'English', file: formatProxyUrl(sub.url, `${ANIMETSU}/`) }));
+        return { name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, subtitles, isHLS: true };
+      }
+      return null;
+    })(),
+    (async () => {
+      const dubUrl = `${ANIMETSU}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=dub`;
+      const dubHtml = await clientFetch(dubUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
+      const dubData = JSON.parse(dubHtml);
+      if (dubData.sources?.length > 0) {
+        const source = dubData.sources[0];
+        const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
+        const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
+        return { name: 'AniHD1 (DUB)', videoUrl, type: 'dub', embedUrl: rawVideoUrl, subtitles: [], isHLS: true };
+      }
+      return null;
+    })()
+  ]);
 
-  // DUB query
-  try {
-    const dubUrl = `${ANIMETSU}/v2/api/anime/oppai/${best.id}/${episode}?server=pahe&source_type=dub`;
-    const dubHtml = await clientFetch(dubUrl, { referer: `${ANIMETSU}/watch/${best.id}`, timeout: 15000 });
-    const dubData = JSON.parse(dubHtml);
-    if (dubData.sources?.length > 0) {
-      const source = dubData.sources[0];
-      const rawVideoUrl = source.url.startsWith('http') ? source.url : `${proxyBase}${source.url}`;
-      const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-      servers.push({ name: 'AniHD1 (DUB)', videoUrl, type: 'dub', embedUrl: rawVideoUrl, subtitles: [], isHLS: true });
-    }
-  } catch {}
+  if (subRes.status === 'fulfilled' && subRes.value) servers.push(subRes.value);
+  if (dubRes.status === 'fulfilled' && dubRes.value) servers.push(dubRes.value);
 
   return { servers, animeTitle: best.title, slug: best.id };
 }

@@ -74,9 +74,9 @@ export async function getAniNekoServers(anime, episode) {
 
   // Run all scrapers concurrently
   const [nekoData, wavesData, animetsuData] = await Promise.all([
-    runWithTimeout(nekoPromise, 15000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 25000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(animetsuPromise, 30000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(nekoPromise, 10000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(wavesPromise, 8000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(animetsuPromise, 10000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
   ]);
 
   // Combine servers in priority order: Animetsu -> Neko -> Waves
