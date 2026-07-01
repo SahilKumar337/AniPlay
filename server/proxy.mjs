@@ -2180,6 +2180,38 @@ export async function handleRequest(req, res) {
       return json(res, 503, { ok: false, error: e.message });
     }
   }
+  // Metadata Scraper Proxy — for JSON API requests (no client-abort sensitivity)
+  // Unlike /api/stream/segment, this always completes the request regardless of client disconnect.
+  if (pathname === '/api/scrape' || pathname === '/api/scrape/') {
+    cors(res);
+    const targetUrl = searchParams.get('url');
+    if (!targetUrl) return json(res, 400, { error: 'url required' });
+    const referer = searchParams.get('referer') || (() => { try { return new URL(targetUrl).origin; } catch { return ''; } })();
+    try {
+      const sRes = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': UA,
+          'Referer': referer,
+          'Origin': (() => { try { return new URL(referer).origin; } catch { return referer; } })(),
+          'Accept': 'application/json, text/html, */*',
+        },
+        signal: AbortSignal.timeout(25000)
+      });
+      const text = await sRes.text();
+      res.writeHead(sRes.status, {
+        'Content-Type': sRes.headers.get('content-type') || 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache'
+      });
+      return res.end(text);
+    } catch (e) {
+      if (!res.headersSent) {
+        res.writeHead(504);
+        res.end(e.message);
+      }
+    }
+    return;
+  }
 
   // HLS Playlist Proxy
   if (pathname === '/api/stream/hls' || pathname === '/api/stream/hls/') {
@@ -2326,10 +2358,10 @@ export async function handleRequest(req, res) {
         'Origin': new URL(referer).origin
       };
 
-      // Add an 8-second request timeout to prevent hanging forever
+      // Add a 25-second request timeout to prevent hanging forever
       const timeoutId = setTimeout(() => {
         controller.abort();
-      }, 8000);
+      }, 25000);
 
       const sRes = await fetch(targetUrl, { headers, signal });
       clearTimeout(timeoutId);

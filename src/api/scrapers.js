@@ -130,7 +130,7 @@ async function clientFetch(url, opts = {}) {
   // If running in local desktop browser dev environment, proxy through the local backend proxy to bypass CORS!
   if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
     try {
-      const proxyUrl = `/api/stream/segment?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(opts.referer || new URL(url).origin)}`;
+      const proxyUrl = `/api/scrape?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(opts.referer || new URL(url).origin)}`;
       console.log(`[LocalProxy] Scraping via backend proxy: ${url}`);
       const res = await fetch(proxyUrl, {
         signal: AbortSignal.timeout(opts.timeout || 25000),
