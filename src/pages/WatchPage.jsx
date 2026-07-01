@@ -188,41 +188,49 @@ export default function WatchPage() {
     setActiveName('');
     setActiveServer(null);
 
-    try {
-      const result = await getAniNekoServers(anime, episode);
-      if (result?.servers?.length) {
-        setServers(result.servers);
-        // Auto-select based on preferred track from localStorage
-        const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
-        let matchingServers = result.servers.filter(s => s.type === preferredTrack);
+    const handleFound = (currentServers) => {
+      setServers(currentServers);
+      
+      setActiveServer(prev => {
+        if (prev) return prev;
         
-        // Fallback to the other track if the preferred track is not available for this episode
+        const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
+        let matchingServers = currentServers.filter(s => s.type === preferredTrack);
         if (matchingServers.length === 0) {
-          matchingServers = result.servers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+          matchingServers = currentServers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
         }
+        const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                       || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                       || matchingServers[0]
+                       || currentServers[0];
+        
+        if (preferred) {
+          setActiveType(preferred.type || 'sub');
+          setAudioTrack(preferred.type || 'sub');
+          selectServer(preferred, currentServers);
+        }
+        return preferred;
+      });
+    };
 
-        const preferred  = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
-                        || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
-                        || matchingServers[0]
-                        || result.servers[0];
-
-        setActiveType(preferred.type || 'sub');
-        setAudioTrack(preferred.type || 'sub');
-
-        // Let selectServer handle the resolution & extraction automatically
-        selectServer(preferred, result.servers);
-
-        // Background prefetch next episode for instant loading
+    try {
+      const result = await getAniNekoServers(anime, episode, handleFound);
+      if (!result?.servers?.length) {
+        setStreamErr('No streaming servers available for this episode.');
+      } else {
         const nextEp = episode + 1;
         const maxEps = anime.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
         if (nextEp <= maxEps) {
           getAniNekoServers(anime, nextEp).catch(() => {});
         }
-      } else {
-        setStreamErr('No streaming servers available for this episode.');
       }
     } catch (e) {
-      setStreamErr(e.message || 'Failed to fetch streaming links.');
+      setServers(prev => {
+        if (prev.length === 0) {
+          setStreamErr(e.message || 'Failed to fetch streaming links.');
+        }
+        return prev;
+      });
     } finally {
       setLoadStream(false);
     }
