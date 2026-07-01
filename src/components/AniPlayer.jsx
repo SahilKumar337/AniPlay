@@ -556,7 +556,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
-  const activeCue = cues.find(c => curTime >= c.startTime && curTime <= c.endTime);
+  const activeCue = Array.isArray(cues) ? cues.find(c => curTime >= c.startTime && curTime <= c.endTime) : null;
   const cleanCueText = activeCue ? activeCue.text.replace(/<\/?[^>]+(>|$)/g, "") : "";
 
   /* ─── Render ──────────────────────────────────────────────── */
