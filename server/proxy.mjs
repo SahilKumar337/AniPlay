@@ -1374,7 +1374,7 @@ async function getServers(titles, episode) {
   const [aniNekoData, aniWavesData, animePaheData] = await Promise.all([
     runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
     runWithTimeout(wavesPromise, 20000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(pahePromise, 15000, 'AnimePahe').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(pahePromise, 35000, 'AnimePahe').catch(e => { console.warn(e.message); return null; })
   ]);
 
   // 5. Combine servers (AnimePahe / AniHD first, then AniNeko, then AniWaves)
