@@ -7,6 +7,9 @@
 
 import { scrapeAniNeko, scrapeAniWaves, scrapeAnimetsu } from './scrapers';
 
+const clientStreamCache = new Map();
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache life
+
 function runWithTimeout(promise, ms, name) {
   return Promise.race([
     promise,
@@ -15,6 +18,19 @@ function runWithTimeout(promise, ms, name) {
 }
 
 export async function getAniNekoServers(anime, episode) {
+  const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}`;
+  
+  // Check client cache first
+  if (clientStreamCache.has(cacheKey)) {
+    const cached = clientStreamCache.get(cacheKey);
+    if (Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`[ClientEngine] [Cache Hit] Serving cached servers instantly for: ${cacheKey}`);
+      return cached.data;
+    } else {
+      clientStreamCache.delete(cacheKey);
+    }
+  }
+
   // Collect all title variants
   const titles = [
     anime.title?.romaji,
@@ -118,13 +134,20 @@ export async function getAniNekoServers(anime, episode) {
   const wavesSuccess = !!wavesData?.servers?.length;
   const isPartial = !animetsuSuccess || !nekoSuccess || !wavesSuccess;
 
-  return {
+  const resultData = {
     ok: true,
     servers: combinedServers,
     animeTitle: mainTitle,
     slug: activeSlug,
     isPartial
   };
+
+  // Only cache if we successfully retrieved some servers
+  if (combinedServers.length > 0) {
+    clientStreamCache.set(cacheKey, { data: resultData, timestamp: Date.now() });
+  }
+
+  return resultData;
 }
 
 export async function checkProxy() {
