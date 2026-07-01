@@ -301,7 +301,7 @@ function SearchResultItem({ anime, onClick }) {
           {anime.episodes && <span>{anime.episodes} eps</span>}
           {anime.status && (
             <span style={{ color: anime.status === 'RELEASING' ? '#4caf50' : 'var(--text-muted)' }}>
-              {anime.status === 'RELEASING' ? 'Airing' : anime.status === 'FINISHED' ? 'Finished' : anime.status}
+              {anime.status === 'RELEASING' ? 'Airing' : anime.status === 'FINISHED' ? 'Finished' : anime.status === 'NOT_YET_RELEASED' ? 'Upcoming' : anime.status}
             </span>
           )}
         </div>

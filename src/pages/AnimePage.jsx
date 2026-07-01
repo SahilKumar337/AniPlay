@@ -77,7 +77,7 @@ export default function AnimePage() {
   const fav     = isFavorite(anime.id);
   const prog    = getEpisodeProgress(anime.id);
   const isNotReleased = false;
-  const totalEps = anime.nextAiringEpisode 
+  const totalEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
     ? anime.nextAiringEpisode.episode - 1 
     : (eps || 12);
   const resumeEp = prog?.episode ? Math.min(prog.episode, totalEps) : 1;

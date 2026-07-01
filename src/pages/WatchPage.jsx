@@ -60,7 +60,7 @@ export default function WatchPage() {
   // Auto-redirect if trying to watch an unreleased episode
   useEffect(() => {
     if (anime) {
-      const max = anime.nextAiringEpisode 
+      const max = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
         ? anime.nextAiringEpisode.episode - 1 
         : (anime.episodes || 999);
       if (episode > max) {
@@ -166,7 +166,7 @@ export default function WatchPage() {
 
       // Trigger background prefetch for the next episode
       const nextEp = episode + 1;
-      const maxEps = anime.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+      const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
       if (nextEp <= maxEps) {
         getAniNekoServers(anime, nextEp).catch(() => {});
       }
@@ -213,7 +213,7 @@ export default function WatchPage() {
         setStreamErr('No streaming servers available for this episode.');
       } else {
         const nextEp = episode + 1;
-        const maxEps = anime.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+        const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
         if (nextEp <= maxEps) {
           getAniNekoServers(anime, nextEp).catch(() => {});
         }
@@ -240,7 +240,9 @@ export default function WatchPage() {
   }, [anime, episode, setEpisodeProgress, addToRecentlyViewed]);
 
   const goEp = n => {
-    const max = anime?.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : (anime?.episodes || 999);
+    const max = (anime?.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) 
+      ? anime.nextAiringEpisode.episode - 1 
+      : (anime?.episodes || 999);
     if (n < 1 || n > max) return;
     navigate(`/watch/${id}/${n}`, { replace: true });
     window.scrollTo(0, 0);
@@ -264,7 +266,7 @@ export default function WatchPage() {
   const title    = anime ? getTitle(anime) : '…';
   const cover    = anime ? getCover(anime)  : '';
   const totalEps = anime
-    ? (anime.nextAiringEpisode
+    ? ((anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
         ? anime.nextAiringEpisode.episode - 1
         : (anime.episodes || 12))
     : 12;
