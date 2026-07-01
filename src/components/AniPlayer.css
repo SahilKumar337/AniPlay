@@ -42,10 +42,11 @@
  * This is the nuclear fix: hide the default browser video loading poster
  * (the grey oval with black arrow that appears while HLS loads on Android)
  */
-.anip__video::-webkit-media-controls         { display: none !important; }
-.anip__video::-webkit-media-controls-panel   { display: none !important; }
-.anip__video::--webkit-media-controls-play-button { display: none !important; }
-.anip__video:not([src])::-webkit-media-controls { display: none !important; }
+.anip__video::-webkit-media-controls         { display: none !important; -webkit-appearance: none !important; }
+.anip__video::-webkit-media-controls-panel   { display: none !important; -webkit-appearance: none !important; }
+.anip__video::-webkit-media-controls-play-button { display: none !important; -webkit-appearance: none !important; }
+.anip__video::-webkit-media-controls-start-playback-button { display: none !important; -webkit-appearance: none !important; }
+.anip__video:not([src])::-webkit-media-controls { display: none !important; -webkit-appearance: none !important; }
 
 /* ── Full-screen black loading placeholder ────────────────── */
 .anip__loading-bg {
