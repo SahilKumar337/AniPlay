@@ -9,8 +9,13 @@ import Home          from './pages/Home';
 import Browse        from './pages/Browse';
 import Schedule      from './pages/Schedule';
 import AnimePage     from './pages/AnimePage';
-import WatchPage     from './pages/WatchPage';
 import MyList        from './pages/MyList';
+import { useParams } from 'react-router-dom';
+
+function WatchRedirect() {
+  const { id, ep } = useParams();
+  return <Navigate to={`/anime/${id}?play=true&ep=${ep}`} replace />;
+}
 import DownloadPage  from './pages/DownloadPage';
 import Profile       from './pages/Profile';
 import Navbar        from './components/Navbar';
@@ -46,7 +51,7 @@ function AppInner({ showWelcome, onEnter }) {
             <Route path="/browse"      element={<Browse />}       />
             <Route path="/schedule"    element={<Schedule />}     />
             <Route path="/anime/:id"   element={<AnimePage />}    />
-            <Route path="/watch/:id/:ep" element={<WatchPage />}  />
+            <Route path="/watch/:id/:ep" element={<WatchRedirect />}  />
             <Route path="/mylist"      element={<MyList />}       />
             <Route path="/download"    element={<DownloadPage />} />
             <Route path="/profile"     element={<Profile />}      />

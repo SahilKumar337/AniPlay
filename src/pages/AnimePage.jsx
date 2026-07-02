@@ -1,14 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Share2, Bookmark, Star, Play, Download,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Search as SearchIcon, ChevronLeft, ChevronRight,
-  Clock, CheckCircle,
+  Clock, CheckCircle, Tv, Wifi, WifiOff, Loader
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 import AnimeCard from '../components/AnimeCard';
+import { getAniNekoServers, getCachedServers, checkProxy } from '../api/stream';
+import AniPlayer   from '../components/AniPlayer';
+import IframePlayer from '../components/IframePlayer';
+import { scrapeEmbedNative } from '../api/embedScraper';
+
+const IS_NATIVE = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 
 
 export default function AnimePage() {
@@ -17,6 +23,7 @@ export default function AnimePage() {
   const {
     addToWatchlist, removeFromWatchlist, isInWatchlist,
     toggleFavorite, isFavorite, getEpisodeProgress,
+    setEpisodeProgress, addToRecentlyViewed,
   } = useApp();
   const [anime,    setAnime]    = useState(null);
   const [state,    setState]    = useState('loading');
@@ -27,6 +34,23 @@ export default function AnimePage() {
   const [epPage,   setEpPage]   = useState(1); // pagination for episode list
   const [scrolled, setScrolled] = useState(false);
   const EP_PER_PAGE = 50;
+
+  // Search parameters for inline watching
+  const [searchParams, setSearchParams] = useSearchParams();
+  const playParam = searchParams.get('play') === 'true';
+  const epParam = parseInt(searchParams.get('ep')) || null;
+
+  // Stream/Player State
+  const [servers,       setServers]      = useState([]);
+  const [activeUrl,     setActiveUrl]    = useState('');
+  const [activeName,    setActiveName]   = useState('');
+  const [activeType,    setActiveType]   = useState('sub');
+  const [audioTrack,    setAudioTrack]   = useState(() => localStorage.getItem('anilab_preferred_track') || 'sub');
+  const [loadStream,    setLoadStream]   = useState(false);
+  const [streamErr,     setStreamErr]    = useState(null);
+  const [isActiveHLS,   setIsActiveHLS]  = useState(false);
+  const [extracting,    setExtracting]   = useState(false);
+  const [activeServer,  setActiveServer] = useState(null);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -49,6 +73,176 @@ export default function AnimePage() {
   }, [id]);
 
   useEffect(() => { window.scrollTo(0, 0); load(); }, [load]);
+
+  // Robust server selection
+  const selectServer = useCallback(async (srv, srvList) => {
+    setActiveServer(srv);
+    setStreamErr(null);
+    setExtracting(false);
+
+    const listToUse = srvList || [];
+    const sameTypeServers = srv.type === 'dub' 
+      ? listToUse.filter(s => s.type === 'dub') 
+      : listToUse.filter(s => s.type === 'sub');
+    
+    const currentIndex = sameTypeServers.findIndex(s => s.videoUrl === srv.videoUrl);
+
+    const handleScrapeError = () => {
+      if (currentIndex !== -1 && currentIndex < sameTypeServers.length - 1) {
+        const nextSrv = sameTypeServers[currentIndex + 1];
+        console.log(`[AnimePage] Server ${srv.name} failed. Falling back to: ${nextSrv.name}`);
+        selectServer(nextSrv, listToUse);
+      } else {
+        setStreamErr('Unable to load stream. Please tap retry or select another server.');
+      }
+    };
+
+    const isEmbedServer = !srv.isHLS && srv.embedUrl;
+    if (isEmbedServer) {
+      const embedUrl = srv.embedUrl;
+      const referer  = srv.referer || 'https://aniwaves.ru/';
+
+      if (IS_NATIVE) {
+        setActiveName(srv.name);
+        setActiveType(srv.type || 'sub');
+        setIsActiveHLS(false);
+        setActiveUrl('');
+        setExtracting(true);
+
+        scrapeEmbedNative(embedUrl, referer, 40000)
+          .then(m3u8Url => {
+            setExtracting(false);
+            setActiveUrl(m3u8Url);
+            setIsActiveHLS(true);
+          })
+          .catch(err => {
+            console.warn('[AnimePage] Native scraper failed:', err.message);
+            setExtracting(false);
+            handleScrapeError();
+          });
+        return;
+      } else {
+        setActiveName(srv.name);
+        setActiveType(srv.type || 'sub');
+        setIsActiveHLS(false);
+        setActiveUrl(embedUrl);
+        setExtracting(false);
+        return;
+      }
+    }
+
+    setActiveUrl(srv.videoUrl);
+    setActiveName(srv.name);
+    setActiveType(srv.type || 'sub');
+    setIsActiveHLS(!!srv.isHLS);
+    setExtracting(false);
+  }, []);
+
+  const fetchStream = useCallback(async () => {
+    if (!anime || !epParam) return;
+
+    const cachedResult = getCachedServers(anime, epParam);
+    if (cachedResult?.servers?.length) {
+      setStreamErr(null);
+      setServers(cachedResult.servers);
+      
+      const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
+      let matchingServers = cachedResult.servers.filter(s => s.type === preferredTrack);
+      if (matchingServers.length === 0) {
+        matchingServers = cachedResult.servers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+      }
+      const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                     || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                     || matchingServers[0]
+                     || cachedResult.servers[0];
+      
+      setActiveType(preferred.type || 'sub');
+      setAudioTrack(preferred.type || 'sub');
+      selectServer(preferred, cachedResult.servers);
+
+      const nextEp = epParam + 1;
+      const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+      if (nextEp <= maxEps) {
+        getAniNekoServers(anime, nextEp).catch(() => {});
+      }
+      setLoadStream(false);
+      return;
+    }
+
+    setLoadStream(true);
+    setStreamErr(null);
+    setServers([]);
+    setActiveUrl('');
+    setActiveName('');
+    setActiveServer(null);
+
+    const handleFound = (currentServers) => {
+      setServers(currentServers);
+      
+      setActiveServer(prev => {
+        if (prev) return prev;
+        
+        const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
+        let matchingServers = currentServers.filter(s => s.type === preferredTrack);
+        if (matchingServers.length === 0) {
+          matchingServers = currentServers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+        }
+        const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                       || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                       || matchingServers[0]
+                       || currentServers[0];
+        
+        if (preferred) {
+          setActiveType(preferred.type || 'sub');
+          setAudioTrack(preferred.type || 'sub');
+          selectServer(preferred, currentServers);
+          setLoadStream(false);
+          setStreamErr(null);
+        }
+        return preferred;
+      });
+    };
+
+    try {
+      const result = await getAniNekoServers(anime, epParam, handleFound);
+      if (!result?.servers?.length) {
+        setStreamErr('No streaming servers available for this episode.');
+      } else {
+        const nextEp = epParam + 1;
+        const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+        if (nextEp <= maxEps) {
+          getAniNekoServers(anime, nextEp).catch(() => {});
+        }
+      }
+    } catch (e) {
+      setServers(prev => {
+        if (prev.length === 0) {
+          setStreamErr('Unable to connect to streaming servers. Please try again.');
+        }
+        return prev;
+      });
+    } finally {
+      setLoadStream(false);
+    }
+  }, [anime, epParam, selectServer]);
+
+  // Load stream when epParam changes
+  useEffect(() => {
+    if (playParam && epParam) {
+      fetchStream();
+    }
+  }, [epParam, playParam, fetchStream]);
+
+  // Track episode watch history progress
+  useEffect(() => {
+    if (anime && epParam) {
+      setEpisodeProgress(anime.id, epParam);
+      addToRecentlyViewed(anime, epParam);
+    }
+  }, [anime, epParam, setEpisodeProgress, addToRecentlyViewed]);
+
+  const subServers = servers.filter(s => s.type === 'sub');
+  const dubServers = servers.filter(s => s.type === 'dub');
 
   /* ── Loading ───────────────────────────────────────────────── */
   if (state === 'loading') return <DetailSkeleton />;
@@ -150,27 +344,155 @@ export default function AnimePage() {
       {/* ── Content Wrapper with Entrance Animation ────────────────── */}
       <div className="fade-in-up">
         {/* ════════════════════════════════════════
-            HERO IMAGE (full-width)
+            HERO IMAGE OR VIDEO PLAYER
         ════════════════════════════════════════ */}
-        <div style={{ position: 'relative', width: '100%', height: 210, overflow: 'hidden', background: '#111' }}>
-          <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-            <img
-              src={cover} alt=""
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(20px) brightness(0.35)', transform: 'scale(1.15)', display: 'block' }}
-            />
-            <img
-              src={cover} alt={title}
-              style={{ height: '85%', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.65)', zIndex: 2, objectFit: 'contain' }}
-            />
+        {playParam && epParam ? (
+          <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000', overflow: 'hidden' }}>
+            {loadStream && servers.length === 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
+                <Loader size={30} className="spin" color="var(--accent)" />
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Searching servers...</p>
+              </div>
+            ) : extracting ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
+                <Loader size={30} className="spin" color="var(--accent)" />
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Resolving stream sources...</p>
+              </div>
+            ) : streamErr ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20 }}>
+                <AlertCircle size={32} color="#e50914" />
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
+                <button className="btn btn-primary" onClick={fetchStream} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12 }}>
+                  ↺ Retry
+                </button>
+              </div>
+            ) : activeUrl ? (
+              isActiveHLS ? (
+                <AniPlayer
+                  url={activeUrl}
+                  title={`${title} - Episode ${epParam}`}
+                  referer={activeServer?.referer}
+                  embedUrl={activeServer?.embedUrl}
+                  onBack={() => setSearchParams({})}
+                />
+              ) : (
+                <IframePlayer
+                  url={activeUrl}
+                  onBack={() => setSearchParams({})}
+                />
+              )
+            ) : null}
           </div>
-          {/* Gradient fade to black at bottom */}
-          <div style={{
-            position: 'absolute', inset: 0,
-            background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,15,15,0.6) 60%, rgba(15,15,15,1) 100%)',
-            pointerEvents: 'none',
-            zIndex: 3,
-          }} />
-        </div>
+        ) : (
+          <div style={{ position: 'relative', width: '100%', height: 210, overflow: 'hidden', background: '#111' }}>
+            <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              <img
+                src={cover} alt=""
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(20px) brightness(0.35)', transform: 'scale(1.15)', display: 'block' }}
+              />
+              <img
+                src={cover} alt={title}
+                style={{ height: '85%', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.65)', zIndex: 2, objectFit: 'contain' }}
+              />
+            </div>
+            {/* Gradient fade to black at bottom */}
+            <div style={{
+              position: 'absolute', inset: 0,
+              background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,15,15,0.6) 60%, rgba(15,15,15,1) 100%)',
+              pointerEvents: 'none',
+              zIndex: 3,
+            }} />
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════
+            SERVER SELECTION ROW
+        ════════════════════════════════════════ */}
+        {playParam && epParam && servers.length > 0 && (
+          <div style={{ padding: '12px 16px 0', borderBottom: '1px solid var(--border)', paddingBottom: 12 }}>
+            <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+              Select Server
+            </p>
+
+            {/* Segmented Control for Sub / Dub */}
+            <div style={{
+              display: 'flex',
+              background: 'rgba(255,255,255,0.03)',
+              borderRadius: 24,
+              padding: 3,
+              marginBottom: 10,
+              border: '1px solid var(--border)'
+            }}>
+              <button
+                disabled={subServers.length === 0}
+                onClick={() => {
+                  localStorage.setItem('anilab_preferred_track', 'sub');
+                  setAudioTrack('sub');
+                  if (subServers.length > 0) selectServer(subServers[0], servers);
+                }}
+                style={{
+                  flex: 1, padding: '6px 0', border: 'none',
+                  background: audioTrack === 'sub' ? 'var(--accent)' : 'transparent',
+                  color: subServers.length === 0 
+                    ? 'rgba(255,255,255,0.15)' 
+                    : (audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)'),
+                  opacity: subServers.length === 0 ? 0.35 : 1,
+                  fontSize: 11, fontWeight: 700, borderRadius: 20,
+                  cursor: subServers.length === 0 ? 'not-allowed' : 'pointer', 
+                  transition: 'all 0.2s'
+                }}
+              >
+                Subtitled (SUB)
+              </button>
+              <button
+                disabled={dubServers.length === 0}
+                onClick={() => {
+                  localStorage.setItem('anilab_preferred_track', 'dub');
+                  setAudioTrack('dub');
+                  if (dubServers.length > 0) selectServer(dubServers[0], servers);
+                }}
+                style={{
+                  flex: 1, padding: '6px 0', border: 'none',
+                  background: audioTrack === 'dub' ? 'var(--accent)' : 'transparent',
+                  color: dubServers.length === 0 
+                    ? 'rgba(255,255,255,0.15)' 
+                    : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
+                  opacity: dubServers.length === 0 ? 0.35 : 1,
+                  fontSize: 11, fontWeight: 700, borderRadius: 20,
+                  cursor: dubServers.length === 0 ? 'not-allowed' : 'pointer', 
+                  transition: 'all 0.2s'
+                }}
+              >
+                Dubbed (DUB)
+              </button>
+            </div>
+
+            {/* Active Track Server List */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {(audioTrack === 'sub' ? subServers : dubServers).map((s, idx) => {
+                const active = activeServer?.videoUrl === s.videoUrl;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => selectServer(s, servers)}
+                    style={{
+                      padding: '6px 12px', borderRadius: 20,
+                      background: active ? 'var(--accent)' : 'var(--bg-card)',
+                      border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                      color: active ? '#fff' : 'var(--text-secondary)',
+                      fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      transition: 'all 0.25s'
+                    }}
+                  >
+                    {active && <span style={{ width: 4, height: 4, borderRadius: '50%', background: '#fff', flexShrink: 0 }} />}
+                    {s.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* ════════════════════════════════════════
             TITLE ROW
@@ -219,7 +541,7 @@ export default function AnimePage() {
               className="btn btn-primary"
               id={`play-${anime.id}`}
               style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10 }}
-              onClick={() => navigate(`/watch/${anime.id}/${resumeEp}`)}
+              onClick={() => setSearchParams({ play: 'true', ep: String(resumeEp) })}
             >
               <Play size={17} fill="#fff" />
               {prog && resumeEp > 0 ? `Resume Ep ${resumeEp}` : 'Play'}
@@ -329,7 +651,10 @@ export default function AnimePage() {
                   return (
                     <div
                       key={n}
-                      onClick={() => navigate(`/watch/${anime.id}/${n}`)}
+                      onClick={() => {
+                        setSearchParams({ play: 'true', ep: String(n) });
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
                       id={`ep-card-${n}`}
                       role="button" tabIndex={0}
                       style={{
