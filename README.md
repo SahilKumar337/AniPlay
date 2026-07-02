@@ -9,7 +9,7 @@ AniPlay is a premium, open-source mobile anime streaming client designed for And
 * **🎭 Elegant UI & Fluid Animations**: Modern, dark-themed user interface utilizing curated indigo/violet accent gradients, responsive carousels, and micro-interactions.
 * **💾 Native Device Storage (Capacitor Preferences)**: Save watchlist details, favorites, and track precise watch history directly to the native Android SharedPreferences database (cache-wipe proof).
 * **📺 High-Performance HLS Player**: Custom HTML5 media player tailored for mobile touchscreens, featuring double-tap seek, automatic orientation locking/unlocking, gesture controls, and clean error states.
-* **📡 Dynamic Server Aggregation**: Scrapes multiple public streams on-demand, parsing subtitle tracks, resolutions, and video hosts without storing credentials locally.
+* **📡 Dynamic Server Aggregation**: Fetches and aggregates public streams on-demand, automatically parsing subtitle tracks, available resolutions, and host metadata. Designed with a zero-trust architecture that never stores user credentials locally.
 * **🔄 Serverless Live Updates**: Built-in background update checker that compares installed versions against GitHub releases, enabling remote updates and domain hot-swaps instantly.
 * **📅 Adaptive Schedule Feed**: Fully integrated with the AniList GraphQL API to fetch upcoming episode releases, schedules, and metadata.
 
