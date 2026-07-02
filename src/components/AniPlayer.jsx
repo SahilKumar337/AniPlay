@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
 import { CapacitorHttp, CapacitorCookies } from '@capacitor/core';
 import {
@@ -539,17 +540,26 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     };
   }, [log]);
 
-  // Monitor stuck state
+  // Monitor stuck state (triggers retry state after 30 seconds of loading or buffering)
   useEffect(() => {
-    if (!waiting) {
+    const isLoading = (waiting || !hasStarted) && !hlsErr;
+    if (!isLoading) {
       setStuckCount(0);
       return;
     }
     const interval = setInterval(() => {
-      setStuckCount(c => c + 1);
+      setStuckCount(c => {
+        const next = c + 1;
+        if (next >= 30) {
+          log('Playback loading timed out after 30 seconds. Displaying retry.');
+          setHlsErr('Playback loading timed out. Please try again.');
+          setWaiting(false);
+        }
+        return next;
+      });
     }, 1000);
     return () => clearInterval(interval);
-  }, [waiting]);
+  }, [waiting, hasStarted, hlsErr, log]);
 
   /* ── Fullscreen events ────────────────────────────────────── */
   useEffect(() => {
@@ -807,7 +817,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     : '';
 
   /* ─── Render ──────────────────────────────────────────────── */
-  return (
+  const playerContent = (
     <div
       ref={wrapRef}
       className={['anip', fs ? 'anip--fs' : '', ctrlVis ? 'anip--ctrl' : '', isTouch() ? 'anip--touch' : ''].filter(Boolean).join(' ')}
@@ -1097,4 +1107,6 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
 
     </div>
   );
+
+  return fs ? createPortal(playerContent, document.body) : playerContent;
 }
