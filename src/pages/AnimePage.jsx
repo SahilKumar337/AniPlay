@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Share2, Bookmark, Star, Play, Download,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
-  AlertCircle, Search as SearchIcon,
+  AlertCircle, Search as SearchIcon, ChevronLeft, ChevronRight,
+  Clock, CheckCircle,
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
@@ -23,7 +24,9 @@ export default function AnimePage() {
   const [tab,      setTab]      = useState('episodes');
   const [synOpen,  setSynOpen]  = useState(false);
   const [epQuery,  setEpQuery]  = useState('');
+  const [epPage,   setEpPage]   = useState(1); // pagination for episode list
   const [scrolled, setScrolled] = useState(false);
+  const EP_PER_PAGE = 50;
 
   useEffect(() => {
     const handleScroll = () => {
@@ -76,13 +79,17 @@ export default function AnimePage() {
   const inList  = isInWatchlist(anime.id);
   const fav     = isFavorite(anime.id);
   const prog    = getEpisodeProgress(anime.id);
-  const isNotReleased = false;
+  // ── Fix: isNotReleased was hardcoded false — now checks real status ──
+  const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (eps === 0 && !anime.nextAiringEpisode);
   const totalEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
     ? anime.nextAiringEpisode.episode - 1 
-    : (eps || 12);
-  const resumeEp = prog?.episode ? Math.min(prog.episode, totalEps) : 1;
+    : (eps || 0);
+  const resumeEp = prog?.episode ? Math.min(prog.episode, Math.max(totalEps, 1)) : 1;
   const allEps   = Array.from({ length: totalEps }, (_, i) => i + 1);
   const filtered = epQuery ? allEps.filter(n => String(n).includes(epQuery.trim())) : allEps;
+  // Pagination
+  const totalPages = Math.ceil(filtered.length / EP_PER_PAGE);
+  const filteredPage = filtered.slice((epPage - 1) * EP_PER_PAGE, epPage * EP_PER_PAGE);
   const recs     = anime.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [];
   const chars    = (anime.characters?.edges || []).map(e => ({ ...e.node, voiceActors: e.voiceActors || [] }));
 
@@ -220,11 +227,11 @@ export default function AnimePage() {
             <button
               className="btn btn-primary"
               id={`dl-${anime.id}`}
-              style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10, background: '#b50010' }}
-              onClick={() => navigate(`/watch/${anime.id}/${resumeEp}`)}
+              style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10, background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)' }}
+              onClick={() => navigate('/download')}
             >
               <Download size={17} />
-              Download
+              Downloads
             </button>
           </>
         )}
@@ -289,7 +296,10 @@ export default function AnimePage() {
           <div>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <span style={{ fontSize: 15, fontWeight: 700 }}>Episodes</span>
+              <span style={{ fontSize: 15, fontWeight: 700 }}>
+                Episodes
+                {totalEps > 0 && <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>{totalEps} total</span>}
+              </span>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: 'var(--bg-card)', borderRadius: 8, padding: '6px 10px',
@@ -297,76 +307,116 @@ export default function AnimePage() {
               }}>
                 <SearchIcon size={12} color="var(--text-muted)" />
                 <input
-                  type="number" placeholder="Search episode" value={epQuery} min={1}
-                  onChange={e => setEpQuery(e.target.value)}
+                  type="number" placeholder="Go to ep..." value={epQuery} min={1}
+                  onChange={e => { setEpQuery(e.target.value); setEpPage(1); }}
                   id="ep-search"
-                  style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 12, width: 100 }}
+                  style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 12, width: 80 }}
                 />
               </div>
             </div>
 
-            {/* Episode Cards — 3 per row, thumbnail style like Anilab */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-              {filtered.slice(0, 99).map(n => {
-                const isWatched = prog?.episode > n;
-                const isCurrent = prog?.episode === n;
-                return (
-                  <div
-                    key={n}
-                    onClick={() => navigate(`/watch/${anime.id}/${n}`)}
-                    id={`ep-card-${n}`}
-                    role="button" tabIndex={0}
-                    style={{
-                      borderRadius: 10, overflow: 'hidden', cursor: 'pointer',
-                      border: isCurrent ? '2px solid var(--accent)' : '1px solid var(--border)',
-                      background: 'var(--bg-card)',
-                      transition: 'transform 0.15s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.04)'}
-                    onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
-                  >
-                    {/* Thumbnail */}
-                    <div style={{ position: 'relative', aspectRatio: '16/9', background: '#111', overflow: 'hidden' }}>
-                      <img
-                        src={cover} alt={`Episode ${n}`}
-                        loading="lazy"
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isWatched ? 'brightness(0.4)' : 'brightness(0.75)' }}
-                        onError={e => { e.target.style.display = 'none'; }}
-                      />
-                      {/* Play overlay */}
+            {/* Episode List — clean Netflix-style numbered rows */}
+            {isNotReleased || totalEps === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 14 }}>
+                <AlertCircle size={32} style={{ marginBottom: 12, opacity: 0.5 }} />
+                <p>No episodes available yet.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {filteredPage.map(n => {
+                  const isWatched = prog?.episode > n;
+                  const isCurrent = prog?.episode === n;
+                  return (
+                    <div
+                      key={n}
+                      onClick={() => navigate(`/watch/${anime.id}/${n}`)}
+                      id={`ep-card-${n}`}
+                      role="button" tabIndex={0}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 14,
+                        padding: '12px 4px',
+                        borderBottom: '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        borderRadius: 8,
+                        transition: 'background 0.15s',
+                        background: isCurrent ? 'rgba(229,9,20,0.06)' : 'transparent',
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+                      onMouseLeave={e => e.currentTarget.style.background = isCurrent ? 'rgba(229,9,20,0.06)' : 'transparent'}
+                    >
+                      {/* Episode number */}
+                      <span style={{
+                        width: 40, textAlign: 'center', fontSize: 16, fontWeight: 800,
+                        color: isCurrent ? 'var(--accent)' : isWatched ? 'rgba(255,255,255,0.2)' : 'var(--text-muted)',
+                        flexShrink: 0,
+                      }}>{n}</span>
+
+                      {/* Status bar on left */}
                       <div style={{
-                        position: 'absolute', inset: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        <div style={{
-                          width: 28, height: 28, borderRadius: '50%',
-                          background: isCurrent ? 'var(--accent)' : 'rgba(229,9,20,0.85)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        }}>
-                          <Play size={12} fill="#fff" color="#fff" />
+                        width: 3, height: 32, borderRadius: 3, flexShrink: 0,
+                        background: isCurrent ? 'var(--accent)' : isWatched ? 'rgba(76,175,80,0.6)' : 'rgba(255,255,255,0.08)',
+                      }} />
+
+                      {/* Label */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: isWatched ? 'var(--text-muted)' : 'var(--text-primary)' }}>
+                          Episode {n}
                         </div>
+                        {isCurrent && (
+                          <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2, fontWeight: 600 }}>▶ Resume here</div>
+                        )}
+                        {isWatched && !isCurrent && (
+                          <div style={{ fontSize: 11, color: 'rgba(76,175,80,0.8)', marginTop: 2 }}>✓ Watched</div>
+                        )}
                       </div>
-                      {/* Watched checkmark */}
-                      {isWatched && (
-                        <div style={{
-                          position: 'absolute', top: 4, right: 4,
-                          background: 'rgba(76,175,80,0.9)', borderRadius: '50%',
-                          width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 10, color: '#fff',
-                        }}>✓</div>
-                      )}
-                    </div>
-                    {/* Label */}
-                    <div style={{ padding: '5px 7px' }}>
+
+                      {/* Play icon */}
                       <div style={{
-                        fontSize: 11, fontWeight: 600,
-                        color: isCurrent ? 'var(--accent)' : 'var(--text-secondary)',
-                      }}>Episode-{n}</div>
+                        width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+                        background: isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.07)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                      }}>
+                        <Play size={13} fill={isCurrent ? '#fff' : 'rgba(255,255,255,0.6)'} color={isCurrent ? '#fff' : 'rgba(255,255,255,0.6)'} />
+                      </div>
                     </div>
+                  );
+                })}
+
+                {/* Pagination controls */}
+                {totalPages > 1 && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 16, paddingBottom: 8 }}>
+                    <button
+                      onClick={() => setEpPage(p => Math.max(1, p - 1))}
+                      disabled={epPage <= 1}
+                      style={{
+                        padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600,
+                        background: epPage <= 1 ? 'rgba(255,255,255,0.03)' : 'var(--bg-card)',
+                        border: '1px solid var(--border)', color: epPage <= 1 ? 'var(--text-muted)' : 'var(--text-primary)',
+                        cursor: epPage <= 1 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                      }}
+                    >
+                      <ChevronLeft size={14} /> Prev
+                    </button>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      Page {epPage} / {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setEpPage(p => Math.min(totalPages, p + 1))}
+                      disabled={epPage >= totalPages}
+                      style={{
+                        padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600,
+                        background: epPage >= totalPages ? 'rgba(255,255,255,0.03)' : 'var(--bg-card)',
+                        border: '1px solid var(--border)', color: epPage >= totalPages ? 'var(--text-muted)' : 'var(--text-primary)',
+                        cursor: epPage >= totalPages ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                      }}
+                    >
+                      Next <ChevronRight size={14} />
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

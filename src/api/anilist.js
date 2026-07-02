@@ -107,7 +107,7 @@ export async function getAiring(page = 1, perPage = 15) {
   return (d?.Page?.media || []).filter(a => getCover(a));
 }
 
-/* ── New Episode Releases (aired in the past 2 weeks) ─────────── */
+/* ── New Episode Releases (aired in the past 2 weeks, NOT future) ── */
 export async function getNewReleases(page = 1, perPage = 20) {
   const now      = Math.floor(Date.now() / 1000);
   const twoWeeks = now - 14 * 86400;
@@ -115,12 +115,18 @@ export async function getNewReleases(page = 1, perPage = 20) {
     Page(page:$p,perPage:$n){
       airingSchedules(airingAt_greater:$from,airingAt_lesser:$to,sort:TIME_DESC){
         airingAt episode
-        media{ ${CARD_FIELDS} isAdult }
+        media{ ${CARD_FIELDS} isAdult status }
       }
     }
   }`;
   const d = await gql(q, { p: page, n: perPage, from: twoWeeks, to: now });
-  const schedules = (d?.Page?.airingSchedules || []).filter(s => !s.media?.isAdult && getCover(s.media));
+  const schedules = (d?.Page?.airingSchedules || [])
+    .filter(s =>
+      !s.media?.isAdult &&
+      getCover(s.media) &&
+      s.media?.status !== 'NOT_YET_RELEASED' &&
+      s.airingAt <= now  // ← only past airings, never future
+    );
   const seen = new Set();
   const unique = [];
   for (const s of schedules) {

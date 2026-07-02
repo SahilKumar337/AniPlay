@@ -21,9 +21,9 @@
   --bg-secondary: #181818;
   --bg-card:      #1e1e1e;
   --bg-hover:     #262626;
-  --accent:       #e50914;
-  --accent-hover: #ff1a26;
-  --accent-dim:   rgba(229,9,20,0.15);
+  --accent:       #6366f1;
+  --accent-hover: #818cf8;
+  --accent-dim:   rgba(99,102,241,0.15);
   --text-primary:   #ffffff;
   --text-secondary: #a0a0a0;
   --text-muted:     #666666;
@@ -33,7 +33,7 @@
   --radius-lg:    16px;
   --radius-xl:    24px;
   --shadow-card:  0 4px 20px rgba(0,0,0,0.5);
-  --shadow-glow:  0 0 20px rgba(229,9,20,0.3);
+  --shadow-glow:  0 0 20px rgba(99,102,241,0.3);
   --nav-height:   56px;
   --transition:   0.2s ease;
   --font-main:    'Inter', sans-serif;
@@ -88,7 +88,7 @@ ul, ol { list-style: none; }
 }
 
 @media (min-width: 768px) {
-  .app-container {
+  .app-container:not(.app-container--native) {
     max-width: 480px;
     margin: 0 auto;
     border-left: 1px solid var(--border);

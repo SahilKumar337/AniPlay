@@ -105,11 +105,11 @@ export default function Home() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'all', cursor: 'pointer', opacity: scrolled ? 1 : 0.9, transition: 'opacity 0.2s' }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
           <div style={{
-            width: 28, height: 28, background: 'var(--accent)', borderRadius: 8,
+            width: 28, height: 28, background: 'linear-gradient(135deg, #818cf8, #a78bfa)', borderRadius: 8,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 14, fontWeight: 900, fontFamily: 'var(--font-brand)', color: '#fff'
-          }}>A</div>
-          <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', letterSpacing: -0.5 }}>AniLab</span>
+            fontSize: 12, fontWeight: 900, fontFamily: 'var(--font-brand)', color: '#fff', paddingLeft: 1
+          }}>▶</div>
+          <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', letterSpacing: -0.5 }}>AniPlay</span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
           <button

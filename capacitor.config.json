@@ -1,6 +1,6 @@
 {
-  "appId": "com.sahil.anilab",
-  "appName": "AniLab",
+  "appId": "com.aniplay.aniplay",
+  "appName": "AniPlay",
   "webDir": "dist",
   "android": {
     "allowMixedContent": true,
@@ -20,6 +20,9 @@
   "plugins": {
     "CapacitorHttp": {
       "enabled": true
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": true
     }
   }
 }

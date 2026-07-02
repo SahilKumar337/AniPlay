@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate }            from 'react-router-dom';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, List,
@@ -9,14 +9,11 @@ import { getAniNekoServers, getCachedServers, checkProxy } from '../api/stream';
 import Navbar      from '../components/Navbar';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
+import { scrapeEmbedNative } from '../api/embedScraper';
 import { useApp }  from '../context/AppContext';
 
-const PROXY_URL = import.meta.env.VITE_PROXY_URL || '';
-
-function formatServerUrl(path) {
-  if (path.startsWith('http')) return path;
-  return `${PROXY_URL}${path.startsWith('/') ? path : '/' + path}`;
-}
+// Way 4: Pure client-side scraping — native hidden WebView (like Cloudstream/Aniyomi).
+const IS_NATIVE = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 
 export default function WatchPage() {
   const { id, ep } = useParams();
@@ -86,57 +83,61 @@ export default function WatchPage() {
     const tryNext = () => {
       if (currentIndex !== -1 && currentIndex < sameTypeServers.length - 1) {
         const nextSrv = sameTypeServers[currentIndex + 1];
-        console.log(`[WatchPage] Server ${srv.name} failed. Falling back to next server: ${nextSrv.name}...`);
+        console.log(`[WatchPage] Server ${srv.name} failed. Falling back to: ${nextSrv.name}`);
         selectServer(nextSrv, listToUse);
       } else {
         setStreamErr('All available servers failed to load. Please try another episode.');
       }
     };
 
-    // For AniWaves iframe-proxy servers: try Puppeteer extraction first,
-    // but fall back to iframe quickly (Render free tier may not have Chrome)
-    if (srv.videoUrl && srv.videoUrl.includes('iframe-proxy')) {
-      let embedUrl = srv.videoUrl;
-      try {
-        const proxyUrlObj = new URL(srv.videoUrl, window.location.origin);
-        embedUrl = proxyUrlObj.searchParams.get('url') || srv.videoUrl;
-      } catch {}
+    // ── Embed servers (Waves / Neko) ─────────────────────────────────
+    const isEmbedServer = !srv.isHLS && srv.embedUrl;
+    if (isEmbedServer) {
+      const embedUrl = srv.embedUrl;
+      const referer  = srv.referer || 'https://aniwaves.ru/';
 
-      setActiveName(srv.name);
-      setActiveType(srv.type || 'sub');
-      setIsActiveHLS(false);
-      // Show the iframe immediately — JS injection will fire postMessage when m3u8 is found
-      setActiveUrl(srv.videoUrl);
-      setExtracting(false);
+      if (IS_NATIVE) {
+        // ── TRUE Way 4 (Android): Hidden native WebView with correct Referer ──
+        // Same technique as Cloudstream/Aniyomi — sets Referer header so
+        // Vidplay/echovideo decrypt the video source correctly.
+        setActiveName(srv.name);
+        setActiveType(srv.type || 'sub');
+        setIsActiveHLS(false);
+        setActiveUrl(''); // clear previous player
+        setExtracting(true); // show loading spinner
 
-      // Also fire a background extraction attempt — if it succeeds, switch to native player
-      // Use a short timeout so it doesn't hang forever
-      const extractController = new AbortController();
-      const extractTimeout = setTimeout(() => extractController.abort(), 20000);
-      fetch(formatServerUrl(`/api/extract-stream?url=${encodeURIComponent(embedUrl)}`), {
-        signal: extractController.signal
-      })
-        .then(r => r.json())
-        .then(data => {
-          if (data.ok && data.url) {
-            console.log('[WatchPage] Background extraction succeeded, switching to native player');
-            setActiveUrl(formatServerUrl(data.url));
+        scrapeEmbedNative(embedUrl, referer, 40000)
+          .then(m3u8Url => {
+            console.log('[WatchPage] Native scraper captured:', m3u8Url.slice(0, 80));
+            setExtracting(false);
+            setActiveUrl(m3u8Url);
             setIsActiveHLS(true);
-            setActiveName(srv.name);
-          }
-        })
-        .catch(e => console.log('[WatchPage] Background extraction skipped:', e.message))
-        .finally(() => clearTimeout(extractTimeout));
-      return;
+          })
+          .catch(err => {
+            console.warn('[WatchPage] Native scraper failed:', err.message);
+            setExtracting(false);
+            tryNext();
+          });
+        return;
+      } else {
+        // ── Desktop dev: Use IframePlayer with blob-URL injection ──
+        setActiveName(srv.name);
+        setActiveType(srv.type || 'sub');
+        setIsActiveHLS(false);
+        setActiveUrl(embedUrl);
+        setExtracting(false);
+        return;
+      }
     }
 
-    // Regular servers (AniNeko direct HLS or other iframes)
+    // ── Direct HLS servers (AniHD1, AniNeko with isHLS=true) ───────────
     setActiveUrl(srv.videoUrl);
     setActiveName(srv.name);
     setActiveType(srv.type || 'sub');
     setIsActiveHLS(!!srv.isHLS);
     setExtracting(false);
   }, []);
+
 
   const fetchStream = useCallback(async () => {
     if (!anime) return;
@@ -249,7 +250,8 @@ export default function WatchPage() {
       ? anime.nextAiringEpisode.episode - 1 
       : (anime?.episodes || 999);
     if (n < 1 || n > max) return;
-    navigate(`/watch/${id}/${n}`, { replace: true });
+    // Use push (not replace) so back button returns to previous episode
+    navigate(`/watch/${id}/${n}`);
     window.scrollTo(0, 0);
   };
 
@@ -273,8 +275,30 @@ export default function WatchPage() {
   const totalEps = anime
     ? ((anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
         ? anime.nextAiringEpisode.episode - 1
-        : (anime.episodes || 12))
-    : 12;
+        : (anime.episodes || 0))
+    : 0;
+
+  // ── Guard: anime not yet released ───────────────────────────────
+  if (!loadAnime && anime && (anime.status === 'NOT_YET_RELEASED' || totalEps === 0)) {
+    return (
+      <div style={{ background: 'var(--bg-primary)', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ fontSize: 64, marginBottom: 16 }}>🎬</div>
+        <p style={{ fontSize: 20, fontWeight: 800, marginBottom: 8, textAlign: 'center' }}>Coming Soon</p>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 280, marginBottom: 24, lineHeight: 1.6 }}>
+          {getTitle(anime)} hasn't aired yet. Check back when it releases!
+        </p>
+        {anime.nextAiringEpisode && (
+          <p style={{ fontSize: 13, color: 'var(--accent)', fontWeight: 600, marginBottom: 24 }}>
+            Episode {anime.nextAiringEpisode.episode} airs {new Date(anime.nextAiringEpisode.airingAt * 1000).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+          </p>
+        )}
+        <button className="btn btn-primary" onClick={() => navigate(`/anime/${id}`)}>
+          <ArrowLeft size={15} /> View Details
+        </button>
+        <Navbar />
+      </div>
+    );
+  }
 
   return (
     <div style={{ background:'var(--bg-primary)', minHeight:'100vh', paddingBottom:80 }}>
@@ -332,10 +356,11 @@ export default function WatchPage() {
         {/* ── Native HLS Player (AniPlayer) ───────────────── */}
         {!loadAnime && !loadStream && !extracting && activeUrl && isActiveHLS && !streamErr && (
           <AniPlayer
-            key={activeUrl}
             url={activeUrl}
-            title={`${title} – Episode ${episode}`}
-            subtitleTracks={activeServer?.subtitles || []}
+            title={activeName ? `${anime.title.english || anime.title.romaji} - ${activeName}` : (anime.title.english || anime.title.romaji)}
+            subtitles={activeServer?.subtitles || []}
+            referer={activeServer?.referer}
+            embedUrl={activeServer?.embedUrl}
             onBack={() => navigate(`/anime/${id}`, { replace: true })}
           />
         )}
@@ -346,18 +371,36 @@ export default function WatchPage() {
             key={activeUrl}
             src={activeUrl}
             onBack={() => navigate(`/anime/${id}`, { replace: true })}
-            onStreamCaptured={(m3u8Url, referer) => {
-              const apiKey = import.meta.env.VITE_API_KEY || '';
-              let proxied = `${PROXY_URL}/api/stream/hls?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`;
-              if (apiKey) {
-                proxied += `&api_key=${encodeURIComponent(apiKey)}`;
+            onStreamCaptured={(m3u8Url, referer, meta) => {
+              // Embed page reported an error (file deleted, copyright, etc.)
+              if (meta?.error) {
+                console.warn('[WatchPage] Embed error detected, trying next server:', meta.reason);
+                // Find the next server that is NOT the current one
+                const current = servers.find(s => s.videoUrl === activeUrl || s.name === activeName);
+                const fallbacks = servers.filter(s =>
+                  s.videoUrl !== activeUrl &&
+                  s.name !== activeName &&
+                  s.type === (current?.type || activeType)
+                );
+                const next = fallbacks[0] || servers.find(s => s.videoUrl !== activeUrl && s.name !== activeName);
+                if (next) {
+                  console.log('[WatchPage] Auto-switching to:', next.name);
+                  selectServer(next, servers);
+                  setActiveServer(next);
+                } else {
+                  setStreamErr('All servers for this episode have been removed. Try a different source.');
+                }
+                return;
               }
-              console.log('[WatchPage] IframePlayer captured stream, switching to native player');
-              setActiveUrl(proxied);
+
+              // Way 4: WebView captured the real m3u8 — play it directly, no server proxy.
+              console.log('[WatchPage] WebView captured stream, playing directly:', m3u8Url.slice(0, 80));
+              setActiveUrl(m3u8Url);
               setIsActiveHLS(true);
             }}
           />
         )}
+
       </div>
 
 

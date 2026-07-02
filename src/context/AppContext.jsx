@@ -1,31 +1,14 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { Preferences } from '@capacitor/preferences';
 
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
-  // ── Watchlist: { [animeId]: { anime, status, progress } }
-  const [watchlist, setWatchlist] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('anilab_watchlist') || '{}'); }
-    catch { return {}; }
-  });
-
-  // ── Favorites: Set of IDs
-  const [favorites, setFavorites] = useState(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('anilab_favorites') || '[]')); }
-    catch { return new Set(); }
-  });
-
-  // ── Recently viewed: [ { anime, episode, timestamp }, ... ]
-  const [recentlyViewed, setRecentlyViewed] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('anilab_recently_viewed') || '[]'); }
-    catch { return []; }
-  });
-
-  // ── Watch progress: { [animeId]: { episode, timestamp } }
-  const [progress, setProgress] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('anilab_progress') || '{}'); }
-    catch { return {}; }
-  });
+  const [watchlist, setWatchlist] = useState({});
+  const [favorites, setFavorites] = useState(new Set());
+  const [recentlyViewed, setRecentlyViewed] = useState([]);
+  const [progress, setProgress] = useState({});
+  const [loaded, setLoaded] = useState(false);
 
   // ── Toast
   const [toast, setToast] = useState({ msg: '', show: false });
@@ -35,25 +18,89 @@ export function AppProvider({ children }) {
     setTimeout(() => setToast({ msg: '', show: false }), 2500);
   }, []);
 
-  // Persist watchlist
+  // ── Load & Automatic Migration on Startup ──────────────────────
   useEffect(() => {
-    localStorage.setItem('anilab_watchlist', JSON.stringify(watchlist));
-  }, [watchlist]);
+    async function loadData() {
+      try {
+        // Try loading from native preferences
+        const wVal = await Preferences.get({ key: 'aniplay_watchlist' });
+        const fVal = await Preferences.get({ key: 'aniplay_favorites' });
+        const rVal = await Preferences.get({ key: 'aniplay_recently_viewed' });
+        const pVal = await Preferences.get({ key: 'aniplay_progress' });
 
-  // Persist favorites
-  useEffect(() => {
-    localStorage.setItem('anilab_favorites', JSON.stringify([...favorites]));
-  }, [favorites]);
+        let finalWatchlist = wVal.value ? JSON.parse(wVal.value) : null;
+        let finalFavorites = fVal.value ? JSON.parse(fVal.value) : null;
+        let finalRecently = rVal.value ? JSON.parse(rVal.value) : null;
+        let finalProgress = pVal.value ? JSON.parse(pVal.value) : null;
 
-  // Persist progress
-  useEffect(() => {
-    localStorage.setItem('anilab_progress', JSON.stringify(progress));
-  }, [progress]);
+        // Migration Check: If native preferences are empty, try migrating from localStorage
+        if (!finalWatchlist && !finalFavorites && !finalRecently && !finalProgress) {
+          console.log('[AppStorage] Migrating legacy localStorage to native Preferences...');
+          const legacyW = localStorage.getItem('anilab_watchlist');
+          const legacyF = localStorage.getItem('anilab_favorites');
+          const legacyR = localStorage.getItem('anilab_recently_viewed');
+          const legacyP = localStorage.getItem('anilab_progress');
 
-  // Persist recently viewed
+          if (legacyW) {
+            finalWatchlist = JSON.parse(legacyW);
+            await Preferences.set({ key: 'aniplay_watchlist', value: legacyW });
+            localStorage.removeItem('anilab_watchlist');
+          }
+          if (legacyF) {
+            finalFavorites = JSON.parse(legacyF);
+            await Preferences.set({ key: 'aniplay_favorites', value: legacyF });
+            localStorage.removeItem('anilab_favorites');
+          }
+          if (legacyR) {
+            finalRecently = JSON.parse(legacyR);
+            await Preferences.set({ key: 'aniplay_recently_viewed', value: legacyR });
+            localStorage.removeItem('anilab_recently_viewed');
+          }
+          if (legacyP) {
+            finalProgress = JSON.parse(legacyP);
+            await Preferences.set({ key: 'aniplay_progress', value: legacyP });
+            localStorage.removeItem('anilab_progress');
+          }
+        }
+
+        // Set React States
+        if (finalWatchlist) setWatchlist(finalWatchlist);
+        if (finalFavorites) setFavorites(new Set(finalFavorites));
+        if (finalRecently)   setRecentlyViewed(finalRecently);
+        if (finalProgress)   setProgress(finalProgress);
+
+      } catch (e) {
+        console.error('[AppStorage] Error loading data from Capacitor Preferences:', e);
+      } finally {
+        setLoaded(true);
+      }
+    }
+    loadData();
+  }, []);
+
+  // ── Auto-save Watchlist when changed ───────────────────────────
   useEffect(() => {
-    localStorage.setItem('anilab_recently_viewed', JSON.stringify(recentlyViewed));
-  }, [recentlyViewed]);
+    if (!loaded) return;
+    Preferences.set({ key: 'aniplay_watchlist', value: JSON.stringify(watchlist) }).catch(console.error);
+  }, [watchlist, loaded]);
+
+  // ── Auto-save Favorites when changed ───────────────────────────
+  useEffect(() => {
+    if (!loaded) return;
+    Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify([...favorites]) }).catch(console.error);
+  }, [favorites, loaded]);
+
+  // ── Auto-save Progress when changed ────────────────────────────
+  useEffect(() => {
+    if (!loaded) return;
+    Preferences.set({ key: 'aniplay_progress', value: JSON.stringify(progress) }).catch(console.error);
+  }, [progress, loaded]);
+
+  // ── Auto-save Recently Viewed when changed ─────────────────────
+  useEffect(() => {
+    if (!loaded) return;
+    Preferences.set({ key: 'aniplay_recently_viewed', value: JSON.stringify(recentlyViewed) }).catch(console.error);
+  }, [recentlyViewed, loaded]);
 
   const addToWatchlist = useCallback((anime, status = 'plan_to_watch') => {
     setWatchlist(prev => ({
@@ -86,7 +133,6 @@ export function AppProvider({ children }) {
       const next = new Set(prev);
       if (next.has(animeId)) {
         next.delete(animeId);
-        // Also remove from watchlist so My List stays in sync
         setWatchlist(w => {
           const wNext = { ...w };
           delete wNext[animeId];
@@ -95,7 +141,6 @@ export function AppProvider({ children }) {
         showToast('Removed from My List');
       } else {
         next.add(animeId);
-        // Also add to watchlist so it appears in My List
         if (anime) {
           setWatchlist(w => ({
             ...w,
@@ -135,7 +180,7 @@ export function AppProvider({ children }) {
       favorites, toggleFavorite, isFavorite,
       progress, setEpisodeProgress, getEpisodeProgress,
       recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
-      showToast, toast,
+      showToast, toast, loaded
     }}>
       {children}
       {/* Global Toast */}

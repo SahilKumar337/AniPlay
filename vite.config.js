@@ -7,7 +7,7 @@ export default defineConfig({
     port: 3000,
     open: true,
     watch: {
-      ignored: ['**/.playwright_profile/**'],
+      ignored: ['**/.playwright_profile*/**'],
     },
     proxy: {
       '/api': {

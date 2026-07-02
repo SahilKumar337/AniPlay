@@ -2405,8 +2405,9 @@ export async function handleRequest(req, res) {
     cors(res);
     const targetUrl = searchParams.get('url');
     if (!targetUrl) { res.writeHead(400); return res.end('missing url'); }
+    const referer = searchParams.get('referer') || (() => { try { return new URL(targetUrl).origin; } catch { return ''; } })();
     try {
-      const text = await xfetch(targetUrl);
+      const text = await xfetch(targetUrl, { referer });
       
       // Parse WebVTT text into JSON cues
       const cues = [];

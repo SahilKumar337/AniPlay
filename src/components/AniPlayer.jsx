@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Hls from 'hls.js';
+import { CapacitorHttp, CapacitorCookies } from '@capacitor/core';
 import {
   Play, Pause, Volume2, VolumeX, Volume1,
   Maximize, Minimize, Settings, Subtitles,
@@ -8,6 +9,126 @@ import {
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
 import './AniPlayer.css';
+
+/* ─── Way 4: CapacitorHttp hls.js loader ──────────────────────
+   On Android, each HLS manifest and fragment is fetched through
+   CapacitorHttp which bypasses CORS at the OS network layer.
+   This eliminates the need for any backend HLS proxy server.
+──────────────────────────────────────────────────────────────── */
+const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
+
+function base64ToArrayBuffer(base64) {
+  var binary_string = window.atob(base64);
+  var len = binary_string.length;
+  var bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) {
+      bytes[i] = binary_string.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
+  return class CapacitorHlsLoader extends DefaultLoader {
+    constructor(config) {
+      super(config);
+      this._aborted = false;
+    }
+
+    destroy() {
+      this._aborted = true;
+      super.destroy();
+    }
+
+    abort() {
+      this._aborted = true;
+      super.abort();
+    }
+
+    load(context, config, callbacks) {
+      if (!isNative) {
+        // On desktop browser, fall back to the default fetch-based loader
+        return super.load(context, config, callbacks);
+      }
+
+      const url = context.url;
+      const isPlaylist = context.type === 'manifest' || context.type === 'level';
+      const t0 = performance.now();
+      this._aborted = false;
+
+      (async () => {
+        try {
+          const reqHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+            'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
+          };
+
+          if (refererUrl) {
+            reqHeaders['Origin'] = refererUrl.replace(/\/$/, '');
+            reqHeaders['Referer'] = refererUrl;
+          } else {
+            reqHeaders['Origin'] = 'https://animetsu.net';
+            reqHeaders['Referer'] = 'https://animetsu.net/';
+          }
+
+          if (embedUrl && isNative) {
+            const targetHost = new URL(url).origin;
+            // Native CookieManager has the cookies from the hidden WebView scrape
+            const cookies = await CapacitorCookies.getCookies({ url: targetHost });
+            if (cookies && Object.keys(cookies).length > 0) {
+              const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+              reqHeaders['Cookie'] = cookieStr;
+            }
+          }
+
+          if (this._aborted) return;
+
+          const response = await CapacitorHttp.request({
+            url,
+            method: 'GET',
+            headers: reqHeaders,
+            // Playlists are text, binary TS segments are returned as base64 string when using 'blob' responseType in Capacitor
+            responseType: isPlaylist ? 'text' : 'blob',
+          });
+
+          if (this._aborted) return;
+
+          if (response.status >= 400) {
+            callbacks.onError(
+              { code: response.status, text: `HTTP ${response.status}` },
+              context, null
+            );
+            return;
+          }
+
+          const now = performance.now();
+          let data = response.data;
+
+          if (!isPlaylist && typeof data === 'string') {
+            // Capacitor returns 'blob' as a base64 encoded string
+            data = base64ToArrayBuffer(data);
+          }
+
+          const stats = {
+            aborted: false,
+            loaded: data.byteLength || data.length || 0,
+            retry: 0,
+            total: data.byteLength || data.length || 0,
+            chunkCount: 0,
+            bwEstimate: 0,
+            loading: { start: t0, first: now, end: now },
+            parsing: { start: now, end: now },
+            buffering: { start: now, first: now, end: now },
+          };
+          callbacks.onSuccess({ data, url: response.url || url }, stats, context, response);
+        } catch (err) {
+          if (this._aborted) return;
+          callbacks.onError({ code: 0, text: err.message || String(err) }, context, null);
+        }
+      })();
+    }
+  };
+}
+
 
 /* ─── helpers ──────────────────────────────────────────────── */
 function fmt(s) {
@@ -50,8 +171,8 @@ function SwipeBar({ type, value, visible }) {
 }
 
 /* ─── Main component ────────────────────────────────────────── */
-export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
-  const wrapRef    = useRef(null);
+export default function AniPlayer({ url, title, subtitles, referer, embedUrl, onBack }) {
+  const wrapRef = useRef(null);
   const videoRef   = useRef(null);
   const hlsRef     = useRef(null);
   const seekRef    = useRef(null);
@@ -75,7 +196,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const [ctrlVis,   setCtrlVis]   = useState(true);
   const [qualities, setQualities] = useState([]);
   const [activeQ,   setActiveQ]   = useState(-1);
-  const [subs,      setSubs]      = useState(subtitleTracks);
+  const [subs,      setSubs]      = useState(subtitles || []);
   const [activeSub, setActiveSub] = useState(-1);
   const [cues,      setCues]      = useState([]);
   const [showQ,     setShowQ]     = useState(false);
@@ -115,7 +236,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     setHasStarted(false);
     setQualities([]);
     setActiveQ(-1);
-    setSubs(subtitleTracks || []);
+    setSubs(subtitles || []);
     setActiveSub(-1);
     setShowQ(false);
     setShowSub(false);
@@ -160,7 +281,11 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.1,
         nudgeMaxRetries: 10,
+        // Inject custom Capacitor Loader to bypass CORS on Android natively
+        pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+        fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
       });
+
       hlsRef.current = hls;
 
       hls.on(Hls.Events.ERROR, (_, data) => {
@@ -225,9 +350,9 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
 
 
   // Sync subtitle tracks when props change (using stringify for stable comparison)
-  const subTracksJson = JSON.stringify(subtitleTracks);
+  const subTracksJson = JSON.stringify(subtitles);
   useEffect(() => {
-    const loadedSubs = subtitleTracks || [];
+    const loadedSubs = subtitles || [];
     setSubs(loadedSubs);
     // Auto-select English subtitle track by default if available
     if (loadedSubs.length > 0) {
@@ -256,11 +381,60 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     const url = subs[activeSub].file;
     log(`Fetching subtitles from: ${url}`);
 
-    fetch(url)
-      .then(r => r.text())
+    const loadSubtitlesText = async () => {
+      // Per-subtitle referer takes priority over player-level referer prop
+      const subReferer = subs[activeSub]?.referer || referer;
+      if (isNative) {
+        const reqHeaders = {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+        };
+        if (subReferer) {
+          reqHeaders['Origin'] = subReferer.replace(/\/$/, '');
+          reqHeaders['Referer'] = subReferer;
+        } else {
+          try {
+            const urlObj = new URL(url);
+            reqHeaders['Origin'] = urlObj.origin;
+            reqHeaders['Referer'] = urlObj.origin + '/';
+          } catch {}
+        }
+
+        const response = await CapacitorHttp.request({
+          url,
+          method: 'GET',
+          headers: reqHeaders,
+          responseType: 'text',
+        });
+        return response.data;
+      } else {
+        const res = await fetch(url);
+        return await res.text();
+      }
+    };
+
+    loadSubtitlesText()
       .then(text => {
+        if (text && typeof text === 'object') {
+          log('Subtitle response auto-parsed as JSON object, converting to string...');
+          try {
+            text = JSON.stringify(text);
+          } catch (e) {
+            log(`JSON stringify failed: ${e.message}`);
+          }
+        }
+
+        log(`Subtitle response type: ${typeof text}, length: ${text ? text.length : 0}`);
+        if (text && typeof text === 'string') {
+          log(`Subtitle start snippet: ${text.slice(0, 100)}`);
+        }
+
+        if (!text) {
+          log('Subtitle response was empty or blocked');
+          setCues([]);
+          return;
+        }
         // Try JSON first (some scrapers return [{startTime, endTime, text}])
-        if (text.trimStart().startsWith('[') || text.trimStart().startsWith('{')) {
+        if (typeof text === 'string' && (text.trimStart().startsWith('[') || text.trimStart().startsWith('{'))) {
           try {
             const data = JSON.parse(text);
             log(`Loaded ${data.length} subtitle cues (JSON format)`);
@@ -292,7 +466,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
             };
 
             const startTime = parseTime(tsParts[0]);
-            const endTime = parseTime(tsParts[1].split(' ')[0]);
+            const endTime = parseTime(tsParts[1].trim().split(/\s+/)[0]);
             const text = lines.slice(tsIdx + 1).join('\n').trim();
 
             if (text && isFinite(startTime) && isFinite(endTime)) {
@@ -311,7 +485,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         log(`Failed to fetch subtitles: ${err.message}`);
         setCues([]);
       });
-  }, [activeSub, subs, log]);
+  }, [activeSub, subs, referer, log]);
 
   /* ── Video events ─────────────────────────────────────────── */
   useEffect(() => {
@@ -325,7 +499,10 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       }
       setCurTime(v.currentTime);
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
-      log(`Video state sync (event: ${e.type}, curTime=${v.currentTime.toFixed(1)}, paused=${v.paused})`);
+      // Only log non-timeupdate events to avoid flooding re-renders
+      if (e.type !== 'timeupdate') {
+        log(`Video state sync (event: ${e.type}, curTime=${v.currentTime.toFixed(1)}, paused=${v.paused})`);
+      }
     };
     const onMeta = () => {
       log(`Video loadedmetadata: duration=${v.duration.toFixed(1)}`);
@@ -394,7 +571,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
             await ScreenOrientation.lock({ orientation: 'landscape' });
             await StatusBar.hide();
           } else {
-            // Unlock orientation so it follows system/portrait flow naturally, and restore status bar
             try { await ScreenOrientation.unlock(); } catch (err) {}
             await StatusBar.show();
           }
@@ -405,6 +581,16 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
     };
     syncNativeFullscreen();
   }, [fs]);
+
+  // ── Fix: Always unlock orientation on unmount (handles back-button navigation) ──
+  useEffect(() => {
+    return () => {
+      if (window.Capacitor) {
+        ScreenOrientation.unlock().catch(() => {});
+        StatusBar.show().catch(() => {});
+      }
+    };
+  }, []);
 
   /* ── Controls auto-hide ───────────────────────────────────── */
   const schedHide = useCallback(() => {
@@ -582,6 +768,8 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
 
     const handleTouchEnd = (e) => {
       lastTouchTime.current = Date.now();
+      // ── Fix: if we were dragging the seek bar, consume the event and return ──
+      // Without this guard, the outer touchend fires after seek and triggers handleTap
       if (seekDrag.current) {
         seekDrag.current = false;
         return;
@@ -610,8 +798,13 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
-  const activeCue = Array.isArray(cues) ? cues.find(c => curTime >= c.startTime && curTime <= c.endTime) : null;
-  const cleanCueText = activeCue ? activeCue.text.replace(/<\/?[^>]+(>|$)/g, "") : "";
+  const activeCue = Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= c.startTime && curTime <= c.endTime) : null;
+  // Convert VTT HTML tags (<i>, <b> etc) to real HTML, strip unknown ones cleanly
+  const cueHtml = activeCue ? activeCue.text
+    .replace(/<i>/g, '<em>').replace(/<\/i>/g, '</em>')
+    .replace(/<b>/g, '<strong>').replace(/<\/b>/g, '</strong>')
+    .replace(/<[^>]+>/g, '') // strip remaining unknown tags
+    : '';
 
   /* ─── Render ──────────────────────────────────────────────── */
   return (
@@ -620,15 +813,6 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       className={['anip', fs ? 'anip--fs' : '', ctrlVis ? 'anip--ctrl' : '', isTouch() ? 'anip--touch' : ''].filter(Boolean).join(' ')}
       onMouseMove={() => { if (!isTouch()) showCtrl(); }}
       onMouseLeave={() => { if (!isTouch() && playing) setCtrlVis(false); }}
-      /* mouse */
-      onMouseDown={e => {
-        if (Date.now() - lastTouchTime.current < 800) return;
-        onGestureStart(e.clientX, e.clientY);
-      }}
-      onMouseUp={e => {
-        if (Date.now() - lastTouchTime.current < 800) return;
-        onGestureEnd(e.clientX, e.clientY);
-      }}
     >
       {/* ── video ───────────────────────────────────────────── */}
       <video
@@ -653,30 +837,37 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       )}
 
       {/* ── Custom Subtitle Overlay ─────────────────────────── */}
-      {activeCue && (
+      {activeCue && cueHtml && (
         <div className="anip__subtitle-overlay">
-          <span className="anip__subtitle-text">
-            {cleanCueText.split('\n').map((line, i) => (
-              <span key={i}>
-                {line}
-                {i < cleanCueText.split('\n').length - 1 && <br />}
-              </span>
-            ))}
-          </span>
+          <span
+            className="anip__subtitle-text"
+            dangerouslySetInnerHTML={{ __html: cueHtml.replace(/\n/g, '<br/>') }}
+          />
         </div>
       )}
 
-      {/* ── Fatal HLS error overlay ───────────────────────────── */}
+      {/* ── Fatal HLS error overlay (Generic non-technical message with soft gradient retry button) ── */}
       {hlsErr && (
-        <div className="anip__error">
-          <span className="anip__error__icon">⚠️</span>
-          <p className="anip__error__msg">{hlsErr}</p>
+        <div className="anip__error" style={{ background: '#0c0c0e', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <p className="anip__error__msg" style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, textAlign: 'center', maxWidth: 280 }}>
+            Playback error. Please try again or select another server.
+          </p>
           <button
             className="anip__error__retry"
+            style={{
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              color: '#fff',
+              border: 'none',
+              padding: '10px 24px',
+              borderRadius: 20,
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)',
+            }}
             onClick={() => {
               setHlsErr(null);
               setNeedsTap(false);
-              // Force reload by toggling url via parent — simulate by re-attaching
               const v = videoRef.current;
               const h = hlsRef.current;
               if (h && v) { h.detachMedia(); h.attachMedia(v); h.loadSource(url); }
@@ -701,12 +892,24 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
       <SwipeBar type="brightness" value={clamp(bright/2,0,1)} visible={swipeBri} />
       <SwipeBar type="volume"     value={muted ? 0 : volume}  visible={swipeVol} />
 
-      {/* ═══════════════════════════════════════════════════════
-          CONTROLS OVERLAY — flex column, top + bottom-group
-          ═══════════════════════════════════════════════════════ */}
+      {/* ── Always-visible back button — outside the opacity overlay ——————————
+          The .anip__overlay has opacity:0 + pointer-events:none when controls are
+          hidden. Moving the back button here ensures it is ALWAYS tappable. */}
+      {onBack && (
+        <button
+          className="anip__back-btn"
+          onClick={onBack}
+          title="Back"
+          style={{ position: 'absolute', top: 14, left: 14, zIndex: 9999 }}
+        >
+          <ArrowLeft size={19} strokeWidth={2.5} />
+        </button>
+      )}
+
+      {/* ── Controls overlay — opacity animated, back button removed from here ── */}
       <div className="anip__overlay">
 
-        {/* ── Top bar ──────────────────────────────────────── */}
+        {/* ── Top bar (no back button here anymore) ──────────────────── */}
         <div className="anip__top-bar"
           onClick={e => e.stopPropagation()}
           onMouseDown={e => e.stopPropagation()}
@@ -714,11 +917,8 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
           onTouchStart={e => e.stopPropagation()}
           onTouchEnd={e => e.stopPropagation()}
         >
-          {onBack && (
-            <button className="anip__back-btn" onClick={onBack} title="Back">
-              <ArrowLeft size={19} strokeWidth={2.5} />
-            </button>
-          )}
+          {/* Spacer where back button used to be, keeps title right-aligned */}
+          <div style={{ width: 34, flexShrink: 0 }} />
           <span 
             className="anip__title"
             style={{ cursor: 'pointer' }}
@@ -741,7 +941,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         </div>
 
 
-        {/* ── Spacer (click to toggle controls) ────────────── */}
+        {/* ── Spacer (click to toggle controls) ──────────────── */}
         <div className="anip__spacer" />
 
         {/* ── Bottom group: seek bar + controls bar ────────── */}
@@ -893,32 +1093,7 @@ export default function AniPlayer({ url, title, subtitleTracks = [], onBack }) {
         </div>
       </div>
 
-      {/* ── Debug logs panel ─────────────────────────────────── */}
-      {showDebug && (
-        <div className="anip__debug-panel" onClick={e => e.stopPropagation()}>
-          <div className="anip__debug-header">
-            <span>Developer Diagnostics</span>
-            <button className="anip__debug-close" onClick={() => setShowDebug(false)}>✕</button>
-          </div>
-          <div className="anip__debug-info">
-            <strong>Stream URL:</strong> <code style={{ fontSize: '10px', wordBreak: 'break-all' }}>{url}</code><br/>
-            <strong>Playback state:</strong> {playing ? 'Playing' : 'Paused'}, <strong>Waiting:</strong> {waiting ? 'Yes' : 'No'}<br/>
-            <strong>Buffer:</strong> {buffered.toFixed(1)}s / {duration.toFixed(1)}s ({pct.toFixed(0)}%)
-          </div>
-          <div className="anip__debug-logs">
-            {logs.map((logStr, idx) => (
-              <div key={idx} className="anip__debug-log-line">{logStr}</div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Stuck loading prompt ────────────────────────────── */}
-      {waiting && stuckCount >= 8 && !hlsErr && !showDebug && (
-        <div className="anip__stuck-hint" onClick={e => { e.stopPropagation(); setShowDebug(true); }}>
-          <span>Stuck loading? Tap here to open diagnostics</span>
-        </div>
-      )}
+      {/* Debug & stuck loading diagnostics removed to hide backend details */}
 
     </div>
   );

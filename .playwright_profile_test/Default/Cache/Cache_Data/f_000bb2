@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Browse Anime - AniNeko</title>
+<meta name="description" content="AniNeko is the best website to watch anime online for free, " />
+<meta name="keywords" content="watch anime online free, watch anime online, free watch anime" />
+<meta name="robots" content="index, follow" />
+<meta name="revisit-after" content="1 days" />
+<base href="https://anineko.to/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="AniNeko" />
+<meta property="og:title" content="Browse Anime - AniNeko" />
+<meta property="og:description" content="AniNeko is the best website to watch anime online for free, " />
+<meta property="og:image" content="https://anineko.to/img/preview.png" />
+<meta property="og:image:width" content="650" />
+<meta property="og:image:height" content="350" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="canonical" href="https://anineko.to/browser?keyword=Assassination%20Classroom" />
+<link rel="icon" type="image/png" href="https://anineko.to/icon/favicon-32x32.png" sizes="32x32" />
+<link rel="icon" type="image/png" href="https://anineko.to/icon/android-chrome-192x192.png" sizes="192x192" />
+<link rel="icon" type="image/png" href="https://anineko.to/icon/favicon-16x16.png" sizes="16x16" />
+<link rel="shortcut icon" href="https://anineko.to/icon/favicon.ico" type="image/x-icon">
+<link rel="icon" href="https://anineko.to/icon/favicon.ico" type="image/x-icon">
+<link rel="manifest" href="/manifest.json">
+    
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "AniNeko",
+      "item": "https://anineko.to/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Browse Anime",
+      "item": "https://anineko.to/browser?keyword=Assassination%20Classroom"
+    }
+  ]
+}
+</script>
+
+    
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
+    <style>
+        body,
+        button,
+        input,
+        select,
+        textarea {
+            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Swiper/11.0.5/swiper-bundle.min.css">
+    
+    
+    
+    <link rel="stylesheet" type="text/css" href="https://anineko.to/assets/css/nekovault.css?v=2.4.0" />
+
+</head>
+<body class="">
+    <script>var base_url = 'https://anineko.to/'; var auth = ''; var is_capcha_login = false; var is_capcha = false</script>
+    <div id="wrapper" class="">
+        <header class="nv-header">
+    <div class="nv-header-inner">
+        <a href="https://anineko.to/home" class="nv-logo" aria-label="AniNeko Home">
+            <img src="/img/logo.png?v=4" alt="AniNeko">
+        </a>
+        <button class="nv-mobile-toggle" type="button" aria-label="Toggle menu" data-nv-menu-toggle>
+            <i class="fa-solid fa-bars"></i>
+        </button>
+        <nav class="nv-nav" data-nv-menu>
+            <a class="" href="https://anineko.to/home" data-nv-nav-link="home"><i class="fa-solid fa-house"></i> Home</a>
+            <a class="active" href="/browse" data-nv-nav-link="browse"><i class="fa-regular fa-compass"></i> Browse</a>
+            <a class="" href="/updates" data-nv-nav-link="latest"><i class="fa-regular fa-clock"></i> Latest</a>
+            <a class="" href="/ongoing" data-nv-nav-link="ongoing"><i class="fa-solid fa-circle-play"></i> Ongoing</a>
+            <a class="" href="/schedule" data-nv-nav-link="schedule"><i class="fa-regular fa-calendar"></i> Schedule</a>
+        </nav>
+        <form action="https://anineko.to/browser" autocomplete="off" class="nv-search" data-nv-search-form>
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input id="nvSearchInput" type="text" name="keyword" placeholder="Search anime, genres, or episodes..." autocomplete="off">
+            <span>Ctrl K</span>
+            <div id="nvSearchDropdown" class="nv-search-dropdown"></div>
+        </form>
+        <button id="nvThemeToggle" class="nv-theme-toggle" type="button" aria-label="Toggle theme" data-nv-theme-toggle>
+            <span class="nv-theme-icon">☾</span>
+        </button>
+        <button
+            id="anTitleLangToggle"
+            class="nv-title-lang-toggle"
+            type="button"
+            data-current-lang="english"
+            data-logged-in="0"
+            data-endpoint="/user/settings/title-language"
+            aria-label="Anime title language: English"
+            title="Anime title language: English">
+            <span class="nv-title-lang-icon">文</span>
+            <span class="nv-title-lang-text">EN</span>
+        </button>
+        <div class="nv-auth-actions">
+                            <a class="nv-login-btn" href="https://anineko.to/login">Login</a>
+                <a class="nv-signup-btn" href="https://anineko.to/register"><i class="fa-solid fa-user"></i> Sign Up</a>
+                    </div>
+    </div>
+</header>
+
+        <main>
+            
+<main class="nv-browse-page">
+    <nav class="nv-browse-breadcrumb" aria-label="Breadcrumb">
+        <a href="/home">Home</a>
+        <span>/</span>
+        <strong>Browse Anime</strong>
+    </nav>
+
+    <section class="nv-browse-hero">
+        <div class="nv-browse-hero-inner">
+            <div>
+                <div class="nv-browse-kicker"><i class="fa-regular fa-compass"></i> Browse Library</div>
+                <h1 class="nv-browse-title">Browse Anime</h1>
+                <p class="nv-browse-desc">Explore the latest anime, movies, series, subbed and dubbed releases.</p>
+            </div>
+            <div class="nv-browse-stats">
+                <div class="nv-browse-stat-card"><span>Results</span><strong>5</strong></div>
+                <div class="nv-browse-stat-card"><span>Page</span><strong>1</strong></div>
+                <div class="nv-browse-stat-card"><span>Genres</span><strong>42</strong></div>
+                <div class="nv-browse-stat-card"><span>Types</span><strong>7</strong></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="nv-browse-layout">
+        <aside class="nv-browse-panel nv-browse-filter-panel" id="nvBrowseFilterPanel">
+            <form class="nv-browse-filter-form" action="/browse" autocomplete="off" method="get">
+                <div class="nv-browse-panel-head">
+                    <h2 class="nv-browse-panel-title">Filters</h2>
+                    <a class="nv-browse-clear-btn" href="/browse">Clear</a>
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <label class="nv-browse-filter-label" for="nvBrowseSearch">Search</label>
+                    <input class="nv-browse-search-input" id="nvBrowseSearch" type="search" name="keyword" value="Assassination%Classroom" placeholder="Anime name...">
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <span class="nv-browse-filter-label">Genre</span>
+                    <div class="nv-browse-filter-chips">
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-action" name="genre[]" value="action">
+                            <label class="nv-browse-chip" for="nv-genre-action">Action</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-adventure" name="genre[]" value="adventure">
+                            <label class="nv-browse-chip" for="nv-genre-adventure">Adventure</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-cars" name="genre[]" value="cars">
+                            <label class="nv-browse-chip" for="nv-genre-cars">Cars</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-comedy" name="genre[]" value="comedy">
+                            <label class="nv-browse-chip" for="nv-genre-comedy">Comedy</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-dementia" name="genre[]" value="dementia">
+                            <label class="nv-browse-chip" for="nv-genre-dementia">Dementia</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-demons" name="genre[]" value="demons">
+                            <label class="nv-browse-chip" for="nv-genre-demons">Demons</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-drama" name="genre[]" value="drama">
+                            <label class="nv-browse-chip" for="nv-genre-drama">Drama</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-ecchi" name="genre[]" value="ecchi">
+                            <label class="nv-browse-chip" for="nv-genre-ecchi">Ecchi</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-fantasy" name="genre[]" value="fantasy">
+                            <label class="nv-browse-chip" for="nv-genre-fantasy">Fantasy</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-game" name="genre[]" value="game">
+                            <label class="nv-browse-chip" for="nv-genre-game">Game</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-harem" name="genre[]" value="harem">
+                            <label class="nv-browse-chip" for="nv-genre-harem">Harem</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-historical" name="genre[]" value="historical">
+                            <label class="nv-browse-chip" for="nv-genre-historical">Historical</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-horror" name="genre[]" value="horror">
+                            <label class="nv-browse-chip" for="nv-genre-horror">Horror</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-isekai" name="genre[]" value="isekai">
+                            <label class="nv-browse-chip" for="nv-genre-isekai">Isekai</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-josei" name="genre[]" value="josei">
+                            <label class="nv-browse-chip" for="nv-genre-josei">Josei</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-kids" name="genre[]" value="kids">
+                            <label class="nv-browse-chip" for="nv-genre-kids">Kids</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-magic" name="genre[]" value="magic">
+                            <label class="nv-browse-chip" for="nv-genre-magic">Magic</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-mahou-shoujo" name="genre[]" value="mahou-shoujo">
+                            <label class="nv-browse-chip" for="nv-genre-mahou-shoujo">Mahou Shoujo</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-martial-arts" name="genre[]" value="martial-arts">
+                            <label class="nv-browse-chip" for="nv-genre-martial-arts">Martial Arts</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-mecha" name="genre[]" value="mecha">
+                            <label class="nv-browse-chip" for="nv-genre-mecha">Mecha</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-military" name="genre[]" value="military">
+                            <label class="nv-browse-chip" for="nv-genre-military">Military</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-music" name="genre[]" value="music">
+                            <label class="nv-browse-chip" for="nv-genre-music">Music</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-mystery" name="genre[]" value="mystery">
+                            <label class="nv-browse-chip" for="nv-genre-mystery">Mystery</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-parody" name="genre[]" value="parody">
+                            <label class="nv-browse-chip" for="nv-genre-parody">Parody</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-police" name="genre[]" value="police">
+                            <label class="nv-browse-chip" for="nv-genre-police">Police</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-psychological" name="genre[]" value="psychological">
+                            <label class="nv-browse-chip" for="nv-genre-psychological">Psychological</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-romance" name="genre[]" value="romance">
+                            <label class="nv-browse-chip" for="nv-genre-romance">Romance</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-samurai" name="genre[]" value="samurai">
+                            <label class="nv-browse-chip" for="nv-genre-samurai">Samurai</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-school" name="genre[]" value="school">
+                            <label class="nv-browse-chip" for="nv-genre-school">School</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-sci-fi" name="genre[]" value="sci-fi">
+                            <label class="nv-browse-chip" for="nv-genre-sci-fi">Sci-Fi</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-seinen" name="genre[]" value="seinen">
+                            <label class="nv-browse-chip" for="nv-genre-seinen">Seinen</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-shoujo" name="genre[]" value="shoujo">
+                            <label class="nv-browse-chip" for="nv-genre-shoujo">Shoujo</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-shoujo-ai" name="genre[]" value="shoujo-ai">
+                            <label class="nv-browse-chip" for="nv-genre-shoujo-ai">Shoujo Ai</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-shounen" name="genre[]" value="shounen">
+                            <label class="nv-browse-chip" for="nv-genre-shounen">Shounen</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-shounen-ai" name="genre[]" value="shounen-ai">
+                            <label class="nv-browse-chip" for="nv-genre-shounen-ai">Shounen Ai</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-slice-of-life" name="genre[]" value="slice-of-life">
+                            <label class="nv-browse-chip" for="nv-genre-slice-of-life">Slice of Life</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-space" name="genre[]" value="space">
+                            <label class="nv-browse-chip" for="nv-genre-space">Space</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-sports" name="genre[]" value="sports">
+                            <label class="nv-browse-chip" for="nv-genre-sports">Sports</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-super-power" name="genre[]" value="super-power">
+                            <label class="nv-browse-chip" for="nv-genre-super-power">Super Power</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-supernatural" name="genre[]" value="supernatural">
+                            <label class="nv-browse-chip" for="nv-genre-supernatural">Supernatural</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-thriller" name="genre[]" value="thriller">
+                            <label class="nv-browse-chip" for="nv-genre-thriller">Thriller</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-genre-vampire" name="genre[]" value="vampire">
+                            <label class="nv-browse-chip" for="nv-genre-vampire">Vampire</label>
+                                            </div>
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <span class="nv-browse-filter-label">Type</span>
+                    <div class="nv-browse-filter-chips">
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-movie" name="type[]" value="2">
+                            <label class="nv-browse-chip" for="nv-type-movie">Movie</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-music" name="type[]" value="6">
+                            <label class="nv-browse-chip" for="nv-type-music">Music</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-ona" name="type[]" value="4">
+                            <label class="nv-browse-chip" for="nv-type-ona">ONA</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-ova" name="type[]" value="3">
+                            <label class="nv-browse-chip" for="nv-type-ova">OVA</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-special" name="type[]" value="5">
+                            <label class="nv-browse-chip" for="nv-type-special">Special</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-tv" name="type[]" value="1">
+                            <label class="nv-browse-chip" for="nv-type-tv">TV</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-type-tvshort" name="type[]" value="7">
+                            <label class="nv-browse-chip" for="nv-type-tvshort">TV_SHORT</label>
+                                            </div>
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <span class="nv-browse-filter-label">Status</span>
+                    <div class="nv-browse-filter-chips">
+                        <input class="nv-browse-filter-input"  type="checkbox" id="nv-status-ongoing" name="status[]" value="Ongoing">
+                        <label class="nv-browse-chip" for="nv-status-ongoing">Ongoing</label>
+                        <input class="nv-browse-filter-input"  type="checkbox" id="nv-status-completed" name="status[]" value="Completed">
+                        <label class="nv-browse-chip" for="nv-status-completed">Completed</label>
+                        <input class="nv-browse-filter-input"  type="checkbox" id="nv-status-upcoming" name="status[]" value="info">
+                        <label class="nv-browse-chip" for="nv-status-upcoming">Upcoming</label>
+                    </div>
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <span class="nv-browse-filter-label">Version</span>
+                    <div class="nv-browse-filter-chips">
+                        <input class="nv-browse-filter-input"  type="checkbox" id="nv-language-sub" name="language[]" value="sub">
+                        <label class="nv-browse-chip" for="nv-language-sub">SUB</label>
+                        <input class="nv-browse-filter-input"  type="checkbox" id="nv-language-dub" name="language[]" value="dub">
+                        <label class="nv-browse-chip" for="nv-language-dub">DUB</label>
+                    </div>
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <span class="nv-browse-filter-label">Year</span>
+                    <div class="nv-browse-filter-chips nv-browse-year-list">
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2026" name="year[]" value="2026">
+                            <label class="nv-browse-chip" for="nv-year-2026">2026</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2025" name="year[]" value="2025">
+                            <label class="nv-browse-chip" for="nv-year-2025">2025</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2024" name="year[]" value="2024">
+                            <label class="nv-browse-chip" for="nv-year-2024">2024</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2023" name="year[]" value="2023">
+                            <label class="nv-browse-chip" for="nv-year-2023">2023</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2022" name="year[]" value="2022">
+                            <label class="nv-browse-chip" for="nv-year-2022">2022</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2021" name="year[]" value="2021">
+                            <label class="nv-browse-chip" for="nv-year-2021">2021</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2020" name="year[]" value="2020">
+                            <label class="nv-browse-chip" for="nv-year-2020">2020</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2019" name="year[]" value="2019">
+                            <label class="nv-browse-chip" for="nv-year-2019">2019</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2018" name="year[]" value="2018">
+                            <label class="nv-browse-chip" for="nv-year-2018">2018</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2017" name="year[]" value="2017">
+                            <label class="nv-browse-chip" for="nv-year-2017">2017</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2016" name="year[]" value="2016">
+                            <label class="nv-browse-chip" for="nv-year-2016">2016</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2015" name="year[]" value="2015">
+                            <label class="nv-browse-chip" for="nv-year-2015">2015</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2014" name="year[]" value="2014">
+                            <label class="nv-browse-chip" for="nv-year-2014">2014</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2013" name="year[]" value="2013">
+                            <label class="nv-browse-chip" for="nv-year-2013">2013</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2012" name="year[]" value="2012">
+                            <label class="nv-browse-chip" for="nv-year-2012">2012</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2011" name="year[]" value="2011">
+                            <label class="nv-browse-chip" for="nv-year-2011">2011</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2010" name="year[]" value="2010">
+                            <label class="nv-browse-chip" for="nv-year-2010">2010</label>
+                                                    <input class="nv-browse-filter-input"  type="checkbox" id="nv-year-2009" name="year[]" value="2009">
+                            <label class="nv-browse-chip" for="nv-year-2009">2009</label>
+                                            </div>
+                </div>
+
+                <div class="nv-browse-filter-block">
+                    <label class="nv-browse-filter-label" for="nvBrowseSortPanel">Sort</label>
+                    <select class="nv-browse-select" id="nvBrowseSortPanel" name="sort">
+                        <option value="recently_updated" selected>Latest Update</option>
+                        <option value="release_date" >Release Date</option>
+                        <option value="recently_added" >Recently Added</option>
+                        <option value="title_az" >Title A-Z</option>
+                    </select>
+                </div>
+
+                <button class="nv-browse-submit" type="submit"><i class="fa-solid fa-sliders"></i> Apply Filters</button>
+            </form>
+        </aside>
+
+        <section class="nv-browse-main">
+            <div class="nv-browse-panel">
+                <div class="nv-browse-main-head">
+                    <div class="nv-browse-main-title">
+                        <h2>Browse Anime</h2>
+                        <p>Showing 5 anime from 5 results</p>
+                    </div>
+                    <div class="nv-browse-toolbar">
+                        <button class="nv-btn nv-btn-primary nv-browse-mobile-filter-btn" type="button" data-nv-browse-filter-toggle>
+                            <i class="fa-solid fa-sliders"></i> Filter
+                        </button>
+                        <form action="/browse" method="get">
+                            <select class="nv-browse-select" name="sort" onchange="this.form.submit()">
+                                <option value="recently_updated" selected>Sort: Latest Update</option>
+                                <option value="release_date" >Sort: Release Date</option>
+                                <option value="recently_added" >Sort: Recently Added</option>
+                                <option value="title_az" >Sort: A-Z</option>
+                            </select>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="nv-browse-active-filters">
+                    <span class="nv-browse-active-pill">Search: Assassination%Classroom</span>                                                                            </div>
+
+                
+                                    <div class="nv-browse-grid">
+                                                    <article class="nv-anime-card nv-browse-card">
+                                <a class="nv-anime-thumb nv-browse-thumb" href="/watch/ansatsu-kyoushitsu-2nd-season-kagaijugyou-hen">
+                                    <img src="https://cdn.anizara.store/cover/0678ca2eae02d542cc931e81b74de122.webp" alt="Ansatsu Kyoushitsu 2nd Season: Kagaijugyou-hen" loading="lazy">
+                                                                        <span class="nv-badge-new">ONA</span>                                    <div class="nv-thumb-stats">
+                                        <span class="nv-stat-badge nv-stat-cc">CC 8</span>                                                                            </div>
+                                </a>
+                                <div class="nv-anime-body">
+                                    <h3 class="nv-anime-title"><a href="/watch/ansatsu-kyoushitsu-2nd-season-kagaijugyou-hen">Ansatsu Kyoushitsu 2nd Season: Kagaijugyou-hen</a></h3>
+                                                                        <div class="nv-anime-genres">
+                                                                                    <span>Action</span>
+                                                                                    <span>Comedy</span>
+                                                                                    <span>School</span>
+                                                                            </div>
+                                </div>
+                            </article>
+                                                    <article class="nv-anime-card nv-browse-card">
+                                <a class="nv-anime-thumb nv-browse-thumb" href="/watch/assassination-classroom">
+                                    <img src="https://cdn.anizara.store/cover/36660e59856b4de58a219bcf4e27eba3.webp" alt="Assassination Classroom" loading="lazy">
+                                                                        <span class="nv-badge-new">TV</span>                                    <div class="nv-thumb-stats">
+                                        <span class="nv-stat-badge nv-stat-cc">CC 22</span>                                                                                    <span class="nv-stat-badge nv-stat-dub">
+                                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3Zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.42 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.3 6-6.72h-1.7Z" fill="currentColor"/></svg>
+                                                <span>22</span>
+                                            </span>
+                                                                            </div>
+                                </a>
+                                <div class="nv-anime-body">
+                                    <h3 class="nv-anime-title"><a href="/watch/assassination-classroom">Assassination Classroom</a></h3>
+                                                                        <div class="nv-anime-genres">
+                                                                                    <span>Action</span>
+                                                                                    <span>Comedy</span>
+                                                                                    <span>School</span>
+                                                                            </div>
+                                </div>
+                            </article>
+                                                    <article class="nv-anime-card nv-browse-card">
+                                <a class="nv-anime-thumb nv-browse-thumb" href="/watch/assassination-classroom-second-season">
+                                    <img src="https://cdn.anizara.store/cover/34173cb38f07f89ddbebc2ac9128303f.webp" alt="Assassination Classroom Second Season" loading="lazy">
+                                                                        <span class="nv-badge-new">TV</span>                                    <div class="nv-thumb-stats">
+                                        <span class="nv-stat-badge nv-stat-cc">CC 25</span>                                                                                    <span class="nv-stat-badge nv-stat-dub">
+                                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3Zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.42 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.3 6-6.72h-1.7Z" fill="currentColor"/></svg>
+                                                <span>25</span>
+                                            </span>
+                                                                            </div>
+                                </a>
+                                <div class="nv-anime-body">
+                                    <h3 class="nv-anime-title"><a href="/watch/assassination-classroom-second-season">Assassination Classroom Second Season</a></h3>
+                                                                        <div class="nv-anime-genres">
+                                                                                    <span>Action</span>
+                                                                                    <span>Comedy</span>
+                                                                                    <span>School</span>
+                                                                            </div>
+                                </div>
+                            </article>
+                                                    <article class="nv-anime-card nv-browse-card">
+                                <a class="nv-anime-thumb nv-browse-thumb" href="/watch/assassination-classroom-meeting-time">
+                                    <img src="https://cdn.anizara.store/cover/376c6b9ff3bedbbea56751a84fffc10c.webp" alt="Assassination Classroom: Meeting Time" loading="lazy">
+                                                                        <span class="nv-badge-new">Special</span>                                    <div class="nv-thumb-stats">
+                                        <span class="nv-stat-badge nv-stat-cc">CC 1</span>                                                                            </div>
+                                </a>
+                                <div class="nv-anime-body">
+                                    <h3 class="nv-anime-title"><a href="/watch/assassination-classroom-meeting-time">Assassination Classroom: Meeting Time</a></h3>
+                                                                        <div class="nv-anime-genres">
+                                                                                    <span>Action</span>
+                                                                                    <span>Comedy</span>
+                                                                                    <span>School</span>
+                                                                            </div>
+                                </div>
+                            </article>
+                                                    <article class="nv-anime-card nv-browse-card">
+                                <a class="nv-anime-thumb nv-browse-thumb" href="/watch/assassination-classroom-the-movie-365-days">
+                                    <img src="https://cdn.anizara.store/cover/da94cbeff56cfda50785df477941308b.webp" alt="Assassination Classroom The Movie: 365 Days" loading="lazy">
+                                                                        <span class="nv-badge-new">Movie</span>                                    <div class="nv-thumb-stats">
+                                        <span class="nv-stat-badge nv-stat-cc">CC 1</span>                                                                            </div>
+                                </a>
+                                <div class="nv-anime-body">
+                                    <h3 class="nv-anime-title"><a href="/watch/assassination-classroom-the-movie-365-days">Assassination Classroom The Movie: 365 Days</a></h3>
+                                                                        <div class="nv-anime-genres">
+                                                                                    <span>Action</span>
+                                                                                    <span>Comedy</span>
+                                                                                    <span>School</span>
+                                                                            </div>
+                                </div>
+                            </article>
+                                            </div>
+                
+                            </div>
+        </section>
+    </section>
+</main>
+
+        </main>
+        <footer class="nv-footer">
+    <div class="nv-footer-inner">
+        <p>© AniNeko. All rights reserved.</p>
+        <nav>
+            <a href="https://anineko.to/home">About</a>
+            <a href="https://anineko.to/contact">Contact</a>
+            <a href="/privacy-policy">Privacy Policy</a>
+            <a href="/terms-of-service">Terms of Service</a>
+            <a href="/dmca">DMCA</a>
+        </nav>
+        <div class="nv-socials" aria-label="Social links">
+            <a href="javascript:;" aria-label="Discord"><i class="fa-brands fa-discord"></i></a>
+            <a href="javascript:;" aria-label="Telegram"><i class="fa-brands fa-telegram"></i></a>
+            <a href="javascript:;" aria-label="Reddit"><i class="fa-brands fa-reddit-alien"></i></a>
+            <a href="javascript:;" aria-label="Twitter"><i class="fa-brands fa-twitter"></i></a>
+            <a href="https://anineko.to/contact" aria-label="Email"><i class="fa-regular fa-envelope"></i></a>
+        </div>
+    </div>
+</footer>
+
+    </div>
+    <div class="modal fade modal-poup" id="signin">
+        <div class="modal-dialog modal-dialog-centered cs-wrapper">
+                        <div data-content="login" class="modal-content signin">
+	<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" onclick="modalPopupClose(this,'#md-login',false)"></button>
+	<div class="modal-body">
+		<h5>Sign in to your account</h5><br>
+		<form method='post'  class='ajax-login'  action='/login' ><div class="alert alert-danger" style="display: none;"></div>
+<div class="alert alert-success" style="display: none;"></div>
+<div class="form-group">
+	<input type="email" class="form-control" name="email" placeholder="Email" required />
+</div>
+<div class="form-group">
+	<input type="password" class="form-control" name="password" placeholder="Password" required />
+</div>
+<div class="form-group">
+	<span class="captcha"></span>
+</div>
+<div class="form-group">
+	<button type="submit" class="btn btn-lg fw-bold btn-primary w-100 btn-submit">
+		Submit
+	</button>
+</div>
+<div class="loading" style="display: none;"></div>
+<div class="mt-3 text-center">Don't have an account? <a href="/register"><strong>Sign up</strong></a><br>
+	<a href="/forget" class="cs-switcher" data-target="forgot">Forgot password?</a>
+</div>
+</form>
+	</div>
+</div>
+            <div data-content="forgot" class="modal-content forgot" style="display: none;">
+	<div class="modal-header">
+		<h5 class="modal-title">
+			Forgot password
+		</h5>
+		<button type="button" class="close" data-dismiss="modal" onclick="modalPopupClose(this,'#md-forgot',false)">
+			<span>
+				&times;
+			</span>
+		</button>
+	</div>
+	<div class="modal-body">
+		<p class="text-gray2">
+			We will send an email to your box, just follow that link to set your new password.
+		</p>
+        <form method='post'  class='ajax'  action='/forget' ><div class="alert alert-danger" style="display: none;">
+</div>
+<div class="alert alert-success" style="display: none;">
+</div>
+<div class="form-group">
+	<input type='email' name='email'  placeholder='Email'  required='true'  class='form-control form-control-lg'  value=''></div>
+<div class="form-group">
+	<span class="captcha">
+	</span>
+</div>
+<div class="form-group">
+	<button type="submit" class="btn btn-lg fw-bold btn-primary w-100">
+		Request mail
+	</button>
+</div>
+<div class="loading" style="display: none;">
+</div>
+</form>
+	</div>
+	<div class="modal-footer">
+		<a href="javascript:void(0)" class="btn clear" data-content-switch="login" onclick="modalPopup(this,'login',false)">Back to sign in</a>
+	</div>
+</div>
+                                </div>
+    </div>
+    <div id="load-fade-poup"></div>
+    <svg class="d-none">
+			<symbol version="1.1" id="dub" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" xml:space="preserve" viewBox="0 0 8.9 9.6">
+				<defs>
+				</defs>
+				<path d="M7.9.7c-1.1-.9-2.8-.8-3.7.3-.9,1.1-.8,2.8.3,3.7,1.1.9,2.8.8,3.7-.3.9-1.1.8-2.8-.3-3.7Z">
+				</path>
+				<path d="M3,3.9L.1,8l1.7,1.4,3.6-3.5c-.5-.1-1-.3-1.5-.7-.4-.4-.8-.8-1-1.4Z">
+				</path>
+			</symbol>
+			<symbol version="1.1" id="sub" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" xml:space="preserve" viewBox="0 0 15 9">
+				<path d="M5.04346 5.85205H6.92334C6.89827 6.39632 6.75146 6.87614 6.48291 7.2915C6.21436 7.70687 5.84196 8.03092 5.36572 8.26367C4.89307 8.49284 4.33447 8.60742 3.68994 8.60742C3.16715 8.60742 2.69987 8.51969 2.28809 8.34424C1.87988 8.16878 1.53255 7.91634 1.24609 7.58691C0.963216 7.25749 0.746582 6.85824 0.596191 6.38916C0.449382 5.92008 0.375977 5.39193 0.375977 4.80469V4.38037C0.375977 3.79313 0.452962 3.26497 0.606934 2.7959C0.764486 2.32324 0.986491 1.9222 1.27295 1.59277C1.56299 1.25977 1.91032 1.00553 2.31494 0.830078C2.71956 0.654622 3.16895 0.566895 3.66309 0.566895C4.34342 0.566895 4.91813 0.688639 5.38721 0.932129C5.85628 1.17562 6.21973 1.51042 6.47754 1.93652C6.73535 2.35905 6.88753 2.84066 6.93408 3.38135H5.0542C5.04704 3.08773 4.99691 2.84245 4.90381 2.64551C4.81071 2.44499 4.6639 2.2946 4.46338 2.19434C4.26286 2.09408 3.99609 2.04395 3.66309 2.04395C3.43034 2.04395 3.22803 2.08691 3.05615 2.17285C2.88428 2.25879 2.74105 2.39486 2.62646 2.58105C2.51188 2.76725 2.42594 3.00895 2.36865 3.30615C2.31494 3.59977 2.28809 3.95426 2.28809 4.36963V4.80469C2.28809 5.22005 2.31315 5.57454 2.36328 5.86816C2.41341 6.16178 2.49398 6.40169 2.60498 6.58789C2.71598 6.77409 2.85921 6.91195 3.03467 7.00146C3.2137 7.0874 3.43213 7.13037 3.68994 7.13037C3.9764 7.13037 4.2181 7.08561 4.41504 6.99609C4.61198 6.90299 4.76416 6.76335 4.87158 6.57715C4.979 6.38737 5.0363 6.14567 5.04346 5.85205ZM12.2622 5.85205H14.1421C14.117 6.39632 13.9702 6.87614 13.7017 7.2915C13.4331 7.70687 13.0607 8.03092 12.5845 8.26367C12.1118 8.49284 11.5532 8.60742 10.9087 8.60742C10.3859 8.60742 9.91862 8.51969 9.50684 8.34424C9.09863 8.16878 8.7513 7.91634 8.46484 7.58691C8.18197 7.25749 7.96533 6.85824 7.81494 6.38916C7.66813 5.92008 7.59473 5.39193 7.59473 4.80469V4.38037C7.59473 3.79313 7.67171 3.26497 7.82568 2.7959C7.98324 2.32324 8.20524 1.9222 8.4917 1.59277C8.78174 1.25977 9.12907 1.00553 9.53369 0.830078C9.93831 0.654622 10.3877 0.566895 10.8818 0.566895C11.5622 0.566895 12.1369 0.688639 12.606 0.932129C13.075 1.17562 13.4385 1.51042 13.6963 1.93652C13.9541 2.35905 14.1063 2.84066 14.1528 3.38135H12.2729C12.2658 3.08773 12.2157 2.84245 12.1226 2.64551C12.0295 2.44499 11.8826 2.2946 11.6821 2.19434C11.4816 2.09408 11.2148 2.04395 10.8818 2.04395C10.6491 2.04395 10.4468 2.08691 10.2749 2.17285C10.103 2.25879 9.9598 2.39486 9.84521 2.58105C9.73063 2.76725 9.64469 3.00895 9.5874 3.30615C9.53369 3.59977 9.50684 3.95426 9.50684 4.36963V4.80469C9.50684 5.22005 9.5319 5.57454 9.58203 5.86816C9.63216 6.16178 9.71273 6.40169 9.82373 6.58789C9.93473 6.77409 10.078 6.91195 10.2534 7.00146C10.4325 7.0874 10.6509 7.13037 10.9087 7.13037C11.1951 7.13037 11.4368 7.08561 11.6338 6.99609C11.8307 6.90299 11.9829 6.76335 12.0903 6.57715C12.1978 6.38737 12.255 6.14567 12.2622 5.85205Z">
+				</path>
+			</symbol>
+		</svg>
+    
+    <script src="https://anineko.to/js/cdn/jquery.min.js"></script>
+    <script src="https://anineko.to/js/cdn/all.js"></script>
+    
+    <script src="https://anineko.to/js/function.js?v=2.4.0"></script>
+    
+<script src="https://anineko.to/assets/js/nekovault.js?v=2.4.0"></script>
+
+    <!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-TG6NQ1PSC2"></script>
+<script>
+window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-TG6NQ1PSC2');
+</script>    <script type='text/javascript' src='https://platform-api.sharethis.com/js/sharethis.js#property=69aabaadf9ad7a6b3053bf05&product=sop' async='async'></script><script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"2851d8538c04406fa68bf26b7dbce429","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>

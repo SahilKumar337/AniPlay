@@ -56,6 +56,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   const errors = [];
   let mainTitle = anime.title?.english || anime.title?.romaji || '';
   let activeSlug = '';
+  const isMovie = anime.format === 'MOVIE';
 
   const handleScraperResult = (data) => {
     if (data?.servers?.length) {
@@ -90,7 +91,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     for (const title of titles) {
       try {
         console.log(`[ClientEngine] AniNeko trying: "${title}" ep ${episode}`);
-        const data = await scrapeAniNeko(title, episode);
+        const data = await scrapeAniNeko(title, episode, isMovie);
         if (data?.servers?.length) {
           handleScraperResult(data);
           return data;
@@ -108,7 +109,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     for (const title of titles) {
       try {
         console.log(`[ClientEngine] AniWaves trying: "${title}" ep ${episode}`);
-        const data = await scrapeAniWaves(title, episode);
+        const data = await scrapeAniWaves(title, episode, isMovie);
         if (data?.servers?.length) {
           handleScraperResult(data);
           return data;
@@ -127,7 +128,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
       try {
         console.log(`[ClientEngine] Animetsu trying: "${title}" ep ${episode}`);
-        const data = await scrapeAnimetsu(title, episode);
+        const data = await scrapeAnimetsu(title, episode, isMovie);
         if (data?.servers?.length) {
           handleScraperResult(data);
           return data;

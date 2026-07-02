@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Check, AlertCircle } from 'lucide-react';
+import { Play, Plus, Check, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 
@@ -12,8 +12,9 @@ export default function HeroBanner({ animes = [] }) {
   const [current, setCurrent] = useState(0);
   const [nextIdx, setNextIdx] = useState(1);
   const [fading,  setFading]  = useState(false);
-  const timerRef = useRef(null);
-  const total    = Math.min(animes.length, 6);
+  const timerRef     = useRef(null);
+  const touchStartX  = useRef(0);
+  const total        = Math.min(animes.length, 6);
 
   // ── Auto-advance logic ────────────────────────────────────────
   const advance = useCallback((to) => {
@@ -59,6 +60,19 @@ export default function HeroBanner({ animes = [] }) {
   const cover    = getCover(featured);
   const inList   = isInWatchlist(featured.id);
 
+  // Touch swipe handlers for manual banner navigation
+  const handleTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+  const handleTouchEnd = (e) => {
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    if (Math.abs(dx) > 50) {
+      if (dx < 0) goTo((current + 1) % total);          // swipe left → next
+      else        goTo((current - 1 + total) % total);  // swipe right → prev
+      resetTimer();
+    }
+  };
+
   return (
     <div style={{
       position: 'relative',
@@ -66,7 +80,10 @@ export default function HeroBanner({ animes = [] }) {
       height: 380,
       overflow: 'hidden',
       background: '#0a0a0a',
-    }}>
+    }}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
 
       {/* ── Background image with crossfade ──────────────────── */}
       <div style={{

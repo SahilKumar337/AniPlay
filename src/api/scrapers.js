@@ -5,9 +5,18 @@ const isCapacitorApp = typeof window !== 'undefined' && window.Capacitor && (
   (!window.location.port && window.location.hostname === 'localhost')
 );
 
-const ANINEKO = 'https://anineko.to';
-const AW = 'https://aniwaves.ru';
-const ANIMETSU = 'https://animetsu.net';
+export let ANINEKO = 'https://anineko.to';
+export let AW = 'https://aniwaves.ru';
+export let ANIMETSU = 'https://animetsu.net';
+
+export function setDynamicDomains(newDomains) {
+  if (!newDomains) return;
+  if (newDomains.neko) ANINEKO = newDomains.neko;
+  if (newDomains.waves) AW = newDomains.waves;
+  if (newDomains.animetsu) ANIMETSU = newDomains.animetsu;
+  console.log('[Scrapers] Dynamic domains updated:', { ANINEKO, AW, ANIMETSU });
+}
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 const STREAM_PROXY = import.meta.env.VITE_STREAM_PROXY_URL || '';
@@ -32,6 +41,16 @@ function formatProxyUrl(targetUrl, referer) {
 function formatIframeProxyUrl(targetUrl, referer) {
   if (!PROXY) return targetUrl;
   return `${PROXY}/api/iframe-proxy?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+}
+
+function formatSubtitleProxyUrl(targetUrl, referer) {
+  if (!STREAM_PROXY) return targetUrl;
+  try {
+    const urlObj = new URL(STREAM_PROXY);
+    return `${urlObj.origin}/api/stream/subtitle?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+  } catch {
+    return `/api/stream/subtitle?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
+  }
 }
 
 const wavesSearchCache = new Map();
@@ -65,7 +84,7 @@ function extractSeason(t) {
   return 1;
 }
 
-function titleScore(resultTitle, queryTitle) {
+function titleScore(resultTitle, queryTitle, isMovie = false) {
   if (/[\u3000-\u9fff\uff00-\uffef]/.test(queryTitle)) return 0.7;
 
   const rn = norm(resultTitle);
@@ -74,6 +93,19 @@ function titleScore(resultTitle, queryTitle) {
   const rSeason = extractSeason(rn);
   const qSeason = extractSeason(qn);
   if (rSeason !== qSeason) return 0;
+
+  // Check if result or query title mentions "movie" or "film"
+  const resultHasMovie = /\b(movie|film)\b/i.test(resultTitle) || /\b(movie|film)\b/i.test(rn);
+
+  // If query is a TV show (isMovie = false) but result title mentions Movie -> Reject
+  if (!isMovie && resultHasMovie && !/\b(movie|film)\b/i.test(queryTitle)) {
+    return 0;
+  }
+
+  // If query is a Movie (isMovie = true) but result mentions TV, episodes, or season -> Reject
+  if (isMovie && /\b(tv|series|season|episodes|ep)\b/i.test(resultTitle) && !resultHasMovie) {
+    return 0;
+  }
 
   const strip = t => t
     .replace(/\b(season|part|s)\s*\d+\b/gi, '')
@@ -156,7 +188,7 @@ async function clientFetch(url, opts = {}) {
 
 // ── AniWaves Scraper ──
 
-async function awSearch(title) {
+async function awSearch(title, isMovie = false) {
   const cleaned = title.replace(/\b(season|part|s)\s*\d+\b/gi, '').trim();
   const engWords = cleaned.split(/[^a-zA-Z0-9]/).filter(w =>
     w.length > 3 && !/^(the|and|with|from|that|this|into|over|under|behind|you)$/i.test(w)
@@ -198,13 +230,13 @@ async function awSearch(title) {
 
   let best = results[0], maxScore = -1;
   for (const r of results) {
-    let score = titleScore(r.animeTitle, title);
+    let score = titleScore(r.animeTitle, title, isMovie);
     const slugText = r.slug.replace(/-\d+$/, '').replace(/-/g, ' ');
-    score = Math.max(score, titleScore(slugText, title));
+    score = Math.max(score, titleScore(slugText, title, isMovie));
     if (score > maxScore) { maxScore = score; best = r; }
   }
 
-  if (!best || maxScore < 0.4) {
+  if (!best || maxScore < 0.5) { // Strict score threshold
     throw new Error(`No match on AniWaves for "${title}"`);
   }
   return best;
@@ -249,17 +281,17 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
   return parsed.result.url;
 }
 
-export async function scrapeAniWaves(title, episode) {
+export async function scrapeAniWaves(title, episode, isMovie = false) {
   let searchResult = wavesSearchCache.get(title);
   if (!searchResult) {
-    searchResult = await awSearch(title);
+    searchResult = await awSearch(title, isMovie);
     wavesSearchCache.set(title, searchResult);
   }
   const { slug, animeId, animeTitle } = searchResult;
   const rawServers = await awGetServers(animeId, episode, slug);
   const subServers = rawServers.filter(s => s.type === 'sub');
   const dubServers = rawServers.filter(s => s.type === 'dub');
-  const toResolve = [...subServers.slice(0, 2), ...dubServers.slice(0, 2)];
+  const toResolve = [...subServers.slice(0, 3), ...dubServers.slice(0, 3)];
 
   const resolved = await Promise.allSettled(
     toResolve.map(async s => {
@@ -267,9 +299,8 @@ export async function scrapeAniWaves(title, episode) {
       const host = new URL(embedUrl).hostname;
       const isSupported = ['play.echovideo.ru', 'megacloud.club', 'megacloud.tv', 'myvidplay.com', 'sb1254w9megshle.org', 'vidplay.online'].some(p => host.includes(p));
       if (!isSupported) throw new Error('Unsupported provider');
-      // Direct iframe proxy via Cloudflare Worker or direct load
       const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
-      return { videoUrl, type: s.type, embedUrl };
+      return { videoUrl, type: s.type, embedUrl, serverName: s.serverName };
     })
   );
 
@@ -277,12 +308,13 @@ export async function scrapeAniWaves(title, episode) {
   let subCount = 0, dubCount = 0;
   const servers = [];
   for (const s of working) {
-    if (s.type === 'sub' && subCount < 1) {
+    const displayName = s.serverName || 'Waves';
+    if (s.type === 'sub') {
       subCount++;
-      servers.push({ name: `Waves HD${subCount}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: false });
-    } else if (s.type === 'dub' && dubCount < 1) {
+      servers.push({ name: `Waves ${displayName}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
+    } else if (s.type === 'dub') {
       dubCount++;
-      servers.push({ name: `Waves HD${dubCount} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, isHLS: false });
+      servers.push({ name: `Waves ${displayName} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
     }
   }
   return { servers, animeTitle, slug };
@@ -290,7 +322,7 @@ export async function scrapeAniWaves(title, episode) {
 
 // ── AniNeko Scraper ──
 
-export async function scrapeAniNeko(title, episode) {
+export async function scrapeAniNeko(title, episode, isMovie = false) {
   let best, results;
   const cached = nekoSearchCache.get(title);
   if (cached) {
@@ -327,10 +359,10 @@ export async function scrapeAniNeko(title, episode) {
     best = results[0];
     let maxScore = -1;
     for (const r of results) {
-      const score = titleScore(r.title, title);
+      const score = titleScore(r.title, title, isMovie);
       if (score > maxScore) { maxScore = score; best = r; }
     }
-    if (!best || maxScore < 0.4) throw new Error(`No match on AniNeko`);
+    if (!best || maxScore < 0.5) throw new Error(`No match on AniNeko`);
 
     nekoSearchCache.set(title, { best, results });
   }
@@ -365,9 +397,12 @@ export async function scrapeAniNeko(title, episode) {
         let videoUrl = m[1];
         if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
         const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        if (name.includes('HD-1')) {
-          rawServers.push({ videoUrl, isDub: isDubPage || panelId === 'dub' || name.toLowerCase().includes('dub') });
-        }
+        // Load all available servers, not just HD-1
+        rawServers.push({
+          videoUrl,
+          serverName: name,
+          isDub: isDubPage || panelId === 'dub' || name.toLowerCase().includes('dub')
+        });
       }
     }
   }
@@ -385,15 +420,16 @@ export async function scrapeAniNeko(title, episode) {
       subtitleUrl = urlObj.searchParams.get('sub') || urlObj.searchParams.get('caption_1') || urlObj.searchParams.get('c1_file') || '';
     } catch {}
 
-    const subtitles = subtitleUrl ? [{ id: 0, label: 'English', file: formatProxyUrl(subtitleUrl, s.videoUrl) }] : [];
+    const subtitles = subtitleUrl ? [{ id: 0, label: 'English', file: formatSubtitleProxyUrl(subtitleUrl, s.videoUrl) }] : [];
     const proxiedUrl = formatIframeProxyUrl(s.videoUrl, ANINEKO);
+    const displayName = s.serverName || 'Neko';
 
-    if (s.isDub && dubCount < 1) {
+    if (s.isDub) {
       dubCount++;
-      servers.push({ name: `Neko HD1 (DUB)`, videoUrl: proxiedUrl, type: 'dub', subtitles, isHLS: false });
-    } else if (!s.isDub && subCount < 1) {
+      servers.push({ name: `Neko ${displayName} (DUB)`, videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles, isHLS: false });
+    } else {
       subCount++;
-      servers.push({ name: `Neko HD1`, videoUrl: proxiedUrl, type: 'sub', subtitles, isHLS: false });
+      servers.push({ name: `Neko ${displayName}`, videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
     }
   }
 
@@ -427,7 +463,7 @@ async function fetchAnimetsuStream(animeId, episode, sourceType) {
   }
 }
 
-export async function scrapeAnimetsu(title, episode) {
+export async function scrapeAnimetsu(title, episode, isMovie = false) {
   let best = animetsuSearchCache.get(title);
   if (!best) {
     const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -460,10 +496,10 @@ export async function scrapeAnimetsu(title, episode) {
     best = results[0];
     let maxScore = -1;
     for (const r of results) {
-      const score = titleScore(r.title, title);
+      const score = titleScore(r.title, title, isMovie);
       if (score > maxScore) { maxScore = score; best = r; }
     }
-    if (!best || maxScore < 0.4) throw new Error(`No match on Animetsu`);
+    if (!best || maxScore < 0.5) throw new Error(`No match on Animetsu`);
 
     animetsuSearchCache.set(title, best);
   }
@@ -493,8 +529,13 @@ export async function scrapeAnimetsu(title, episode) {
   if (subResult.status === 'fulfilled' && subResult.value) {
     const { rawVideoUrl, subs } = subResult.value;
     const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-    const subtitles = subs.map((sub, i) => ({ id: i, label: sub.lang || 'English', file: formatProxyUrl(sub.url, `${ANIMETSU}/`) }));
-    servers.push({ name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, subtitles, isHLS: true });
+    const subtitles = subs.map((sub, i) => ({
+      id: i,
+      label: sub.lang || 'English',
+      file: formatSubtitleProxyUrl(sub.url, `${ANIMETSU}/`),
+      referer: `${ANIMETSU}/`,
+    }));
+    servers.push({ name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, referer: `${ANIMETSU}/`, subtitles, isHLS: true });
   }
   if (dubResult.status === 'fulfilled' && dubResult.value) {
     const { rawVideoUrl } = dubResult.value;

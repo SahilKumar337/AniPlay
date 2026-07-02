@@ -1,0 +1,5 @@
+2026/07/02-16:03:14.819 21f8 Reusing MANIFEST E:\Anilab\.playwright_profile_test_subs\Default\Local Storage\leveldb/MANIFEST-000001
+2026/07/02-16:03:14.824 21f8 Recovering log #3
+2026/07/02-16:03:14.824 21f8 Level-0 table #3: started
+2026/07/02-16:03:14.831 21f8 Level-0 table #3: 22925 bytes OK
+2026/07/02-16:03:14.855 21f8 Delete type=0 #3
