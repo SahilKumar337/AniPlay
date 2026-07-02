@@ -23,3 +23,19 @@ dist-ssr
 *.sln
 *.sw?
 *.mjs
+
+# Playwright Profiles
+.playwright_profile_test_subs/
+.playwright_profile_test_subs*
+playwright-report/
+test-results/
+
+# Android Builds and caches
+android/app/build/
+android/build/
+android/.gradle/
+.gradle/
+capacitor-cordova-android-plugins/
+local.properties
+*.apk
+
