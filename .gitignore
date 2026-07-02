@@ -27,8 +27,24 @@ dist-ssr
 # Playwright Profiles
 .playwright_profile_test_subs/
 .playwright_profile_test_subs*
+.playwright_profile/
+.playwright_profile_test/
+.chrome_solve_profile/
+.chrome_solve_profile*
 playwright-report/
 test-results/
+
+# Scratch/Temporary script directories
+scratch/
+
+# Scraper Backend and Server Files (hidden from client repo)
+my-anime-api/
+server/
+test_py_app.py
+stop_server.bat
+stop_server.sh
+run_invisible.vbs
+test_matching_logic.mjs
 
 # Android Builds and caches
 android/app/build/
