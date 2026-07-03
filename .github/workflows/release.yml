@@ -37,6 +37,19 @@ jobs:
           echo "version=1.0.${COUNT}" >> $GITHUB_OUTPUT
           echo "tag=v1.0.${COUNT}" >> $GITHUB_OUTPUT
 
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Packages
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "build-tools;35.0.0"
+
       - name: Build Web Bundle
         run: npm run build
 
@@ -44,16 +57,30 @@ jobs:
         run: |
           cd dist && zip -r ../bundle.zip . && cd ..
 
-      - name: Create GitHub Release and Upload Bundle
+      - name: Capacitor Sync
+        run: npx cap sync
+
+      - name: Build Signed APK with Gradle
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
+          mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/AniPlay.apk
+          cd ..
+
+      - name: Create GitHub Release and Upload Assets
         id: release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "AniPlay ${{ steps.version.outputs.version }}"
-          body: "OTA web bundle update. Install automatically via the app."
-          files: bundle.zip
+          body: "OTA web bundle update + standalone release APK. Install automatically via the app or download the APK directly."
+          files: |
+            bundle.zip
+            android/app/build/outputs/apk/release/AniPlay.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
       - name: Update update.json with new version and bundle URL
         run: |
