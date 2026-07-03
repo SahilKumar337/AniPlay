@@ -175,7 +175,7 @@ function SwipeBar({ type, value, visible }) {
 }
 
 /* ─── Main component ────────────────────────────────────────── */
-export default function AniPlayer({ url, title, subtitles, referer, embedUrl, onBack }) {
+export default function AniPlayer({ url, title, subtitles, referer, embedUrl, onBack, onFullscreenChange }) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
   const hlsRef     = useRef(null);
@@ -581,6 +581,9 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
 
   // Sync orientation, statusbar AND nav bar for native mobile clients
   useEffect(() => {
+    if (onFullscreenChange) {
+      onFullscreenChange(fs);
+    }
     const syncNativeFullscreen = async () => {
       if (!isNative) return;
       try {

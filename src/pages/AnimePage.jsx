@@ -52,6 +52,7 @@ export default function AnimePage() {
   const [isActiveHLS,   setIsActiveHLS]  = useState(false);
   const [extracting,    setExtracting]   = useState(false);
   const [activeServer,  setActiveServer] = useState(null);
+  const [fsActive,      setFsActive]     = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -813,13 +814,21 @@ export default function AnimePage() {
     {playParam && epParam && createPortal(
       <div style={{
         position: 'fixed', inset: 0, zIndex: 1000,
-        background: '#0c0c0e', display: 'flex', flexDirection: 'column',
-        paddingTop: 'env(safe-area-inset-top)',
+        background: '#000000', display: 'flex', flexDirection: 'column',
+        paddingTop: fsActive ? 0 : 'env(safe-area-inset-top)',
         boxSizing: 'border-box',
       }} className="fade-in">
         
         {/* 1. Player Box */}
-        <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000', overflow: 'hidden' }}>
+        <div style={{
+          position: 'relative',
+          width: '100%',
+          height: fsActive ? '100%' : 'auto',
+          aspectRatio: fsActive ? 'unset' : '16/9',
+          flex: fsActive ? 1 : 'unset',
+          background: '#000',
+          overflow: fsActive ? 'visible' : 'hidden'
+        }}>
           {loadStream && servers.length === 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
               <Loader size={30} className="spin" color="var(--accent)" />
@@ -846,6 +855,7 @@ export default function AnimePage() {
                 referer={activeServer?.referer}
                 embedUrl={activeServer?.embedUrl}
                 onBack={() => setSearchParams({})}
+                onFullscreenChange={setFsActive}
               />
             ) : (
               <IframePlayer
@@ -857,30 +867,32 @@ export default function AnimePage() {
         </div>
 
         {/* 2. Toolbar / Navigation for Player Overlay */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 12,
-          padding: '12px 16px', borderBottom: '1px solid var(--border)',
-          background: 'rgba(255,255,255,0.01)'
-        }}>
-          <button
-            onClick={() => setSearchParams({})}
-            className="floating-btn"
-            style={{ width: 32, height: 32 }}
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-              Now Playing
-            </div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              Episode {epParam} · {title}
+        {!fsActive && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: '12px 16px', borderBottom: '1px solid var(--border)',
+            background: 'rgba(255,255,255,0.01)'
+          }}>
+            <button
+              onClick={() => setSearchParams({})}
+              className="floating-btn"
+              style={{ width: 32, height: 32 }}
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Now Playing
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Episode {epParam} · {title}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* 3. Server Row & Audio selector inside player screen */}
-        {servers.length > 0 && (
+        {!fsActive && servers.length > 0 && (
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
             {/* Segmented Control for Sub / Dub */}
             <div style={{
@@ -950,40 +962,42 @@ export default function AnimePage() {
         )}
 
         {/* 4. Episodes Scrollable List below */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
-          <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
-            Episodes ({totalEps})
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {allEps.map(n => {
-              const isWatched = prog?.episode > n;
-              const isCurrent = epParam === n;
-              return (
-                <div
-                  key={n}
-                  onClick={() => {
-                    setSearchParams({ play: 'true', ep: String(n) });
-                  }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '10px', borderRadius: 8, cursor: 'pointer',
-                    background: isCurrent ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.02)',
-                    border: isCurrent ? '1px solid var(--accent)' : '1px solid transparent',
-                  }}
-                >
-                  <span style={{ fontSize: 13, fontWeight: 800, color: isCurrent ? 'var(--accent)' : 'var(--text-muted)', width: 24, textAlign: 'center' }}>
-                    {n}
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Episode {n}</div>
-                    {isWatched && <span style={{ fontSize: 10, color: '#4caf50' }}>✓ Watched</span>}
+        {!fsActive && (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
+              Episodes ({totalEps})
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {allEps.map(n => {
+                const isWatched = prog?.episode > n;
+                const isCurrent = epParam === n;
+                return (
+                  <div
+                    key={n}
+                    onClick={() => {
+                      setSearchParams({ play: 'true', ep: String(n) });
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      padding: '10px', borderRadius: 8, cursor: 'pointer',
+                      background: isCurrent ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.02)',
+                      border: isCurrent ? '1px solid var(--accent)' : '1px solid transparent',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 800, color: isCurrent ? 'var(--accent)' : 'var(--text-muted)', width: 24, textAlign: 'center' }}>
+                      {n}
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Episode {n}</div>
+                      {isWatched && <span style={{ fontSize: 10, color: '#4caf50' }}>✓ Watched</span>}
+                    </div>
+                    <Play size={12} fill={isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.4)'} color="transparent" />
                   </div>
-                  <Play size={12} fill={isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.4)'} color="transparent" />
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </div>,
       document.body
     )}
