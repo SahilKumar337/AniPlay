@@ -1240,10 +1240,31 @@ ul, ol { list-style: none; }
   }
 }
 
-@media (min-width: 1024px) {
-  .app-container {
-    box-shadow: 0 0 60px rgba(0,0,0,0.8);
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-  }
+
+/* Loader Spin Animation */
+.spin {
+  animation: spin 1s linear infinite;
 }
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Fluid Page / Window Transitions */
+.page {
+  animation: pageSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes pageSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Fade-in for tabs and overlays */
+.fade-in {
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+

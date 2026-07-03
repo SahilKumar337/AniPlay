@@ -48,8 +48,9 @@ export default function Profile() {
   const [saveStatus,    setSaveStatus]    = useState(''); // '', 'saving', 'saved', 'error'
 
   const watchlistCount = Object.keys(watchlist).length;
-  const favCount       = favorites.size;
+  const favCount       = Object.keys(favorites).length;
   const progressCount  = Object.keys(progress).length;
+
 
   const handleSaveCookie = async () => {
     if (!cookieVal.trim()) return;
@@ -191,8 +192,8 @@ export default function Profile() {
         }}>
           {[
             { icon: Bookmark, label: 'My List',   value: watchlistCount, action: () => navigate('/mylist') },
-            { icon: Heart,    label: 'Favorites',  value: favCount,       action: () => navigate('/mylist') },
-            { icon: Clock,    label: 'Watched',    value: progressCount,  action: () => navigate('/mylist') },
+            { icon: Heart,    label: 'Favorites',  value: favCount,       action: () => navigate('/favorites') },
+            { icon: Clock,    label: 'Watched',    value: progressCount,  action: () => navigate('/watched') },
           ].map(stat => (
             <div
               key={stat.label}

@@ -19,6 +19,8 @@ function WatchRedirect() {
 }
 import DownloadPage  from './pages/DownloadPage';
 import Profile       from './pages/Profile';
+import FavoritesPage from './pages/FavoritesPage';
+import WatchedPage   from './pages/WatchedPage';
 import Navbar        from './components/Navbar';
 
 // Inner component that has access to navigate (must be inside BrowserRouter)
@@ -54,6 +56,8 @@ function AppInner({ showWelcome, onEnter }) {
             <Route path="/anime/:id"   element={<AnimePage />}    />
             <Route path="/watch/:id/:ep" element={<WatchRedirect />}  />
             <Route path="/mylist"      element={<MyList />}       />
+            <Route path="/favorites"   element={<FavoritesPage />} />
+            <Route path="/watched"     element={<WatchedPage />}   />
             <Route path="/download"    element={<DownloadPage />} />
             <Route path="/profile"     element={<Profile />}      />
             <Route path="*"            element={<Navigate to="/" replace />} />
@@ -67,8 +71,6 @@ function AppInner({ showWelcome, onEnter }) {
 
 import { setDynamicDomains } from './api/scrapers';
 
-const CURRENT_VERSION = '1.0.0';
-
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
     return !sessionStorage.getItem('anilab_welcomed');
@@ -76,7 +78,9 @@ export default function App() {
 
   const [updateInfo, setUpdateInfo] = useState(null);
   const [maintenanceMsg, setMaintenanceMsg] = useState(null);
-  const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'installing'
+  const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'installing' | 'ready'
+  const [downloadedBundle, setDownloadedBundle] = useState(null);
+  const [currentVersion, setCurrentVersion] = useState('1.0.0');
 
   useEffect(() => {
     const initDeviceSettings = async () => {
@@ -124,8 +128,25 @@ export default function App() {
         return;
       }
 
-      // 3. Compare version
-      if (data.latestVersion && data.latestVersion !== CURRENT_VERSION) {
+      // 3. Detect active version dynamically
+      let appVer = '1.0.0';
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const currentBundle = await CapacitorUpdater.current();
+          if (currentBundle?.bundle?.version) {
+            appVer = currentBundle.bundle.version;
+          } else {
+            const info = await CapApp.getInfo();
+            appVer = info.version;
+          }
+        } catch (e) {
+          console.warn('[Updater] Failed to get active version:', e);
+        }
+      }
+      setCurrentVersion(appVer);
+
+      // 4. Compare version
+      if (data.latestVersion && data.latestVersion !== appVer) {
         setUpdateInfo(data);
       }
     }
@@ -137,6 +158,7 @@ export default function App() {
     setShowWelcome(false);
   };
 
+
   // ── In-app OTA update via @capgo/capacitor-updater ──────────────
   const handleUpdateNow = async () => {
     const isNativeApp = Capacitor.isNativePlatform();
@@ -145,6 +167,20 @@ export default function App() {
       window.open(updateInfo.apkUrl, '_blank');
       return;
     }
+
+    if (downloadedBundle) {
+      setUpdateProgress('installing');
+      try {
+        await CapacitorUpdater.set(downloadedBundle);
+        // App restarts automatically after set()
+      } catch (err) {
+        console.error('[Updater] Failed to install update:', err);
+        setUpdateProgress(null);
+        setDownloadedBundle(null);
+      }
+      return;
+    }
+
     try {
       setUpdateProgress(0);
 
@@ -161,11 +197,8 @@ export default function App() {
       });
 
       progressListener.remove();
-      setUpdateProgress('installing');
-
-      // Set as next bundle and restart
-      await CapacitorUpdater.set(bundle);
-      // App restarts automatically after set()
+      setDownloadedBundle(bundle);
+      setUpdateProgress('ready');
     } catch (err) {
       console.error('[Updater] Failed to download/install update:', err);
       setUpdateProgress(null);
@@ -232,8 +265,8 @@ export default function App() {
             <h2 style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 8, fontFamily: 'var(--font-brand)' }}>
               Update Available
             </h2>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-              Version {updateInfo.latestVersion} (Current: {CURRENT_VERSION})
+             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Version {updateInfo.latestVersion} (Current: {currentVersion})
             </div>
 
             {updateInfo.changelog && (
@@ -264,14 +297,16 @@ export default function App() {
                 }}>
                   <div style={{
                     height: '100%',
-                    width: updateProgress === 'installing' ? '100%' : `${updateProgress}%`,
+                    width: (updateProgress === 'installing' || updateProgress === 'ready') ? '100%' : `${updateProgress}%`,
                     background: 'linear-gradient(90deg, #6366f1, #a78bfa)',
                     borderRadius: 8,
                     transition: 'width 0.3s ease',
                   }} />
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {updateProgress === 'installing' ? '✅ Installing… app will restart' : `Downloading ${updateProgress}%`}
+                  {updateProgress === 'installing' && '✅ Installing… app will restart'}
+                  {updateProgress === 'ready' && '🎉 Download complete! Ready to install.'}
+                  {typeof updateProgress === 'number' && `Downloading ${updateProgress}%`}
                 </div>
               </div>
             )}
@@ -293,20 +328,23 @@ export default function App() {
               )}
               <button
                 onClick={handleUpdateNow}
-                disabled={updateProgress !== null}
+                disabled={typeof updateProgress === 'number' || updateProgress === 'installing'}
                 style={{
                   flex: 1, padding: '12px 0', borderRadius: 10,
                   border: 'none',
-                  background: updateProgress !== null
+                  background: (typeof updateProgress === 'number' || updateProgress === 'installing')
                     ? 'rgba(99,102,241,0.4)'
                     : 'linear-gradient(135deg, #6366f1, #a78bfa)',
                   color: '#fff',
                   fontSize: 13, fontWeight: 700,
-                  cursor: updateProgress !== null ? 'not-allowed' : 'pointer',
+                  cursor: (typeof updateProgress === 'number' || updateProgress === 'installing') ? 'not-allowed' : 'pointer',
                   transition: 'all 0.2s',
                 }}
               >
-                {updateProgress !== null ? '⏳ Updating…' : '🚀 Update Now'}
+                {updateProgress === 'installing' && '⏳ Installing…'}
+                {updateProgress === 'ready' && '⚡ Install & Restart'}
+                {typeof updateProgress === 'number' && '⏳ Downloading…'}
+                {updateProgress === null && '🚀 Update Now'}
               </button>
             </div>
           </div>

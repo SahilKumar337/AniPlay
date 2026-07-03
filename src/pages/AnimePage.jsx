@@ -4,7 +4,7 @@ import {
   ArrowLeft, Share2, Bookmark, Star, Play, Download,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Search as SearchIcon, ChevronLeft, ChevronRight,
-  Clock, CheckCircle, Tv, Wifi, WifiOff, Loader
+  Clock, CheckCircle, Tv, Wifi, WifiOff, Loader, Heart
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
@@ -344,66 +344,27 @@ export default function AnimePage() {
       {/* ── Content Wrapper with Entrance Animation ────────────────── */}
       <div className="fade-in-up">
         {/* ════════════════════════════════════════
-            HERO IMAGE OR VIDEO PLAYER
+            HERO COVER IMAGE
         ════════════════════════════════════════ */}
-        {playParam && epParam ? (
-          <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000', overflow: 'hidden' }}>
-            {loadStream && servers.length === 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
-                <Loader size={30} className="spin" color="var(--accent)" />
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Searching servers...</p>
-              </div>
-            ) : extracting ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
-                <Loader size={30} className="spin" color="var(--accent)" />
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Resolving stream sources...</p>
-              </div>
-            ) : streamErr ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20 }}>
-                <AlertCircle size={32} color="#e50914" />
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
-                <button className="btn btn-primary" onClick={fetchStream} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12 }}>
-                  ↺ Retry
-                </button>
-              </div>
-            ) : activeUrl ? (
-              isActiveHLS ? (
-                <AniPlayer
-                  url={activeUrl}
-                  title={`${title} - Episode ${epParam}`}
-                  referer={activeServer?.referer}
-                  embedUrl={activeServer?.embedUrl}
-                  onBack={() => setSearchParams({})}
-                />
-              ) : (
-                <IframePlayer
-                  url={activeUrl}
-                  onBack={() => setSearchParams({})}
-                />
-              )
-            ) : null}
+        <div style={{ position: 'relative', width: '100%', height: 210, overflow: 'hidden', background: '#111' }}>
+          <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+            <img
+              src={cover} alt=""
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(20px) brightness(0.35)', transform: 'scale(1.15)', display: 'block' }}
+            />
+            <img
+              src={cover} alt={title}
+              style={{ height: '85%', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.65)', zIndex: 2, objectFit: 'contain' }}
+            />
           </div>
-        ) : (
-          <div style={{ position: 'relative', width: '100%', height: 210, overflow: 'hidden', background: '#111' }}>
-            <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              <img
-                src={cover} alt=""
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(20px) brightness(0.35)', transform: 'scale(1.15)', display: 'block' }}
-              />
-              <img
-                src={cover} alt={title}
-                style={{ height: '85%', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.65)', zIndex: 2, objectFit: 'contain' }}
-              />
-            </div>
-            {/* Gradient fade to black at bottom */}
-            <div style={{
-              position: 'absolute', inset: 0,
-              background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,15,15,0.6) 60%, rgba(15,15,15,1) 100%)',
-              pointerEvents: 'none',
-              zIndex: 3,
-            }} />
-          </div>
-        )}
+          {/* Gradient fade to black at bottom */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,15,15,0.6) 60%, rgba(15,15,15,1) 100%)',
+            pointerEvents: 'none',
+            zIndex: 3,
+          }} />
+        </div>
 
         {/* ════════════════════════════════════════
             SERVER SELECTION ROW
@@ -560,27 +521,45 @@ export default function AnimePage() {
       </div>
 
       {/* ════════════════════════════════════════
-          GENRE + SYNOPSIS
+          GENRE + SYNOPSIS WITH HEART BUTTON
       ════════════════════════════════════════ */}
-      <div style={{ padding: '14px 16px 0' }}>
-        {/* Genre */}
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Genre:</span>{' '}
-          {anime.genres?.slice(0, 6).join(', ')}
-          {studios ? ` · Studio: ${studios}` : ''}
-        </p>
+      <div style={{ padding: '14px 16px 0', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Genre */}
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.6 }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Genre:</span>{' '}
+            {anime.genres?.slice(0, 6).join(', ')}
+            {studios ? ` · Studio: ${studios}` : ''}
+          </p>
 
-        {/* Description */}
-        <p style={{
-          fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.75,
-          display: '-webkit-box', WebkitBoxOrient: 'vertical',
-          WebkitLineClamp: synOpen ? 'unset' : 4,
-          overflow: 'hidden',
-        }}>{desc}</p>
-        <button onClick={() => setSynOpen(v => !v)} id="syn-toggle"
-          style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 4, display: 'flex', alignItems: 'center', gap: 2 }}
+          {/* Description */}
+          <p style={{
+            fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.75,
+            display: '-webkit-box', WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: synOpen ? 'unset' : 4,
+            overflow: 'hidden',
+          }}>{desc}</p>
+          <button onClick={() => setSynOpen(v => !v)} id="syn-toggle"
+            style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginTop: 4, display: 'flex', alignItems: 'center', gap: 2, border: 'none', background: 'none' }}
+          >
+            {synOpen ? <>View Less <ChevronUp size={12} /></> : <>... View More <ChevronDown size={12} /></>}
+          </button>
+        </div>
+
+        {/* Heart button */}
+        <button
+          onClick={() => toggleFavorite(anime.id, anime)}
+          id={`fav-btn-syn-${anime.id}`}
+          style={{
+            background: fav ? 'rgba(229,9,20,0.1)' : 'rgba(255,255,255,0.05)',
+            border: `1.5px solid ${fav ? '#e50914' : 'var(--border)'}`,
+            borderRadius: 12, width: 44, height: 44,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', flexShrink: 0, transition: 'all 0.2s'
+          }}
+          aria-label="Add to favorites"
         >
-          {synOpen ? <>View Less <ChevronUp size={12} /></> : <>... View More <ChevronDown size={12} /></>}
+          <Heart size={20} color={fav ? '#e50914' : '#fff'} fill={fav ? '#e50914' : 'none'} />
         </button>
       </div>
 
@@ -807,6 +786,183 @@ export default function AnimePage() {
         )}
       </div>
     </div>
+
+    {/* ── PLAYER SCREEN / OVERLAY WINDOW ───────────────────────── */}
+    {playParam && epParam && (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: '#0c0c0e', display: 'flex', flexDirection: 'column',
+        paddingTop: 'env(safe-area-inset-top)'
+      }} className="fade-in">
+        
+        {/* 1. Player Box */}
+        <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000', overflow: 'hidden' }}>
+          {loadStream && servers.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
+              <Loader size={30} className="spin" color="var(--accent)" />
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Searching servers...</p>
+            </div>
+          ) : extracting ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
+              <Loader size={30} className="spin" color="var(--accent)" />
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Resolving stream sources...</p>
+            </div>
+          ) : streamErr ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20 }}>
+              <AlertCircle size={32} color="#e50914" />
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
+              <button className="btn btn-primary" onClick={fetchStream} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12 }}>
+                ↺ Retry
+              </button>
+            </div>
+          ) : activeUrl ? (
+            isActiveHLS ? (
+              <AniPlayer
+                url={activeUrl}
+                title={`${title} - Episode ${epParam}`}
+                referer={activeServer?.referer}
+                embedUrl={activeServer?.embedUrl}
+                onBack={() => setSearchParams({})}
+              />
+            ) : (
+              <IframePlayer
+                url={activeUrl}
+                onBack={() => setSearchParams({})}
+              />
+            )
+          ) : null}
+        </div>
+
+        {/* 2. Toolbar / Navigation for Player Overlay */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '12px 16px', borderBottom: '1px solid var(--border)',
+          background: 'rgba(255,255,255,0.01)'
+        }}>
+          <button
+            onClick={() => setSearchParams({})}
+            className="floating-btn"
+            style={{ width: 32, height: 32 }}
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Now Playing
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Episode {epParam} · {title}
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Server Row & Audio selector inside player screen */}
+        {servers.length > 0 && (
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+            {/* Segmented Control for Sub / Dub */}
+            <div style={{
+              display: 'flex',
+              background: 'rgba(255,255,255,0.03)',
+              borderRadius: 24,
+              padding: 3,
+              marginBottom: 8,
+              border: '1px solid var(--border)'
+            }}>
+              <button
+                disabled={subServers.length === 0}
+                onClick={() => {
+                  localStorage.setItem('anilab_preferred_track', 'sub');
+                  setAudioTrack('sub');
+                  if (subServers.length > 0) selectServer(subServers[0], servers);
+                }}
+                style={{
+                  flex: 1, padding: '5px 0', border: 'none',
+                  background: audioTrack === 'sub' ? 'var(--accent)' : 'transparent',
+                  color: subServers.length === 0 ? 'rgba(255,255,255,0.15)' : (audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)'),
+                  fontSize: 10, fontWeight: 700, borderRadius: 20,
+                }}
+              >
+                Subtitled (SUB)
+              </button>
+              <button
+                disabled={dubServers.length === 0}
+                onClick={() => {
+                  localStorage.setItem('anilab_preferred_track', 'dub');
+                  setAudioTrack('dub');
+                  if (dubServers.length > 0) selectServer(dubServers[0], servers);
+                }}
+                style={{
+                  flex: 1, padding: '5px 0', border: 'none',
+                  background: audioTrack === 'dub' ? 'var(--accent)' : 'transparent',
+                  color: dubServers.length === 0 ? 'rgba(255,255,255,0.15)' : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
+                  fontSize: 10, fontWeight: 700, borderRadius: 20,
+                }}
+              >
+                Dubbed (DUB)
+              </button>
+            </div>
+
+            {/* Active Track Server List */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 60, overflowY: 'auto' }}>
+              {(audioTrack === 'sub' ? subServers : dubServers).map((s, idx) => {
+                const active = activeServer?.videoUrl === s.videoUrl;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => selectServer(s, servers)}
+                    style={{
+                      padding: '4px 10px', borderRadius: 20,
+                      background: active ? 'var(--accent)' : 'var(--bg-card)',
+                      border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                      color: active ? '#fff' : 'var(--text-secondary)',
+                      fontSize: 10, fontWeight: 600,
+                    }}
+                  >
+                    {s.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 4. Episodes Scrollable List below */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+          <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
+            Episodes ({totalEps})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {allEps.map(n => {
+              const isWatched = prog?.episode > n;
+              const isCurrent = epParam === n;
+              return (
+                <div
+                  key={n}
+                  onClick={() => {
+                    setSearchParams({ play: 'true', ep: String(n) });
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '10px', borderRadius: 8, cursor: 'pointer',
+                    background: isCurrent ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.02)',
+                    border: isCurrent ? '1px solid var(--accent)' : '1px solid transparent',
+                  }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 800, color: isCurrent ? 'var(--accent)' : 'var(--text-muted)', width: 24, textAlign: 'center' }}>
+                    {n}
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Episode {n}</div>
+                    {isWatched && <span style={{ fontSize: 10, color: '#4caf50' }}>✓ Watched</span>}
+                  </div>
+                  <Play size={12} fill={isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.4)'} color="transparent" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    )}
   </div>
   );
 }

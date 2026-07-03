@@ -7,9 +7,8 @@ import { getTitle, getCover } from '../api/anilist';
 
 const TABS = [
   { id: 'all',           label: 'All',          icon: Bookmark    },
-  { id: 'favourites',    label: 'Favourites',   icon: Heart       },
   { id: 'watching',      label: 'Watching',     icon: Clock       },
-  { id: 'plan_to_watch', label: 'Plan',         icon: Heart       },
+  { id: 'plan_to_watch', label: 'Plan',         icon: Bookmark    },
   { id: 'completed',     label: 'Completed',    icon: CheckCircle },
   { id: 'dropped',       label: 'Dropped',      icon: XCircle     },
 ];
@@ -22,9 +21,7 @@ export default function MyList() {
   const items = Object.values(watchlist);
   const filtered = activeTab === 'all'
     ? items
-    : activeTab === 'favourites'
-      ? items.filter(item => isFavorite(item.anime.id))
-      : items.filter(item => item.status === activeTab);
+    : items.filter(item => item.status === activeTab);
 
   return (
     <div className="page">

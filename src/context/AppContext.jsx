@@ -5,7 +5,7 @@ const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
   const [watchlist, setWatchlist] = useState({});
-  const [favorites, setFavorites] = useState(new Set());
+  const [favorites, setFavorites] = useState({});
   const [recentlyViewed, setRecentlyViewed] = useState([]);
   const [progress, setProgress] = useState({});
   const [loaded, setLoaded] = useState(false);
@@ -65,7 +65,20 @@ export function AppProvider({ children }) {
 
         // Set React States
         if (finalWatchlist) setWatchlist(finalWatchlist);
-        if (finalFavorites) setFavorites(new Set(finalFavorites));
+        
+        if (finalFavorites) {
+          if (Array.isArray(finalFavorites)) {
+            // Convert legacy list/Set array of IDs to object
+            const migrated = {};
+            finalFavorites.forEach(id => {
+              migrated[id] = finalWatchlist?.[id]?.anime || { id };
+            });
+            setFavorites(migrated);
+          } else {
+            setFavorites(finalFavorites);
+          }
+        }
+        
         if (finalRecently)   setRecentlyViewed(finalRecently);
         if (finalProgress)   setProgress(finalProgress);
 
@@ -87,7 +100,7 @@ export function AppProvider({ children }) {
   // ── Auto-save Favorites when changed ───────────────────────────
   useEffect(() => {
     if (!loaded) return;
-    Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify([...favorites]) }).catch(console.error);
+    Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify(favorites) }).catch(console.error);
   }, [favorites, loaded]);
 
   // ── Auto-save Progress when changed ────────────────────────────
@@ -130,30 +143,20 @@ export function AppProvider({ children }) {
 
   const toggleFavorite = useCallback((animeId, anime = null) => {
     setFavorites(prev => {
-      const next = new Set(prev);
-      if (next.has(animeId)) {
-        next.delete(animeId);
-        setWatchlist(w => {
-          const wNext = { ...w };
-          delete wNext[animeId];
-          return wNext;
-        });
-        showToast('Removed from My List');
+      const next = { ...prev };
+      if (next[animeId]) {
+        delete next[animeId];
+        showToast('Removed from Favorites');
       } else {
-        next.add(animeId);
-        if (anime) {
-          setWatchlist(w => ({
-            ...w,
-            [animeId]: { anime, status: 'plan_to_watch', addedAt: Date.now() },
-          }));
-        }
-        showToast('Added to My List ✓');
+        next[animeId] = anime || { id: animeId };
+        showToast('Added to Favorites ❤️');
       }
       return next;
     });
   }, [showToast]);
 
-  const isFavorite = useCallback((animeId) => favorites.has(animeId), [favorites]);
+  const isFavorite = useCallback((animeId) => Boolean(favorites[animeId]), [favorites]);
+
 
   const setEpisodeProgress = useCallback((animeId, episode) => {
     setProgress(prev => ({ ...prev, [animeId]: { episode, timestamp: Date.now() } }));
