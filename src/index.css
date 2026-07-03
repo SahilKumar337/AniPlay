@@ -12,6 +12,18 @@
   -webkit-touch-callout: none;
 }
 
+/* Suppress all manufacturer-forced native WebView video control overlays */
+video::-webkit-media-controls,
+*::-webkit-media-controls-panel,
+*::-webkit-media-controls-play-button,
+*::-webkit-media-controls-start-playback-button,
+*::-webkit-media-controls-overlay-play-button {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  -webkit-appearance: none !important;
+}
+
 *:focus {
   outline: none !important;
 }

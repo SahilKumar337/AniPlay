@@ -35,6 +35,11 @@ public class MainActivity extends BridgeActivity {
                     | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 );
             }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                getWindow().getAttributes().layoutInDisplayCutoutMode = 
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            }
         }
     }
 

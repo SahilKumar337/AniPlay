@@ -17,10 +17,9 @@
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 .anip--fs {
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw  !important;
-  height: 100vh !important;
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
   z-index: 99999 !important;
   aspect-ratio: unset !important;
   background: #000;
