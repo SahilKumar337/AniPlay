@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.1.184",
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.1.184/bundle.zip",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.1.184/AniPlay.apk",
-  "changelog": "Initial release.",
+  "latestVersion": "1.1.0",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.1.0/bundle.zip",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.1.0/AniPlay.apk",
+  "changelog": "Fixed fullscreen black screen, subtitles for all servers, and native play button overlay.",
   "forceUpdate": false,
   "domains": {
     "neko": "https://anineko.to",
