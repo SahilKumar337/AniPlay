@@ -854,6 +854,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
         playsInline
         preload="auto"
         autoPlay
+        poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
       />
 
       {/* ── BLACK LOADING BG: Covers grey browser poster/play icon ── */}
@@ -1125,5 +1126,5 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     </div>
   );
 
-  return fs ? createPortal(playerContent, document.body) : playerContent;
+  return playerContent;
 }

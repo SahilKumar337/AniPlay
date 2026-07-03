@@ -268,7 +268,7 @@ export default function VideoPlayer({ src, isM3U8 = false, poster, onError, titl
       {/* ── Video Element (completely clean, no browser controls) ── */}
       <video
         ref={videoRef}
-        poster={poster || undefined}
+        poster={poster || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"}
         controls={false}
         playsInline
         style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', background: '#000' }}

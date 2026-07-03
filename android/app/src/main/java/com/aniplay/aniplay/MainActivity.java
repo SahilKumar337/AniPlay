@@ -6,6 +6,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.view.Window;
 import android.view.WindowManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import com.getcapacitor.BridgeWebChromeClient;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -17,6 +20,23 @@ public class MainActivity extends BridgeActivity {
 
         // Keep the splash screen until the web content is ready
         super.onCreate(savedInstanceState);
+
+        // Customize the WebChromeClient to hide the default poster
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
+                @Override
+                public Bitmap getDefaultVideoPoster() {
+                    try {
+                        Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+                        Canvas canvas = new Canvas(bitmap);
+                        canvas.drawARGB(0, 0, 0, 0);
+                        return bitmap;
+                    } catch (Exception e) {
+                        return super.getDefaultVideoPoster();
+                    }
+                }
+            });
+        }
 
         // Full hardware acceleration at the window level
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);

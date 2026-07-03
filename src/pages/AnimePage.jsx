@@ -854,6 +854,7 @@ export default function AnimePage() {
                 title={`${title} - Episode ${epParam}`}
                 referer={activeServer?.referer}
                 embedUrl={activeServer?.embedUrl}
+                subtitles={activeServer?.subtitles || []}
                 onBack={() => setSearchParams({})}
                 onFullscreenChange={setFsActive}
               />
