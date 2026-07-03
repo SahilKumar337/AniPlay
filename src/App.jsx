@@ -88,7 +88,9 @@ export default function App() {
     const initDeviceSettings = async () => {
       if (Capacitor.isNativePlatform()) {
         try {
-          await StatusBar.setStyle({ style: Style.Dark });
+          await StatusBar.setStyle({ style: Style.Light });
+          await StatusBar.setOverlaysWebView({ overlay: true });
+          await StatusBar.setBackgroundColor({ color: '#00000000' });
         } catch (e) {
           console.warn('[Capacitor] StatusBar settings error:', e);
         }
