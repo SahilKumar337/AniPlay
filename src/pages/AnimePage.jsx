@@ -56,10 +56,14 @@ export default function AnimePage() {
 
   useEffect(() => {
     const handleScroll = () => {
-      setScrolled(window.scrollY > 60);
+      setScrolled((window.scrollY || document.documentElement.scrollTop) > 60);
     };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('touchmove', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('touchmove', handleScroll);
+    };
   }, []);
 
   // Lock body scroll and prevent viewport shifts during video playback
@@ -313,9 +317,10 @@ export default function AnimePage() {
   return (
     <div className="page" style={{ position: 'relative' }}>
 
-      {/* ── Fixed Premium Header ─────────────────────────────────── */}
       <div style={{
-        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', zIndex: 90,
+        position: 'fixed', top: 0, left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 90,
         width: '100%', maxWidth: 480,
         padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -533,8 +538,20 @@ export default function AnimePage() {
             <button
               className="btn btn-primary"
               id={`dl-${anime.id}`}
-              style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10, background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)' }}
-              onClick={() => navigate('/download')}
+              style={{
+                flex: 1,
+                justifyContent: 'center',
+                padding: '13px',
+                fontSize: 15,
+                fontWeight: 700,
+                borderRadius: 10,
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.05)',
+                color: 'var(--text-muted)',
+                opacity: 0.6,
+                cursor: 'not-allowed'
+              }}
+              disabled
             >
               <Download size={17} />
               Downloads

@@ -1,0 +1,13 @@
+{
+  "latestVersion": "1.2",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.2/bundle.zip",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.2/AniPlay.apk",
+  "changelog": "Beta Update: Bounded solid black system bars, static top navigation animations, and native APK updater module.",
+  "forceUpdate": false,
+  "domains": {
+    "neko": "https://anineko.to",
+    "waves": "https://aniwaves.ru",
+    "animetsu": "https://animetsu.net"
+  },
+  "maintenanceMessage": null
+}

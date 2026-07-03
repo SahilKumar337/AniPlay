@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { StatusBar, Style } from '@capacitor/status-bar';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
+const APKUpdater = registerPlugin('APKUpdater');
 import WelcomeScreen from './components/WelcomeScreen';
 import Home          from './pages/Home';
 import Browse        from './pages/Browse';
@@ -80,15 +81,16 @@ export default function App() {
 
   const [updateInfo, setUpdateInfo] = useState(null);
   const [maintenanceMsg, setMaintenanceMsg] = useState(null);
-  const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'installing' | 'ready'
-  const [downloadedBundle, setDownloadedBundle] = useState(null);
+  const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'ready'
   const [currentVersion, setCurrentVersion] = useState('1.0.0');
 
   useEffect(() => {
     const initDeviceSettings = async () => {
       if (Capacitor.isNativePlatform()) {
         try {
-          await StatusBar.setStyle({ style: Style.Dark });
+          await StatusBar.setOverlaysWebView({ overlay: false });
+          await StatusBar.setBackgroundColor({ color: '#000000' });
+          await StatusBar.setStyle({ style: Style.Light });
         } catch (e) {
           console.warn('[Capacitor] StatusBar settings error:', e);
         }
@@ -100,10 +102,13 @@ export default function App() {
   // ── Remote Update & Configuration Checker ──────────────────────
   useEffect(() => {
     async function checkUpdates() {
-      const urls = [
-        'https://raw.githubusercontent.com/SahilKumar337/AniPlay/main/update.json',
-        'https://raw.githubusercontent.com/SahilKumar337/Anilab/main/update.json'
-      ];
+      const isTestBuild = localStorage.getItem('anilab_test_updates') === 'true';
+      const urls = isTestBuild
+        ? ['https://raw.githubusercontent.com/SahilKumar337/AniPlay/refs/heads/main/update-test.json']
+        : [
+            'https://raw.githubusercontent.com/SahilKumar337/AniPlay/refs/heads/main/update.json',
+            'https://raw.githubusercontent.com/SahilKumar337/AniPlay/main/update.json'
+          ];
       let data = null;
       for (const url of urls) {
         try {
@@ -130,19 +135,20 @@ export default function App() {
         return;
       }
 
-      // 3. Detect active version dynamically
+      // 3. Detect active native version dynamically
       let appVer = '1.0.0';
       if (Capacitor.isNativePlatform()) {
         try {
-          const currentBundle = await CapacitorUpdater.current();
-          if (currentBundle?.bundle?.version) {
-            appVer = currentBundle.bundle.version;
-          } else {
+          const versionInfo = await APKUpdater.getAppVersion();
+          appVer = versionInfo.versionName;
+        } catch (e) {
+          console.warn('[APKUpdater] Failed to get native version, fallback to CapApp:', e);
+          try {
             const info = await CapApp.getInfo();
             appVer = info.version;
+          } catch (err) {
+            console.warn('[CapApp] Failed to get app info:', err);
           }
-        } catch (e) {
-          console.warn('[Updater] Failed to get active version:', e);
         }
       }
       setCurrentVersion(appVer);
@@ -174,7 +180,7 @@ export default function App() {
   };
 
 
-  // ── In-app OTA update via @capgo/capacitor-updater ──────────────
+  // ── In-app Native APK update via APKUpdater ──────────────
   const handleUpdateNow = async () => {
     const isNativeApp = Capacitor.isNativePlatform();
     if (!isNativeApp) {
@@ -183,41 +189,36 @@ export default function App() {
       return;
     }
 
-    if (downloadedBundle) {
-      setUpdateProgress('installing');
-      try {
-        await CapacitorUpdater.set(downloadedBundle);
-        // App restarts automatically after set()
-      } catch (err) {
-        console.error('[Updater] Failed to install update:', err);
-        setUpdateProgress(null);
-        setDownloadedBundle(null);
-      }
-      return;
-    }
-
     try {
       setUpdateProgress(0);
 
       // Listen for download progress events
-      const progressListener = await CapacitorUpdater.addListener(
-        'download',
-        ({ percent }) => setUpdateProgress(Math.round(percent))
-      );
-
-      // Download the new web bundle zip
-      const bundle = await CapacitorUpdater.download({
-        url: updateInfo.bundleUrl,
-        version: updateInfo.latestVersion,
+      const progressListener = await APKUpdater.addListener('downloadProgress', ({ progress }) => {
+        setUpdateProgress(Math.round(progress));
       });
 
-      progressListener.remove();
-      setDownloadedBundle(bundle);
-      setUpdateProgress('ready');
+      const completeListener = await APKUpdater.addListener('downloadComplete', () => {
+        setUpdateProgress('ready');
+      });
+
+      const errorListener = await APKUpdater.addListener('downloadError', ({ error }) => {
+        console.error('[APKUpdater] Download failed:', error);
+        setUpdateProgress(null);
+      });
+
+      // Start the native APK download and install
+      await APKUpdater.downloadAndInstall({ url: updateInfo.apkUrl });
+
+      // Clean up listeners
+      setTimeout(() => {
+        progressListener.remove();
+        completeListener.remove();
+        errorListener.remove();
+      }, 6000);
     } catch (err) {
-      console.error('[Updater] Failed to download/install update:', err);
+      console.error('[APKUpdater] Failed to download/install update:', err);
       setUpdateProgress(null);
-      // Fallback: open APK download
+      // Fallback: open system browser to download APK
       if (updateInfo.apkUrl) window.open(updateInfo.apkUrl, '_system');
     }
   };

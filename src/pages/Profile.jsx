@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { User, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock, Save, Check, X, AlertTriangle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+const APKUpdater = registerPlugin('APKUpdater');
 
 // ── Reusable bottom-sheet modal ─────────────────────────────────
 function Modal({ title, children, onClose }) {
@@ -46,6 +49,35 @@ export default function Profile() {
   const [showSignOut,   setShowSignOut]   = useState(false);
   const [cookieVal,     setCookieVal]     = useState('');
   const [saveStatus,    setSaveStatus]    = useState(''); // '', 'saving', 'saved', 'error'
+  const [appVersion,    setAppVersion]    = useState('1.0.0');
+  const [devTapCount,   setDevTapCount]   = useState(0);
+
+  React.useEffect(() => {
+    const getVersion = async () => {
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const versionInfo = await APKUpdater.getAppVersion();
+          setAppVersion(versionInfo.versionName);
+        } catch (e) {
+          console.warn('[Profile] Failed to get native version:', e);
+        }
+      }
+    };
+    getVersion();
+  }, []);
+
+  const handleVersionTap = () => {
+    const nextCount = devTapCount + 1;
+    if (nextCount >= 7) {
+      const isTest = localStorage.getItem('anilab_test_updates') === 'true';
+      localStorage.setItem('anilab_test_updates', isTest ? 'false' : 'true');
+      alert(`Developer Mode: Test updates ${!isTest ? 'ENABLED' : 'DISABLED'}. Checking raw GitHub updates-test.json config on reload.`);
+      window.location.reload();
+      setDevTapCount(0);
+    } else {
+      setDevTapCount(nextCount);
+    }
+  };
 
   const watchlistCount = Object.keys(watchlist).length;
   const favCount       = Object.keys(favorites).length;
@@ -244,8 +276,11 @@ export default function Profile() {
         </div>
 
         {/* App version */}
-        <div style={{ textAlign: 'center', marginTop: 28, color: 'var(--text-muted)', fontSize: 12 }}>
-          AniPlay v1.0.0 · Made with ❤ for anime fans
+        <div 
+          onClick={handleVersionTap}
+          style={{ textAlign: 'center', marginTop: 28, color: 'var(--text-muted)', fontSize: 12, cursor: 'pointer', userSelect: 'none' }}
+        >
+          AniPlay v{appVersion} {localStorage.getItem('anilab_test_updates') === 'true' && '(Beta Test)'} · Made with ❤ for anime fans
         </div>
       </div>
 
@@ -261,7 +296,7 @@ export default function Profile() {
             }}>▶</div>
             <div>
               <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-brand)' }}>AniPlay</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Version 1.0.0</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Version {appVersion}</div>
             </div>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7, maxWidth: 300 }}>
               AniPlay is a premium anime streaming app. Watch your favorite shows in HD with subtitles, track your progress, and discover new series.

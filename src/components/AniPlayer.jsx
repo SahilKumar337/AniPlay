@@ -1080,7 +1080,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
                   title="Quality"
                 >
                   <Settings size={17} />
-                  <span className="anip__badge">{activeQ===-1?'Auto':qualities[activeQ]?.label||'Auto'}</span>
+                  <span className="anip__badge-visible">{activeQ===-1?'Auto':qualities[activeQ]?.label||'Auto'}</span>
                 </button>
                 {showQ && (
                   <div className="anip__menu">
@@ -1104,7 +1104,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
                 title="Aspect Ratio"
                 style={{ minWidth: '48px', justifyContent: 'center' }}
               >
-                <span className="anip__badge" style={{ fontSize: '10px', textTransform: 'uppercase', opacity: 0.95 }}>
+                <span className="anip__badge-visible" style={{ fontSize: '10px', textTransform: 'uppercase', opacity: 0.95 }}>
                   {fitMode === 'contain' ? 'Fit' : fitMode === 'cover' ? 'Zoom' : 'Stretch'}
                 </span>
               </button>

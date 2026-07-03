@@ -29,9 +29,15 @@ export default function Home() {
   const [ready,          setReady]          = useState(false);
 
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 20);
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+    const handleScroll = () => {
+      setScrolled((window.scrollY || document.documentElement.scrollTop) > 20);
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('touchmove', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('touchmove', handleScroll);
+    };
   }, []);
 
   useEffect(() => {
@@ -90,9 +96,10 @@ export default function Home() {
   return (
     <div className="page" style={{ position: 'relative' }}>
 
-      {/* ── Fixed Premium Header ─────────────────────────────────── */}
       <div style={{
-        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', zIndex: 90,
+        position: 'fixed', top: 0, left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 90,
         width: '100%', maxWidth: 480,
         padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',

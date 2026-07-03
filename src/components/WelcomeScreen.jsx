@@ -32,8 +32,7 @@ export default function WelcomeScreen({ onEnter }) {
 
   return (
     <div className="welcome-screen">
-      {/* Tapping the hero area also enters the app */}
-      <div className="welcome-hero" onClick={onEnter} style={{ cursor: 'pointer' }}>
+      <div className="welcome-hero">
         {/* Collage */}
         <div className="welcome-collage">
           {rows.map((row, i) => (
@@ -68,9 +67,6 @@ export default function WelcomeScreen({ onEnter }) {
                 style={{ cursor: 'pointer' }}
               />
             ))}
-          </div>
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginTop: 8, letterSpacing: '0.5px' }}>
-            Tap anywhere to continue
           </div>
         </div>
       </div>

@@ -340,6 +340,14 @@
   letter-spacing: 0.3px;
 }
 
+.anip__badge-visible {
+  display: inline-block !important;
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.85);
+  letter-spacing: 0.3px;
+}
+
 /* ── Time display ──────────────────────────────────────────── */
 .anip__time {
   font-size: 12px;

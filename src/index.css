@@ -98,8 +98,6 @@ ul, ol { list-style: none; }
   min-height: 100dvh;
   position: relative;
   overflow: hidden;
-  /* Push content below the Android status bar on edge-to-edge builds */
-  padding-top: env(safe-area-inset-top);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   box-sizing: border-box;
@@ -1235,8 +1233,8 @@ ul, ol { list-style: none; }
 
 /* ---------- Animations ---------- */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .fade-in-up { animation: fadeInUp 0.4s ease forwards; }
 
@@ -1267,8 +1265,8 @@ ul, ol { list-style: none; }
   animation: pageSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 @keyframes pageSlideIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Fade-in for tabs and overlays */

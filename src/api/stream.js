@@ -146,11 +146,10 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     return null;
   })();
 
-  // Run all concurrently but with high timeouts since callback updates UI progressively!
   const results = await Promise.allSettled([
-    runWithTimeout(nekoPromise, 18000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 18000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(animetsuPromise, 35000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(nekoPromise, 60000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(wavesPromise, 60000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(animetsuPromise, 60000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
   ]);
 
   if (combinedServers.length === 0) {

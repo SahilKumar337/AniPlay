@@ -145,8 +145,8 @@ async function clientFetch(url, opts = {}) {
           ...(opts.referer ? { 'Referer': opts.referer } : {}),
           ...(opts.headers || {}),
         },
-        connectTimeout: opts.timeout || 15000,
-        readTimeout: opts.timeout || 15000
+        connectTimeout: opts.timeout || 60000,
+        readTimeout: opts.timeout || 60000
       });
       
       const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
@@ -166,7 +166,7 @@ async function clientFetch(url, opts = {}) {
       const proxyUrl = `/api/scrape?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(opts.referer || new URL(url).origin)}`;
       console.log(`[LocalProxy] Scraping via backend proxy: ${url}`);
       const res = await fetch(proxyUrl, {
-        signal: AbortSignal.timeout(opts.timeout || 25000),
+        signal: AbortSignal.timeout(opts.timeout || 60000),
         headers: opts.headers
       });
       if (!res.ok) throw new Error(`HTTP ${res.status} from proxy`);
@@ -179,7 +179,7 @@ async function clientFetch(url, opts = {}) {
   // Fallback direct request
   const headers = { ...opts.headers };
   const res = await fetch(url, {
-    signal: AbortSignal.timeout(opts.timeout || 15000),
+    signal: AbortSignal.timeout(opts.timeout || 60000),
     headers
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -274,7 +274,7 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
   const url = `${AW}/ajax/sources?id=${encodeURIComponent(linkId)}&asi=0&autoPlay=0`;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': `${AW}/watch/${watchPageSlug}` },
-    timeout: 20000,
+    timeout: 4000,
   });
   const parsed = JSON.parse(text);
   if (parsed.status !== 200 || !parsed.result?.url) throw new Error(`No embed URL`);
@@ -291,7 +291,7 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   const rawServers = await awGetServers(animeId, episode, slug);
   const subServers = rawServers.filter(s => s.type === 'sub');
   const dubServers = rawServers.filter(s => s.type === 'dub');
-  const toResolve = [...subServers.slice(0, 3), ...dubServers.slice(0, 3)];
+  const toResolve = [...subServers.slice(0, 2), ...dubServers.slice(0, 2)];
 
   const resolved = await Promise.allSettled(
     toResolve.map(async s => {
