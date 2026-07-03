@@ -30,6 +30,11 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.release
         }
+        debug {
+            applicationIdSuffix ".beta"
+            versionNameSuffix "-beta"
+            signingConfig signingConfigs.release
+        }
     }
 }
 

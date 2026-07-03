@@ -58,6 +58,9 @@ export default function Profile() {
         try {
           const versionInfo = await APKUpdater.getAppVersion();
           setAppVersion(versionInfo.versionName);
+          if (versionInfo.packageName && versionInfo.packageName.endsWith('.beta')) {
+            localStorage.setItem('anilab_test_updates', 'true');
+          }
         } catch (e) {
           console.warn('[Profile] Failed to get native version:', e);
         }

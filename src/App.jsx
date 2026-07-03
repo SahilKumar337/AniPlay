@@ -102,7 +102,28 @@ export default function App() {
   // ── Remote Update & Configuration Checker ──────────────────────
   useEffect(() => {
     async function checkUpdates() {
-      const isTestBuild = localStorage.getItem('anilab_test_updates') === 'true';
+      let isTestBuild = localStorage.getItem('anilab_test_updates') === 'true';
+      let appVer = '1.0.0';
+
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const versionInfo = await APKUpdater.getAppVersion();
+          appVer = versionInfo.versionName;
+          if (versionInfo.packageName && versionInfo.packageName.endsWith('.beta')) {
+            isTestBuild = true;
+          }
+        } catch (e) {
+          console.warn('[APKUpdater] Failed to get native version, fallback to CapApp:', e);
+          try {
+            const info = await CapApp.getInfo();
+            appVer = info.version;
+          } catch (err) {
+            console.warn('[CapApp] Failed to get app info:', err);
+          }
+        }
+      }
+      setCurrentVersion(appVer);
+
       const urls = isTestBuild
         ? ['https://raw.githubusercontent.com/SahilKumar337/AniPlay/refs/heads/main/update-test.json']
         : [
@@ -134,24 +155,6 @@ export default function App() {
         setMaintenanceMsg(data.maintenanceMessage);
         return;
       }
-
-      // 3. Detect active native version dynamically
-      let appVer = '1.0.0';
-      if (Capacitor.isNativePlatform()) {
-        try {
-          const versionInfo = await APKUpdater.getAppVersion();
-          appVer = versionInfo.versionName;
-        } catch (e) {
-          console.warn('[APKUpdater] Failed to get native version, fallback to CapApp:', e);
-          try {
-            const info = await CapApp.getInfo();
-            appVer = info.version;
-          } catch (err) {
-            console.warn('[CapApp] Failed to get app info:', err);
-          }
-        }
-      }
-      setCurrentVersion(appVer);
 
       // 4. Compare version
       const isNewerVersion = (latest, current) => {

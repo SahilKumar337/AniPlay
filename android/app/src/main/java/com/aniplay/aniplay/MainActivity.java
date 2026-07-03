@@ -174,6 +174,7 @@ class APKUpdaterPlugin extends Plugin {
             JSObject ret = new JSObject();
             ret.put("versionName", pInfo.versionName);
             ret.put("versionCode", pInfo.versionCode);
+            ret.put("packageName", getContext().getPackageName());
             call.resolve(ret);
         } catch (Exception e) {
             call.reject(e.getMessage());
