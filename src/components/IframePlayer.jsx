@@ -319,22 +319,7 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
         </div>
       )}
 
-      {/* ── Back button ───────────────────────────────────────── */}
-      {onBack && (
-        <button
-          onClick={onBack}
-          style={{
-            position: 'absolute', top: 10, left: 10, zIndex: 20,
-            width: 36, height: 36, borderRadius: '50%',
-            background: 'rgba(0,0,0,0.75)',
-            border: '1px solid rgba(255,255,255,0.15)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', color: '#fff',
-          }}
-        >
-          <ArrowLeft size={17} color="#fff" />
-        </button>
-      )}
+
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

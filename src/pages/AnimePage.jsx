@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
+import { Capacitor } from '@capacitor/core';
 import {
   ArrowLeft, Share2, Bookmark, Star, Play, Download,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
@@ -15,7 +16,6 @@ import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
 import { scrapeEmbedNative } from '../api/embedScraper';
 
-const IS_NATIVE = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 
 
 export default function AnimePage() {
@@ -124,7 +124,7 @@ export default function AnimePage() {
       const embedUrl = srv.embedUrl;
       const referer  = srv.referer || 'https://aniwaves.ru/';
 
-      if (IS_NATIVE) {
+      if (Capacitor.isNativePlatform()) {
         setActiveName(srv.name);
         setActiveType(srv.type || 'sub');
         setIsActiveHLS(false);
