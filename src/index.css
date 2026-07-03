@@ -83,8 +83,14 @@ ul, ol { list-style: none; }
   margin: 0;
   background: var(--bg-primary);
   min-height: 100vh;
+  min-height: 100dvh;
   position: relative;
   overflow: hidden;
+  /* Push content below the Android status bar on edge-to-edge builds */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  box-sizing: border-box;
 }
 
 @media (min-width: 768px) {

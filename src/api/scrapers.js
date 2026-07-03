@@ -438,8 +438,35 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
 
 // ── Animetsu Scraper ──
 
+// Stream URL session cache: animeId/episode/type → { data, expires }
+// TTL = 25 minutes (stream URLs typically expire in ~30 min)
+const STREAM_CACHE_TTL_MS = 25 * 60 * 1000;
+
+function getStreamCache(animeId, episode, sourceType) {
+  try {
+    const key = `animetsu_stream_${animeId}_${episode}_${sourceType}`;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, expires } = JSON.parse(raw);
+    if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
+    console.log(`[Animetsu] Cache HIT for ${sourceType} ep${episode} — instant play`);
+    return data;
+  } catch { return null; }
+}
+
+function setStreamCache(animeId, episode, sourceType, data) {
+  try {
+    const key = `animetsu_stream_${animeId}_${episode}_${sourceType}`;
+    sessionStorage.setItem(key, JSON.stringify({ data, expires: Date.now() + STREAM_CACHE_TTL_MS }));
+  } catch {}
+}
+
 // Fetches a stream URL from Animetsu — all servers race in PARALLEL, fastest wins.
 async function fetchAnimetsuStream(animeId, episode, sourceType) {
+  // Check session cache first — avoids re-fetching same episode within 25 min
+  const cached = getStreamCache(animeId, episode, sourceType);
+  if (cached) return cached;
+
   const proxyBase = 'https://swiftstream.top/proxy';
   const SERVERS = ['hd1', 'vidstream', 'filemoon'];
 
@@ -456,12 +483,16 @@ async function fetchAnimetsuStream(animeId, episode, sourceType) {
 
   try {
     // Promise.any returns the FIRST fulfilled promise — fastest server wins
-    return await Promise.any(attempts);
+    const result = await Promise.any(attempts);
+    // Cache the result for repeat plays
+    setStreamCache(animeId, episode, sourceType, result);
+    return result;
   } catch {
     // AggregateError: all servers failed
     return null;
   }
 }
+
 
 export async function scrapeAnimetsu(title, episode, isMovie = false) {
   let best = animetsuSearchCache.get(title);

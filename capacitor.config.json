@@ -14,7 +14,10 @@
       "*.echovideo.ru",
       "aniwaves.ru",
       "animetsu.net",
-      "anineko.to"
+      "anineko.to",
+      "raw.githubusercontent.com",
+      "github.com",
+      "objects.githubusercontent.com"
     ]
   },
   "plugins": {
@@ -22,7 +25,9 @@
       "enabled": true
     },
     "CapacitorUpdater": {
-      "autoUpdate": true
+      "autoUpdate": false,
+      "statsUrl": "",
+      "privateKey": ""
     }
   }
 }

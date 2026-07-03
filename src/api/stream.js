@@ -61,6 +61,11 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   const handleScraperResult = (data) => {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
+        // Filter: Only allow AniHD1, Neko HD-1, Neko HD-2, Waves Vidplay
+        const allowedKeywords = ['anihd1', 'neko hd-1', 'neko hd-2', 'waves vidplay', 'vidplay'];
+        const isAllowed = allowedKeywords.some(keyword => s.name.toLowerCase().includes(keyword));
+        if (!isAllowed) return; // skip this server
+
         // Prevent duplicate server items
         if (!combinedServers.some(x => x.name === s.name && x.type === s.type)) {
           combinedServers.push({ ...s, name: s.name });

@@ -4,6 +4,7 @@ import { AppProvider } from './context/AppContext';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
+import { CapacitorUpdater } from '@capgo/capacitor-updater';
 import WelcomeScreen from './components/WelcomeScreen';
 import Home          from './pages/Home';
 import Browse        from './pages/Browse';
@@ -75,6 +76,7 @@ export default function App() {
 
   const [updateInfo, setUpdateInfo] = useState(null);
   const [maintenanceMsg, setMaintenanceMsg] = useState(null);
+  const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'installing'
 
   useEffect(() => {
     const initDeviceSettings = async () => {
@@ -133,6 +135,43 @@ export default function App() {
   const handleEnter = () => {
     sessionStorage.setItem('anilab_welcomed', '1');
     setShowWelcome(false);
+  };
+
+  // ── In-app OTA update via @capgo/capacitor-updater ──────────────
+  const handleUpdateNow = async () => {
+    const isNativeApp = Capacitor.isNativePlatform();
+    if (!isNativeApp) {
+      // Fallback for web browser — open APK download link
+      window.open(updateInfo.apkUrl, '_blank');
+      return;
+    }
+    try {
+      setUpdateProgress(0);
+
+      // Listen for download progress events
+      const progressListener = await CapacitorUpdater.addListener(
+        'download',
+        ({ percent }) => setUpdateProgress(Math.round(percent))
+      );
+
+      // Download the new web bundle zip
+      const bundle = await CapacitorUpdater.download({
+        url: updateInfo.bundleUrl,
+        version: updateInfo.latestVersion,
+      });
+
+      progressListener.remove();
+      setUpdateProgress('installing');
+
+      // Set as next bundle and restart
+      await CapacitorUpdater.set(bundle);
+      // App restarts automatically after set()
+    } catch (err) {
+      console.error('[Updater] Failed to download/install update:', err);
+      setUpdateProgress(null);
+      // Fallback: open APK download
+      if (updateInfo.apkUrl) window.open(updateInfo.apkUrl, '_system');
+    }
   };
 
   return (
@@ -216,8 +255,29 @@ export default function App() {
               </div>
             )}
 
+            {/* Download progress bar */}
+            {updateProgress !== null && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{
+                  background: 'rgba(255,255,255,0.08)',
+                  borderRadius: 8, height: 8, overflow: 'hidden', marginBottom: 6
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: updateProgress === 'installing' ? '100%' : `${updateProgress}%`,
+                    background: 'linear-gradient(90deg, #6366f1, #a78bfa)',
+                    borderRadius: 8,
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {updateProgress === 'installing' ? '✅ Installing… app will restart' : `Downloading ${updateProgress}%`}
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 10 }}>
-              {!updateInfo.forceUpdate && (
+              {!updateInfo.forceUpdate && updateProgress === null && (
                 <button
                   onClick={() => setUpdateInfo(null)}
                   style={{
@@ -232,16 +292,21 @@ export default function App() {
                 </button>
               )}
               <button
-                onClick={() => window.open(updateInfo.apkUrl, '_system')}
+                onClick={handleUpdateNow}
+                disabled={updateProgress !== null}
                 style={{
                   flex: 1, padding: '12px 0', borderRadius: 10,
                   border: 'none',
-                  background: 'var(--accent)',
+                  background: updateProgress !== null
+                    ? 'rgba(99,102,241,0.4)'
+                    : 'linear-gradient(135deg, #6366f1, #a78bfa)',
                   color: '#fff',
-                  fontSize: 13, fontWeight: 700, cursor: 'pointer'
+                  fontSize: 13, fontWeight: 700,
+                  cursor: updateProgress !== null ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
                 }}
               >
-                Update Now
+                {updateProgress !== null ? '⏳ Updating…' : '🚀 Update Now'}
               </button>
             </div>
           </div>

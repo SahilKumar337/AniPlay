@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
-import { CapacitorHttp, CapacitorCookies } from '@capacitor/core';
+import { CapacitorHttp, CapacitorCookies, Plugins } from '@capacitor/core';
 import {
   Play, Pause, Volume2, VolumeX, Volume1,
   Maximize, Minimize, Settings, Subtitles,
@@ -209,6 +209,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
   const [needsTap,  setNeedsTap]  = useState(false);  // autoplay blocked
   const [hlsErr,    setHlsErr]    = useState(null);   // fatal stream error
   const [hasStarted, setHasStarted] = useState(false); // first play event occurred
+  const [subToast,  setSubToast]  = useState(null);   // subtitle unavailable toast message
 
   // Debug & Diagnostics
   const [logs,       setLogs]       = useState([]);
@@ -485,6 +486,9 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
       .catch(err => {
         log(`Failed to fetch subtitles: ${err.message}`);
         setCues([]);
+        // Show toast notification so user knows subtitles failed
+        setSubToast('Subtitles unavailable');
+        setTimeout(() => setSubToast(null), 3500);
       });
   }, [activeSub, subs, referer, log]);
 
@@ -572,32 +576,49 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     };
   }, []);
 
-  // Sync orientation and statusbar for native mobile clients
+  // Sync orientation, statusbar AND nav bar for native mobile clients
   useEffect(() => {
     const syncNativeFullscreen = async () => {
-      if (window.Capacitor) {
-        try {
-          if (fs) {
-            await ScreenOrientation.lock({ orientation: 'landscape' });
-            await StatusBar.hide();
+      if (!isNative) return;
+      try {
+        if (fs) {
+          // Lock landscape + full immersive (hides both status bar AND nav bar)
+          await ScreenOrientation.lock({ orientation: 'landscape' });
+          const { EmbedScraper } = Plugins;
+          if (EmbedScraper?.setImmersiveMode) {
+            await EmbedScraper.setImmersiveMode({ enabled: true });
           } else {
-            try { await ScreenOrientation.unlock(); } catch (err) {}
+            // Fallback: at least hide status bar
+            await StatusBar.hide();
+          }
+        } else {
+          // Unlock orientation + restore system bars
+          try { await ScreenOrientation.unlock(); } catch {}
+          const { EmbedScraper } = Plugins;
+          if (EmbedScraper?.setImmersiveMode) {
+            await EmbedScraper.setImmersiveMode({ enabled: false });
+          } else {
             await StatusBar.show();
           }
-        } catch (e) {
-          console.warn('[AniPlayer] Native orientation/statusbar error:', e.message);
         }
+      } catch (e) {
+        console.warn('[AniPlayer] Fullscreen native sync error:', e.message);
       }
     };
     syncNativeFullscreen();
   }, [fs]);
 
-  // ── Fix: Always unlock orientation on unmount (handles back-button navigation) ──
+  // Always restore system bars + unlock orientation on unmount
   useEffect(() => {
     return () => {
-      if (window.Capacitor) {
+      if (isNative) {
         ScreenOrientation.unlock().catch(() => {});
-        StatusBar.show().catch(() => {});
+        const { EmbedScraper } = Plugins;
+        if (EmbedScraper?.setImmersiveMode) {
+          EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
+        } else {
+          StatusBar.show().catch(() => {});
+        }
       }
     };
   }, []);
@@ -672,11 +693,9 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
   }, []);
 
   const toggleFs = useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const cur = document.fullscreenElement || document.webkitFullscreenElement;
-    if (!cur) (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
-    else      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    // CSS-only fullscreen — no requestFullscreen() API (not supported in Android WebView)
+    // ScreenOrientation + immersive mode is handled by the fs useEffect above
+    setFs(prev => !prev);
   }, []);
 
   /* ── Seek ─────────────────────────────────────────────────── */
@@ -853,6 +872,13 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
             className="anip__subtitle-text"
             dangerouslySetInnerHTML={{ __html: cueHtml.replace(/\n/g, '<br/>') }}
           />
+        </div>
+      )}
+
+      {/* ── Subtitle unavailable toast ────────────────────────── */}
+      {subToast && (
+        <div className="anip__sub-toast">
+          <span>⚠️ {subToast}</span>
         </div>
       )}
 

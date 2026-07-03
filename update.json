@@ -1,12 +1,13 @@
 {
   "latestVersion": "1.0.0",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.0.0/app-release.apk",
-  "changelog": "Initial AniPlay release! Rebranded with soft colors, native Preferences storage, swipe banner, and unreleased episode safeguards.",
+  "bundleUrl": "",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/latest/download/AniPlay.apk",
+  "changelog": "Initial release.",
   "forceUpdate": false,
-  "maintenanceMessage": "",
   "domains": {
     "neko": "https://anineko.to",
     "waves": "https://aniwaves.ru",
     "animetsu": "https://animetsu.net"
-  }
+  },
+  "maintenanceMessage": null
 }
