@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
-import { CapacitorHttp, CapacitorCookies, Plugins } from '@capacitor/core';
+import { CapacitorHttp, CapacitorCookies, registerPlugin } from '@capacitor/core';
 import {
   Play, Pause, Volume2, VolumeX, Volume1,
   Maximize, Minimize, Settings, Subtitles,
@@ -10,6 +10,9 @@ import {
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
 import './AniPlayer.css';
+
+const EmbedScraper = registerPlugin('EmbedScraper');
+
 
 /* ─── Way 4: CapacitorHttp hls.js loader ──────────────────────
    On Android, each HLS manifest and fragment is fetched through
@@ -584,7 +587,6 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
         if (fs) {
           // Lock landscape + full immersive (hides both status bar AND nav bar)
           await ScreenOrientation.lock({ orientation: 'landscape' });
-          const { EmbedScraper } = Plugins;
           if (EmbedScraper?.setImmersiveMode) {
             await EmbedScraper.setImmersiveMode({ enabled: true });
           } else {
@@ -594,7 +596,6 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
         } else {
           // Unlock orientation + restore system bars
           try { await ScreenOrientation.unlock(); } catch {}
-          const { EmbedScraper } = Plugins;
           if (EmbedScraper?.setImmersiveMode) {
             await EmbedScraper.setImmersiveMode({ enabled: false });
           } else {
@@ -613,7 +614,6 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     return () => {
       if (isNative) {
         ScreenOrientation.unlock().catch(() => {});
-        const { EmbedScraper } = Plugins;
         if (EmbedScraper?.setImmersiveMode) {
           EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
         } else {
