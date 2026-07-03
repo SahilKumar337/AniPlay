@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
@@ -27,6 +27,8 @@ import Navbar        from './components/Navbar';
 function AppInner({ showWelcome, onEnter }) {
   const navigate = useNavigate();
   const isNative = Capacitor.isNativePlatform();
+  const [searchParams] = useSearchParams();
+  const playParam = searchParams.get('play') === 'true';
 
   // ── Capacitor Android back button handler ─────────────────────────
   // This fires when the Android hardware/gesture back button is pressed.
@@ -62,7 +64,7 @@ function AppInner({ showWelcome, onEnter }) {
             <Route path="/profile"     element={<Profile />}      />
             <Route path="*"            element={<Navigate to="/" replace />} />
           </Routes>
-          <Navbar />
+          {!playParam && <Navbar />}
         </>
       )}
     </div>

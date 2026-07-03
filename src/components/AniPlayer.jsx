@@ -928,19 +928,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
       <SwipeBar type="brightness" value={clamp(bright/2,0,1)} visible={swipeBri} />
       <SwipeBar type="volume"     value={muted ? 0 : volume}  visible={swipeVol} />
 
-      {/* ── Always-visible back button — outside the opacity overlay ——————————
-          The .anip__overlay has opacity:0 + pointer-events:none when controls are
-          hidden. Moving the back button here ensures it is ALWAYS tappable. */}
-      {onBack && (
-        <button
-          className="anip__back-btn"
-          onClick={onBack}
-          title="Back"
-          style={{ position: 'absolute', top: 14, left: 14, zIndex: 9999 }}
-        >
-          <ArrowLeft size={19} strokeWidth={2.5} />
-        </button>
-      )}
+
 
       {/* ── Controls overlay — opacity animated, back button removed from here ── */}
       <div className="anip__overlay">

@@ -29,6 +29,16 @@
         errBox.innerHTML = '<h2>🚨 Fatal Javascript Crash</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msg + '</pre>';
       });
       window.addEventListener('unhandledrejection', function(e) {
+        var msg = e.reason ? (e.reason.message || e.reason) : '';
+        var msgStr = String(msg);
+        if (
+          msgStr.indexOf('play()') !== -1 ||
+          msgStr.indexOf('AbortError') !== -1 ||
+          msgStr.indexOf('interrupted') !== -1 ||
+          msgStr.indexOf('media was removed') !== -1
+        ) {
+          return; // Ignore harmless media playback aborts
+        }
         var errBox = document.getElementById('anilab-fatal-error');
         if (!errBox) {
           errBox = document.createElement('div');
@@ -36,8 +46,7 @@
           errBox.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#800;color:#fff;z-index:999999;padding:24px;box-sizing:border-box;font-family:monospace;overflow:auto;';
           document.body.appendChild(errBox);
         }
-        var msg = e.reason ? (e.reason.message || e.reason) : 'Promise rejection';
-        errBox.innerHTML = '<h2>🚨 Fatal Promise Rejection</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msg + '</pre>';
+        errBox.innerHTML = '<h2>🚨 Fatal Promise Rejection</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msgStr + '</pre>';
       });
 
       // ── Disable browser context menu (Right-click / Long press save) ──

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft, Share2, Bookmark, Star, Play, Download,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
@@ -59,6 +60,27 @@ export default function AnimePage() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Lock body scroll and prevent viewport shifts during video playback
+  useEffect(() => {
+    if (playParam && epParam) {
+      document.body.style.overflow = 'hidden';
+      document.body.style.height = '100vh';
+      document.documentElement.style.overflow = 'hidden';
+      document.documentElement.style.height = '100vh';
+    } else {
+      document.body.style.overflow = '';
+      document.body.style.height = '';
+      document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+      document.body.style.height = '';
+      document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
+    };
+  }, [playParam, epParam]);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -787,12 +809,13 @@ export default function AnimePage() {
       </div>
     </div>
 
-    {/* ── PLAYER SCREEN / OVERLAY WINDOW ───────────────────────── */}
-    {playParam && epParam && (
+    {/* ── PLAYER SCREEN / OVERLAY WINDOW (PORTAL) ──────────────── */}
+    {playParam && epParam && createPortal(
       <div style={{
         position: 'fixed', inset: 0, zIndex: 1000,
         background: '#0c0c0e', display: 'flex', flexDirection: 'column',
-        paddingTop: 'env(safe-area-inset-top)'
+        paddingTop: 'env(safe-area-inset-top)',
+        boxSizing: 'border-box',
       }} className="fade-in">
         
         {/* 1. Player Box */}
@@ -961,7 +984,8 @@ export default function AnimePage() {
             })}
           </div>
         </div>
-      </div>
+      </div>,
+      document.body
     )}
   </div>
   );
