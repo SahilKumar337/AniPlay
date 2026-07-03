@@ -148,7 +148,20 @@ export default function App() {
       setCurrentVersion(appVer);
 
       // 4. Compare version
-      if (data.latestVersion && data.latestVersion !== appVer) {
+      const isNewerVersion = (latest, current) => {
+        const parse = v => String(v || '').split('.').map(x => parseInt(x, 10) || 0);
+        const a = parse(latest);
+        const b = parse(current);
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+          const va = a[i] || 0;
+          const vb = b[i] || 0;
+          if (va > vb) return true;
+          if (va < vb) return false;
+        }
+        return false;
+      };
+
+      if (data.latestVersion && isNewerVersion(data.latestVersion, appVer)) {
         setUpdateInfo(data);
       }
     }
