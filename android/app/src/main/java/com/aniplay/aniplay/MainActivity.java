@@ -43,16 +43,9 @@ public class MainActivity extends BridgeActivity {
 
         // Force edge-to-edge (immersive layout) so WebView content sits behind translucent system bars
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
             getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);
             getWindow().setNavigationBarColor(android.graphics.Color.TRANSPARENT);
             
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    getWindow().setNavigationBarContrastEnforced(false);
-                } catch (NoSuchMethodError e) {}
-            }
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 getWindow().setDecorFitsSystemWindows(false);
             } else {
