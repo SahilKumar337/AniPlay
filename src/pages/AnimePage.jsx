@@ -22,9 +22,9 @@ export default function AnimePage() {
   const { id }   = useParams();
   const navigate = useNavigate();
   const {
-    addToWatchlist, removeFromWatchlist, isInWatchlist,
+    watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist, updateWatchlistStatus,
     toggleFavorite, isFavorite, getEpisodeProgress,
-    setEpisodeProgress, addToRecentlyViewed,
+    setEpisodeProgress, addToRecentlyViewed, showToast
   } = useApp();
   const [anime,    setAnime]    = useState(null);
   const [state,    setState]    = useState('loading');
@@ -265,8 +265,20 @@ export default function AnimePage() {
     if (anime && epParam) {
       setEpisodeProgress(anime.id, epParam);
       addToRecentlyViewed(anime, epParam);
+
+      // If all episodes watched, mark as completed
+      if (totalEps > 0 && epParam === totalEps) {
+        const currentItem = watchlist[anime.id];
+        if (!currentItem) {
+          addToWatchlist(anime, 'completed');
+          showToast('Completed! 🎉');
+        } else if (currentItem.status !== 'completed') {
+          updateWatchlistStatus(anime.id, 'completed');
+          showToast('Completed! 🎉');
+        }
+      }
     }
-  }, [anime, epParam, setEpisodeProgress, addToRecentlyViewed]);
+  }, [anime, epParam, totalEps, watchlist, addToWatchlist, updateWatchlistStatus, setEpisodeProgress, addToRecentlyViewed, showToast]);
 
   const subServers = servers.filter(s => s.type === 'sub');
   const dubServers = servers.filter(s => s.type === 'dub');
@@ -353,11 +365,11 @@ export default function AnimePage() {
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
           <button
-            onClick={() => toggleFavorite(anime.id, anime)} id={`fav-${anime.id}`}
+            onClick={() => inList ? removeFromWatchlist(anime.id) : addToWatchlist(anime)} id={`fav-${anime.id}`}
             aria-label="Bookmark"
             className="floating-btn"
           >
-            <Bookmark size={18} color={fav ? '#e50914' : '#fff'} fill={fav ? '#e50914' : 'none'} />
+            <Bookmark size={18} color={inList ? '#e50914' : '#fff'} fill={inList ? '#e50914' : 'none'} />
           </button>
           <button
             id="share-btn"

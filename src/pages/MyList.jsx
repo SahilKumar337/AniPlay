@@ -15,7 +15,7 @@ const TABS = [
 
 export default function MyList() {
   const navigate = useNavigate();
-  const { watchlist, removeFromWatchlist, updateWatchlistStatus, progress, isFavorite, toggleFavorite } = useApp();
+  const { watchlist, removeFromWatchlist, updateWatchlistStatus, progress, isFavorite } = useApp();
   const [activeTab, setActiveTab] = useState('all');
 
   const items = Object.values(watchlist);
@@ -81,15 +81,44 @@ export default function MyList() {
                 >
                   <img src={cover} alt={title} loading="lazy" />
 
-                  {/* Status badge */}
-                  <div style={{
-                    position: 'absolute', top: 6, left: 6,
-                    background: statusColor(status),
-                    padding: '2px 6px', borderRadius: 4,
-                    fontSize: 9, fontWeight: 700, color: '#fff',
-                    textTransform: 'uppercase', letterSpacing: 0.5,
-                  }}>
-                    {statusLabel(status)}
+                  {/* Status badge / selector */}
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    style={{
+                      position: 'absolute', top: 6, left: 6,
+                      background: statusColor(status),
+                      borderRadius: 4,
+                      fontSize: 9, fontWeight: 700, color: '#fff',
+                      textTransform: 'uppercase', letterSpacing: 0.5,
+                      zIndex: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <select
+                      value={status}
+                      onChange={e => {
+                        updateWatchlistStatus(anime.id, e.target.value);
+                      }}
+                      style={{
+                        background: 'transparent',
+                        color: '#fff',
+                        border: 'none',
+                        fontSize: 9,
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.5,
+                        padding: '2px 4px',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      <option value="watching" style={{ background: '#111', color: '#fff' }}>Watching</option>
+                      <option value="plan_to_watch" style={{ background: '#111', color: '#fff' }}>Plan</option>
+                      <option value="completed" style={{ background: '#111', color: '#fff' }}>Completed</option>
+                      <option value="dropped" style={{ background: '#111', color: '#fff' }}>Dropped</option>
+                    </select>
                   </div>
 
                   {/* Progress bar */}
@@ -134,7 +163,7 @@ export default function MyList() {
                     display: 'flex', flexDirection: 'column', gap: 4,
                   }}>
                     <button
-                      onClick={e => { e.stopPropagation(); removeFromWatchlist(anime.id); toggleFavorite(anime.id); }}
+                      onClick={e => { e.stopPropagation(); removeFromWatchlist(anime.id); }}
                       id={`remove-${anime.id}`}
                       aria-label="Remove from list"
                       style={{
@@ -168,12 +197,4 @@ function statusColor(status) {
     default:              return 'var(--accent)';
   }
 }
-function statusLabel(status) {
-  switch(status) {
-    case 'watching':      return 'Watching';
-    case 'completed':     return 'Done';
-    case 'dropped':       return 'Dropped';
-    case 'plan_to_watch': return 'Plan';
-    default:              return 'List';
-  }
-}
+

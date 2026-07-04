@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -27,6 +27,7 @@ import Navbar        from './components/Navbar';
 // Inner component that has access to navigate (must be inside BrowserRouter)
 function AppInner({ showWelcome, onEnter }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const isNative = Capacitor.isNativePlatform();
   const [searchParams] = useSearchParams();
   const playParam = searchParams.get('play') === 'true';
@@ -37,14 +38,14 @@ function AppInner({ showWelcome, onEnter }) {
   useEffect(() => {
     if (!isNative) return;
     const listener = CapApp.addListener('backButton', ({ canGoBack }) => {
-      if (canGoBack) {
-        navigate(-1);
-      } else {
+      if (location.pathname === '/' || !canGoBack) {
         CapApp.exitApp();
+      } else {
+        navigate(-1);
       }
     });
     return () => { listener.then(l => l.remove()).catch(() => {}); };
-  }, [navigate, isNative]);
+  }, [navigate, isNative, location]);
 
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>

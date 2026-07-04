@@ -3,6 +3,7 @@ import { User, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock, Save,
 import { useApp } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
 
 const APKUpdater = registerPlugin('APKUpdater');
 
@@ -62,7 +63,13 @@ export default function Profile() {
             localStorage.setItem('anilab_test_updates', 'true');
           }
         } catch (e) {
-          console.warn('[Profile] Failed to get native version:', e);
+          console.warn('[Profile] Failed to get native version, trying CapApp:', e);
+          try {
+            const info = await CapApp.getInfo();
+            setAppVersion(info.version);
+          } catch (err) {
+            console.warn('[Profile] Failed to get version via CapApp:', err);
+          }
         }
       }
     };
