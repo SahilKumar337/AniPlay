@@ -204,17 +204,56 @@ public class OfflineDownloader extends Plugin {
             }
         }
 
-        private void downloadMP4(File destDir) throws Exception {
-            URL url = new URL(srvUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            if (!referer.isEmpty()) {
-                conn.setRequestProperty("Referer", referer);
+        private InputStream getInputStreamWithRedirects(String urlString, String referer) throws Exception {
+            String currentUrl = urlString;
+            int redirectCount = 0;
+            while (redirectCount < 5) {
+                URL url = new URL(currentUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(15000);
+                conn.setInstanceFollowRedirects(true);
+                if (!referer.isEmpty()) {
+                    conn.setRequestProperty("Referer", referer);
+                }
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                
+                int status = conn.getResponseCode();
+                if (status == HttpURLConnection.HTTP_MOVED_TEMP || status == HttpURLConnection.HTTP_MOVED_PERM || status == 307 || status == 308) {
+                    String newUrl = conn.getHeaderField("Location");
+                    if (newUrl != null) {
+                        if (!newUrl.startsWith("http")) {
+                            URL base = new URL(currentUrl);
+                            newUrl = base.getProtocol() + "://" + base.getHost() + newUrl;
+                        }
+                        currentUrl = newUrl;
+                        redirectCount++;
+                        continue;
+                    }
+                }
+                if (status >= 400) {
+                    throw new IOException("Server returned HTTP error code: " + status + " for URL: " + currentUrl);
+                }
+                return conn.getInputStream();
             }
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.connect();
+            throw new IOException("Too many redirects");
+        }
 
-            int length = conn.getContentLength();
-            InputStream is = new BufferedInputStream(conn.getInputStream());
+        private List<String> fetchPlaylistLines(String urlString, String referer) throws Exception {
+            InputStream is = getInputStreamWithRedirects(urlString, referer);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+            List<String> lines = new ArrayList<>();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines.add(line);
+            }
+            reader.close();
+            is.close();
+            return lines;
+        }
+
+        private void downloadMP4(File destDir) throws Exception {
+            InputStream is = getInputStreamWithRedirects(srvUrl, referer);
             File outFile = new File(destDir, "video.enc");
             OutputStream os = new BufferedOutputStream(new FileOutputStream(outFile));
 
@@ -222,9 +261,21 @@ public class OfflineDownloader extends Plugin {
             long total = 0;
             int count;
             int lastProgress = 0;
+            long length = -1;
+            try {
+                URL url = new URL(srvUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                if (!referer.isEmpty()) {
+                    conn.setRequestProperty("Referer", referer);
+                }
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                conn.setRequestMethod("HEAD");
+                length = conn.getContentLength();
+                conn.disconnect();
+            } catch (Exception e) {}
+
             while ((count = is.read(data)) != -1) {
                 total += count;
-                // XOR encrypt
                 for (int i = 0; i < count; i++) {
                     data[i] = (byte) (data[i] ^ XOR_KEY[(int) ((total - count + i) % XOR_KEY.length)]);
                 }
@@ -241,6 +292,15 @@ public class OfflineDownloader extends Plugin {
                         progressObj.put("status", "downloading");
                         plugin.notifyListeners("downloadProgress", progressObj);
                     }
+                } else {
+                    if (total % (1024 * 1024) == 0) {
+                        writeMetadata("downloading", 50, total);
+                        JSObject progressObj = new JSObject();
+                        progressObj.put("taskId", taskId);
+                        progressObj.put("progress", 50);
+                        progressObj.put("status", "downloading");
+                        plugin.notifyListeners("downloadProgress", progressObj);
+                    }
                 }
             }
             os.flush();
@@ -249,38 +309,57 @@ public class OfflineDownloader extends Plugin {
         }
 
         private void downloadHLS(File destDir) throws Exception {
-            // 1. Download m3u8 playlist
-            URL url = new URL(srvUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            if (!referer.isEmpty()) {
-                conn.setRequestProperty("Referer", referer);
+            String targetUrl = srvUrl;
+            List<String> lines = fetchPlaylistLines(targetUrl, referer);
+            boolean isMaster = false;
+            String variantUrl = null;
+            
+            for (String l : lines) {
+                if (l.contains("#EXT-X-STREAM-INF")) {
+                    isMaster = true;
+                }
+                if (isMaster && !l.startsWith("#") && !l.trim().isEmpty()) {
+                    variantUrl = l.trim();
+                    break;
+                }
             }
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.connect();
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            List<String> lines = new ArrayList<>();
+            if (isMaster && variantUrl != null) {
+                Log.d(TAG, "Master playlist detected. Resolving variant: " + variantUrl);
+                if (!variantUrl.startsWith("http")) {
+                    String baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
+                    variantUrl = baseUrl + variantUrl;
+                }
+                targetUrl = variantUrl;
+                lines = fetchPlaylistLines(targetUrl, referer);
+            }
+
             List<String> segmentUrls = new ArrayList<>();
-            String line;
-            String baseUrl = srvUrl.substring(0, srvUrl.lastIndexOf("/") + 1);
-
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
+            String baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
+            
+            for (String line : lines) {
                 if (line.trim().endsWith(".ts") || line.contains(".ts?") || (!line.startsWith("#") && !line.trim().isEmpty())) {
                     String segUrl = line.trim();
                     if (!segUrl.startsWith("http")) {
-                        segUrl = baseUrl + segUrl;
+                        if (segUrl.startsWith("/")) {
+                            URL u = new URL(targetUrl);
+                            String host = u.getProtocol() + "://" + u.getHost();
+                            if (u.getPort() != -1) {
+                                host += ":" + u.getPort();
+                            }
+                            segUrl = host + segUrl;
+                        } else {
+                            segUrl = baseUrl + segUrl;
+                        }
                     }
                     segmentUrls.add(segUrl);
                 }
             }
-            reader.close();
 
             if (segmentUrls.isEmpty()) {
-                throw new Exception("No HLS TS segments found in m3u8");
+                throw new Exception("No HLS TS segments found in variant m3u8");
             }
 
-            // 2. Rewrite m3u8 playlist locally
             File playlistFile = new File(destDir, "index.m3u8");
             BufferedWriter writer = new BufferedWriter(new FileWriter(playlistFile));
             int segIndex = 0;
@@ -296,29 +375,19 @@ public class OfflineDownloader extends Plugin {
             writer.flush();
             writer.close();
 
-            // 3. Download segments sequentially
             int totalSegs = segmentUrls.size();
             long totalBytes = 0;
             for (int i = 0; i < totalSegs; i++) {
                 String segUrl = segmentUrls.get(i);
                 File segFile = new File(destDir, "segment_" + i + ".enc");
                 
-                URL sUrl = new URL(segUrl);
-                HttpURLConnection sConn = (HttpURLConnection) sUrl.openConnection();
-                if (!referer.isEmpty()) {
-                    sConn.setRequestProperty("Referer", referer);
-                }
-                sConn.setRequestProperty("User-Agent", "Mozilla/5.0");
-                sConn.connect();
-
-                InputStream sIs = new BufferedInputStream(sConn.getInputStream());
+                InputStream sIs = getInputStreamWithRedirects(segUrl, referer);
                 OutputStream sOs = new BufferedOutputStream(new FileOutputStream(segFile));
 
                 byte[] data = new byte[8192];
                 int count;
                 long segOffset = 0;
                 while ((count = sIs.read(data)) != -1) {
-                    // XOR encrypt
                     for (int j = 0; j < count; j++) {
                         data[j] = (byte) (data[j] ^ XOR_KEY[(int) ((segOffset + j) % XOR_KEY.length)]);
                     }
