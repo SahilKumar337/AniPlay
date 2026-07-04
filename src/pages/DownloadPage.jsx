@@ -36,10 +36,10 @@ export default function DownloadPage() {
     return () => unsubscribe();
   }, []);
 
-  const handleDelete = async (animeId, episode) => {
-    if (window.confirm(`Delete Episode ${episode}?`)) {
+  const handleDelete = async (animeId, episode, track) => {
+    if (window.confirm(`Delete Episode ${episode} (${(track || 'sub').toUpperCase()})?`)) {
       try {
-        await downloadManager.deleteDownload(animeId, episode);
+        await downloadManager.deleteDownload(animeId, episode, track || 'sub');
         fetchDownloads();
       } catch (e) {
         console.error('[DownloadPage] Failed to delete download:', e);
@@ -82,7 +82,7 @@ export default function DownloadPage() {
         <div style={{ padding: '10px 16px 80px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {downloads.map((item, idx) => {
             const isCompleted = item.status === 'completed';
-            const taskId = `${item.animeId}_${item.episode}`;
+            const taskId = `${item.animeId}_${item.episode}_${item.track || 'sub'}`;
             
             return (
               <div key={idx} style={{
@@ -101,9 +101,17 @@ export default function DownloadPage() {
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                     {item.animeTitle}
                   </h3>
-                  <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 2px' }}>
-                    Episode {item.episode}
-                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '4px 0 2px' }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      Episode {item.episode}
+                    </span>
+                    <span style={{
+                      background: 'rgba(99, 102, 241, 0.15)', padding: '2px 6px',
+                      borderRadius: 4, fontSize: 10, fontWeight: 800, color: 'var(--accent)'
+                    }}>
+                      {(item.track || 'sub').toUpperCase()}
+                    </span>
+                  </div>
                   
                   {isCompleted ? (
                     <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
@@ -129,7 +137,10 @@ export default function DownloadPage() {
                 <div style={{ display: 'flex', gap: 6 }}>
                   {isCompleted && (
                     <button
-                      onClick={() => navigate(`/anime/${item.animeId}?play=true&ep=${item.episode}`)}
+                      onClick={() => {
+                        localStorage.setItem('anilab_preferred_track', item.track || 'sub');
+                        navigate(`/anime/${item.animeId}?play=true&ep=${item.episode}`);
+                      }}
                       style={{
                         background: 'rgba(229,9,20,0.1)', border: 'none', borderRadius: 10,
                         width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -140,7 +151,7 @@ export default function DownloadPage() {
                     </button>
                   )}
                   <button
-                    onClick={() => handleDelete(item.animeId, item.episode)}
+                    onClick={() => handleDelete(item.animeId, item.episode, item.track)}
                     style={{
                       background: 'rgba(255,255,255,0.04)', border: 'none', borderRadius: 10,
                       width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',

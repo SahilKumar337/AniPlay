@@ -32,6 +32,27 @@ function AppInner({ showWelcome, onEnter }) {
   const [searchParams] = useSearchParams();
   const playParam = searchParams.get('play') === 'true';
 
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => {
+      setIsOffline(true);
+      navigate('/download');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    if (!navigator.onLine && location.pathname !== '/download' && !location.pathname.startsWith('/anime/')) {
+      navigate('/download');
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [navigate, location.pathname]);
+
   // ── Capacitor Android back button handler ─────────────────────────
   // This fires when the Android hardware/gesture back button is pressed.
   // We navigate(-1) within React Router; only exit if there's no history.

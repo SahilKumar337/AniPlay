@@ -44,19 +44,30 @@ public class OfflineDownloader extends Plugin {
         String srvUrl = call.getString("url");
         String referer = call.getString("referer", "");
         String cover = call.getString("cover", "");
+        String track = call.getString("track", "sub");
+        
+        String subtitlesJson = "";
+        try {
+            JSArray subs = call.getArray("subtitles");
+            if (subs != null) {
+                subtitlesJson = subs.toString();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error parsing subtitles array", e);
+        }
 
         if (animeId == null || episode == null || srvUrl == null) {
             call.reject("animeId, episode, and url are required");
             return;
         }
 
-        String taskId = animeId + "_" + episode;
+        String taskId = animeId + "_" + episode + "_" + track;
         if (activeDownloads.containsKey(taskId)) {
             call.reject("Download already in progress for this episode");
             return;
         }
 
-        DownloadTask task = new DownloadTask(taskId, animeId, animeTitle, episode, srvUrl, referer, cover, getContext(), this);
+        DownloadTask task = new DownloadTask(taskId, animeId, animeTitle, episode, srvUrl, referer, cover, track, subtitlesJson, getContext(), this);
         activeDownloads.put(taskId, task);
         downloadExecutor.submit(task);
 
@@ -100,12 +111,13 @@ public class OfflineDownloader extends Plugin {
     public void deleteDownload(PluginCall call) {
         String animeId = call.getString("animeId");
         String episode = call.getString("episode");
+        String track = call.getString("track", "sub");
         if (animeId == null || episode == null) {
             call.reject("animeId and episode are required");
             return;
         }
 
-        String taskId = animeId + "_" + episode;
+        String taskId = animeId + "_" + episode + "_" + track;
         File downloadDir = new File(new File(getContext().getFilesDir(), "downloads"), taskId);
         if (downloadDir.exists()) {
             deleteRecursive(downloadDir);
@@ -133,11 +145,14 @@ public class OfflineDownloader extends Plugin {
         private String srvUrl;
         private String referer;
         private String cover;
+        private String track;
+        private String subtitlesJson;
+        private String localSubtitlesJson = "[]";
         private Context context;
         private OfflineDownloader plugin;
         private File destDir;
 
-        public DownloadTask(String taskId, String animeId, String animeTitle, String episode, String srvUrl, String referer, String cover, Context context, OfflineDownloader plugin) {
+        public DownloadTask(String taskId, String animeId, String animeTitle, String episode, String srvUrl, String referer, String cover, String track, String subtitlesJson, Context context, OfflineDownloader plugin) {
             this.taskId = taskId;
             this.animeId = animeId;
             this.animeTitle = animeTitle;
@@ -145,6 +160,8 @@ public class OfflineDownloader extends Plugin {
             this.srvUrl = srvUrl;
             this.referer = referer;
             this.cover = cover;
+            this.track = track;
+            this.subtitlesJson = subtitlesJson;
             this.context = context;
             this.plugin = plugin;
             this.destDir = new File(new File(context.getFilesDir(), "downloads"), taskId);
@@ -165,6 +182,9 @@ public class OfflineDownloader extends Plugin {
                 } else {
                     downloadMP4(destDir);
                 }
+
+                // Download subtitle files
+                downloadSubtitles(destDir);
 
                 writeMetadata("completed", 100, getDirSize(destDir));
                 JSObject progressObj = new JSObject();
@@ -332,6 +352,12 @@ public class OfflineDownloader extends Plugin {
                 json.put("status", status);
                 json.put("progress", progress);
                 json.put("size", size);
+                json.put("track", track);
+                try {
+                    json.put("subtitles", new JSArray(localSubtitlesJson));
+                } catch (Exception e) {
+                    json.put("subtitles", new JSArray());
+                }
                 json.put("timestamp", System.currentTimeMillis());
 
                 try (FileWriter fw = new FileWriter(metaFile)) {
@@ -350,6 +376,64 @@ public class OfflineDownloader extends Plugin {
                 }
             }
             return size;
+        }
+
+        private void downloadSubtitles(File destDir) {
+            if (subtitlesJson == null || subtitlesJson.isEmpty()) return;
+            File subsDir = new File(destDir, "subtitles");
+            if (!subsDir.exists()) {
+                subsDir.mkdirs();
+            }
+
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(subtitlesJson);
+                org.json.JSONArray localSubs = new org.json.JSONArray();
+
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject sub = arr.getJSONObject(i);
+                    String subUrl = sub.optString("url");
+                    String lang = sub.optString("lang", "Lang_" + i);
+                    
+                    if (subUrl == null || subUrl.isEmpty()) continue;
+
+                    try {
+                        String cleanLang = lang.replaceAll("[^a-zA-Z0-9_-]", "_");
+                        File subFile = new File(subsDir, cleanLang + ".vtt");
+                        
+                        URL url = new URL(subUrl);
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                        conn.connect();
+
+                        InputStream is = new BufferedInputStream(conn.getInputStream());
+                        OutputStream os = new BufferedOutputStream(new FileOutputStream(subFile));
+
+                        byte[] data = new byte[4096];
+                        int count;
+                        while ((count = is.read(data)) != -1) {
+                            os.write(data, 0, count);
+                        }
+                        os.flush();
+                        os.close();
+                        is.close();
+
+                        // Add to local subtitles list
+                        org.json.JSONObject localSub = new org.json.JSONObject();
+                        localSub.put("lang", lang);
+                        localSub.put("url", "http://localhost:8081/play/" + taskId + "/subtitles/" + cleanLang + ".vtt");
+                        localSubs.put(localSub);
+
+                        Log.d(TAG, "Downloaded subtitle for lang: " + lang);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to download subtitle: " + subUrl, e);
+                    }
+                }
+                
+                this.localSubtitlesJson = localSubs.toString();
+
+            } catch (Exception e) {
+                Log.e(TAG, "Error processing subtitles", e);
+            }
         }
     }
 
@@ -411,24 +495,24 @@ public class OfflineDownloader extends Plugin {
                 }
 
                 String relativePath = path.substring(6);
-                String[] parts = relativePath.split("/");
-                if (parts.length < 2) {
+                int slashIdx = relativePath.indexOf("/");
+                if (slashIdx == -1) {
                     sendError(socket, 400, "Bad Request");
                     return;
                 }
 
-                String taskId = parts[0];
-                String fileName = parts[1];
+                String taskId = relativePath.substring(0, slashIdx);
+                String subPath = relativePath.substring(slashIdx + 1);
                 File downloadDir = new File(new File(context.getFilesDir(), "downloads"), taskId);
                 
-                if (fileName.equals("index.m3u8")) {
+                if (subPath.equals("index.m3u8")) {
                     File file = new File(downloadDir, "index.m3u8");
                     sendFile(socket, file, "application/vnd.apple.mpegurl", false, 0, -1);
-                } else if (fileName.startsWith("segment_")) {
-                    String encFileName = fileName.replace(".ts", ".enc");
+                } else if (subPath.startsWith("segment_")) {
+                    String encFileName = subPath.replace(".ts", ".enc");
                     File file = new File(downloadDir, encFileName);
                     sendFile(socket, file, "video/mp2t", true, 0, -1);
-                } else if (fileName.equals("video.mp4")) {
+                } else if (subPath.equals("video.mp4")) {
                     File file = new File(downloadDir, "video.enc");
                     
                     // Parse Byte Range seeks
@@ -442,6 +526,9 @@ public class OfflineDownloader extends Plugin {
                         }
                     }
                     sendFile(socket, file, "video/mp4", true, startByte, endByte);
+                } else if (subPath.startsWith("subtitles/")) {
+                    File file = new File(downloadDir, subPath);
+                    sendFile(socket, file, "text/vtt", false, 0, -1);
                 } else {
                     sendError(socket, 404, "Not Found");
                 }

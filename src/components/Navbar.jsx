@@ -12,18 +12,27 @@ const NAV_ITEMS = [
 export default function Navbar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const isOffline = typeof window !== 'undefined' && !window.navigator.onLine;
 
   return (
     <nav className="navbar">
       <div className="nav-items">
         {NAV_ITEMS.map(({ icon: Icon, label, path }) => {
           const active = pathname === path || (path !== '/' && pathname.startsWith(path));
+          const isDisabledOffline = isOffline && path !== '/download';
           return (
             <button
               key={path}
               className={`nav-item ${active ? 'active' : ''}`}
-              onClick={() => navigate(path)}
+              onClick={() => {
+                if (!isDisabledOffline) navigate(path);
+              }}
+              style={{
+                opacity: isDisabledOffline ? 0.35 : 1,
+                cursor: isDisabledOffline ? 'not-allowed' : 'pointer'
+              }}
               id={`nav-${label.toLowerCase().replace(' ', '-')}`}
+              disabled={isDisabledOffline}
             >
               <Icon size={20} />
               <span>{label}</span>

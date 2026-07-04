@@ -26,7 +26,7 @@ class DownloadManager {
   }
 
   // Request native download of an episode
-  async downloadEpisode(anime, episode, srvUrl, referer = '') {
+  async downloadEpisode(anime, episode, srvUrl, referer = '', track = 'sub', subtitles = []) {
     if (!anime || !episode || !srvUrl) {
       throw new Error('anime, episode, and srvUrl are required');
     }
@@ -40,7 +40,9 @@ class DownloadManager {
       episode: String(episode),
       url: srvUrl,
       referer,
-      cover
+      cover,
+      track,
+      subtitles
     });
   }
 
@@ -56,16 +58,17 @@ class DownloadManager {
   }
 
   // Delete a downloaded episode
-  async deleteDownload(animeId, episode) {
+  async deleteDownload(animeId, episode, track = 'sub') {
     return OfflineDownloader.deleteDownload({
       animeId: String(animeId),
-      episode: String(episode)
+      episode: String(episode),
+      track
     });
   }
 
   // Generate the playback stream URL served by the local HTTP server
-  getPlaybackUrl(animeId, episode, isHLS = true) {
-    const taskId = `${animeId}_${episode}`;
+  getPlaybackUrl(animeId, episode, isHLS = true, track = 'sub') {
+    const taskId = `${animeId}_${episode}_${track}`;
     const filename = isHLS ? 'index.m3u8' : 'video.mp4';
     return `http://localhost:8081/play/${taskId}/${filename}`;
   }
@@ -80,8 +83,8 @@ class DownloadManager {
     this.listeners.forEach(cb => cb(data));
   }
 
-  getActiveProgress(animeId, episode) {
-    return this.activeProgress[`${animeId}_${episode}`] || null;
+  getActiveProgress(animeId, episode, track = 'sub') {
+    return this.activeProgress[`${animeId}_${episode}_${track}`] || null;
   }
 }
 

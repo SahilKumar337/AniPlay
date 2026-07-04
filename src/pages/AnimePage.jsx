@@ -67,7 +67,7 @@ export default function AnimePage() {
     try {
       const list = await downloadManager.getDownloadsList();
       setDownloadsList(list);
-      const completed = new Set(list.filter(d => d.status === 'completed').map(d => `${d.animeId}_${d.episode}`));
+      const completed = new Set(list.filter(d => d.status === 'completed').map(d => `${d.animeId}_${d.episode}_${d.track || 'sub'}`));
       setCompletedDownloads(completed);
     } catch (e) {
       console.error('[Downloads] Failed to get list:', e);
@@ -117,18 +117,40 @@ export default function AnimePage() {
 
   const startDownload = async (epNum, selectedServer) => {
     setServerPickerData(null);
-    const taskId = `${anime.id}_${epNum}`;
+    const taskId = `${anime.id}_${epNum}_${downloadAudioTrack}`;
     try {
-      showToast(`Downloading Episode ${epNum}...`);
+      showToast(`Resolving download link...`);
       setDownloadProgress(prev => ({ ...prev, [taskId]: 0 }));
+
+      let finalUrl = selectedServer.videoUrl;
+      let referer = selectedServer.referer || '';
+
+      // If it is an embed server, scrape it first to get direct stream url
+      const isEmbed = !selectedServer.isHLS && selectedServer.embedUrl;
+      if (isEmbed) {
+        if (Capacitor.isNativePlatform()) {
+          finalUrl = await scrapeEmbedNative(selectedServer.embedUrl, referer, 40000);
+        } else {
+          finalUrl = selectedServer.embedUrl;
+        }
+      }
+
+      if (!finalUrl) {
+        throw new Error('Failed to resolve stream link');
+      }
+
+      showToast(`Starting download for Episode ${epNum}...`);
       
       await downloadManager.downloadEpisode(
         anime,
         epNum,
-        selectedServer.videoUrl || selectedServer.embedUrl,
-        selectedServer.referer || ''
+        finalUrl,
+        referer,
+        downloadAudioTrack,
+        selectedServer.subtitles || []
       );
     } catch (e) {
+      console.error('[Downloads] Error initiating download:', e);
       showToast('Download failed to start.');
       setDownloadProgress(prev => {
         const next = { ...prev };
@@ -277,19 +299,31 @@ export default function AnimePage() {
     if (!anime || !epParam) return;
 
     // Check if downloaded offline
-    const taskId = `${anime.id}_${epParam}`;
+    const taskId = `${anime.id}_${epParam}_${audioTrack}`;
     if (completedDownloads.has(taskId)) {
       setStreamErr(null);
       setServers([]);
       
       const taskMeta = downloadsList.find(d => d.taskId === taskId);
       const isHls = taskMeta ? !taskMeta.url?.endsWith('.mp4') : true;
-      const playUrl = downloadManager.getPlaybackUrl(anime.id, epParam, isHls);
+      const playUrl = downloadManager.getPlaybackUrl(anime.id, epParam, isHls, audioTrack);
       
-      setActiveName('Offline Playback');
+      let localSubtitles = [];
+      if (taskMeta && taskMeta.subtitles) {
+        localSubtitles = taskMeta.subtitles;
+      }
+
+      setActiveName('Offline Play');
       setActiveType('local');
       setIsActiveHLS(isHls);
       setActiveUrl(playUrl);
+      
+      setActiveServer({
+        referer: '',
+        embedUrl: '',
+        subtitles: localSubtitles
+      });
+
       setExtracting(false);
       setLoadStream(false);
       return;
@@ -1218,7 +1252,7 @@ export default function AnimePage() {
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px 20px 20px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {allEps.map(n => {
-                const taskId = `${anime.id}_${n}`;
+                const taskId = `${anime.id}_${n}_${downloadAudioTrack}`;
                 const isDownloaded = completedDownloads.has(taskId);
                 const progress = downloadProgress[taskId];
                 const isDownloading = progress !== undefined && progress !== 100 && progress !== 'error';
