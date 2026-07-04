@@ -267,6 +267,10 @@ export default function AnimePage() {
       addToRecentlyViewed(anime, epParam);
 
       // If all episodes watched, mark as completed
+      const totalEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
+        ? anime.nextAiringEpisode.episode - 1
+        : (anime.episodes || 0);
+
       if (totalEps > 0 && epParam === totalEps) {
         const currentItem = watchlist[anime.id];
         if (!currentItem) {
@@ -278,7 +282,7 @@ export default function AnimePage() {
         }
       }
     }
-  }, [anime, epParam, totalEps, watchlist, addToWatchlist, updateWatchlistStatus, setEpisodeProgress, addToRecentlyViewed, showToast]);
+  }, [anime, epParam, watchlist, addToWatchlist, updateWatchlistStatus, setEpisodeProgress, addToRecentlyViewed, showToast]);
 
   const subServers = servers.filter(s => s.type === 'sub');
   const dubServers = servers.filter(s => s.type === 'dub');
