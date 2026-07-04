@@ -134,7 +134,7 @@ export default function App() {
       let data = null;
       for (const url of urls) {
         try {
-          const res = await fetch(url);
+          const res = await fetch(`${url}?t=${Date.now()}`);
           if (res.ok) {
             data = await res.json();
             break;
