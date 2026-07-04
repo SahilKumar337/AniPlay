@@ -38,20 +38,26 @@ jobs:
           echo "tag=v1.3.${COUNT}" >> $GITHUB_OUTPUT
 
       - name: Update Gradle Version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GIT_COUNT: ${{ steps.version.outputs.version }} # We will count in python
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          GIT_COUNT=$(git rev-list --count HEAD)
-          python3 -c "
-          import re
+          python3 - <<'PYEOF'
+          import os, re, subprocess
+          version = os.environ['VERSION']
+          git_count = subprocess.check_output(['git', 'rev-list', '--count', 'HEAD']).decode().strip()
+          
           path = 'android/app/build.gradle'
           with open(path, 'r') as f:
               content = f.read()
-          content = re.sub(r'versionName\s+\".*\"', f'versionName \"{VERSION}\"', content)
-          content = re.sub(r'versionCode\s+\d+', f'versionCode {GIT_COUNT}', content)
+              
+          content = re.sub(r'versionName\s+\".*\"', f'versionName "{version}"', content)
+          content = re.sub(r'versionCode\s+\d+', f'versionCode {git_count}', content)
+          
           with open(path, 'w') as f:
               f.write(content)
-          print('Gradle version updated to', VERSION, 'code', GIT_COUNT)
-          "
+          print(f'Gradle version updated to {version} code {git_count}')
+          PYEOF
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
