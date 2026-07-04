@@ -26,6 +26,7 @@ public class MainActivity extends BridgeActivity {
         // Register native Capacitor plugins
         registerPlugin(EmbedScraperPlugin.class);
         registerPlugin(APKUpdaterPlugin.class);
+        registerPlugin(OfflineDownloader.class);
 
         // Keep the splash screen until the web content is ready
         super.onCreate(savedInstanceState);

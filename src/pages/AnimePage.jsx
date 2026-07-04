@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import {
-  ArrowLeft, Share2, Bookmark, Star, Play, Download,
+  ArrowLeft, Share2, Bookmark, Star, Play, Download, X,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Search as SearchIcon, ChevronLeft, ChevronRight,
   Clock, CheckCircle, Tv, Wifi, WifiOff, Loader, Heart
@@ -15,6 +15,7 @@ import { getAniNekoServers, getCachedServers, checkProxy } from '../api/stream';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
 import { scrapeEmbedNative } from '../api/embedScraper';
+import { downloadManager } from '../utils/DownloadManager';
 
 
 
@@ -53,6 +54,89 @@ export default function AnimePage() {
   const [extracting,    setExtracting]   = useState(false);
   const [activeServer,  setActiveServer] = useState(null);
   const [fsActive,      setFsActive]     = useState(false);
+
+  // Secure Downloads State
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState({});
+  const [completedDownloads, setCompletedDownloads] = useState(new Set());
+  const [downloadsList, setDownloadsList] = useState([]);
+  const [serverPickerData, setServerPickerData] = useState(null); // { episode, servers, loading }
+  const [downloadAudioTrack, setDownloadAudioTrack] = useState('sub');
+
+  const loadDownloads = useCallback(async () => {
+    try {
+      const list = await downloadManager.getDownloadsList();
+      setDownloadsList(list);
+      const completed = new Set(list.filter(d => d.status === 'completed').map(d => `${d.animeId}_${d.episode}`));
+      setCompletedDownloads(completed);
+    } catch (e) {
+      console.error('[Downloads] Failed to get list:', e);
+    }
+  }, []);
+
+  // Subscribe to download progress updates
+  useEffect(() => {
+    loadDownloads();
+
+    const unsubscribe = downloadManager.subscribe((data) => {
+      if (data.taskId) {
+        if (data.status === 'completed') {
+          setCompletedDownloads(prev => {
+            const next = new Set(prev);
+            next.add(data.taskId);
+            return next;
+          });
+        }
+        setDownloadProgress(prev => ({
+          ...prev,
+          [data.taskId]: data.status === 'completed' ? 100 : data.status === 'error' ? 'error' : data.progress
+        }));
+      }
+    });
+
+    return () => unsubscribe();
+  }, [loadDownloads]);
+
+  const handleDownloadClick = async (epNum) => {
+    setServerPickerData({ episode: epNum, servers: [], loading: true });
+    try {
+      // Find servers for this episode
+      const result = await getAniNekoServers(anime, epNum);
+      if (result && result.servers && result.servers.length > 0) {
+        setServerPickerData({ episode: epNum, servers: result.servers, loading: false });
+      } else {
+        showToast('No servers available for download.');
+        setServerPickerData(null);
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to find servers.');
+      setServerPickerData(null);
+    }
+  };
+
+  const startDownload = async (epNum, selectedServer) => {
+    setServerPickerData(null);
+    const taskId = `${anime.id}_${epNum}`;
+    try {
+      showToast(`Downloading Episode ${epNum}...`);
+      setDownloadProgress(prev => ({ ...prev, [taskId]: 0 }));
+      
+      await downloadManager.downloadEpisode(
+        anime,
+        epNum,
+        selectedServer.videoUrl || selectedServer.embedUrl,
+        selectedServer.referer || ''
+      );
+    } catch (e) {
+      showToast('Download failed to start.');
+      setDownloadProgress(prev => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -94,6 +178,30 @@ export default function AnimePage() {
       setAnime(data);
       setState('done');
     } catch (e) {
+      console.warn('[AnimePage] Failed to fetch details from AniList:', e);
+      try {
+        const list = await downloadManager.getDownloadsList();
+        const offlineMeta = list.find(d => String(d.animeId) === String(id));
+        if (offlineMeta) {
+          const fallbackData = {
+            id: Number(id),
+            title: {
+              english: offlineMeta.animeTitle,
+              romaji: offlineMeta.animeTitle
+            },
+            coverImage: {
+              large: offlineMeta.cover,
+              medium: offlineMeta.cover
+            },
+            episodes: Number(offlineMeta.episode)
+          };
+          setAnime(fallbackData);
+          setState('done');
+          return;
+        }
+      } catch (metaErr) {
+        console.error('[AnimePage] Local downloads metadata resolution failed:', metaErr);
+      }
       setErrMsg(e.message || 'Failed to load');
       setState('error');
     }
@@ -167,6 +275,25 @@ export default function AnimePage() {
 
   const fetchStream = useCallback(async () => {
     if (!anime || !epParam) return;
+
+    // Check if downloaded offline
+    const taskId = `${anime.id}_${epParam}`;
+    if (completedDownloads.has(taskId)) {
+      setStreamErr(null);
+      setServers([]);
+      
+      const taskMeta = downloadsList.find(d => d.taskId === taskId);
+      const isHls = taskMeta ? !taskMeta.url?.endsWith('.mp4') : true;
+      const playUrl = downloadManager.getPlaybackUrl(anime.id, epParam, isHls);
+      
+      setActiveName('Offline Playback');
+      setActiveType('local');
+      setIsActiveHLS(isHls);
+      setActiveUrl(playUrl);
+      setExtracting(false);
+      setLoadStream(false);
+      return;
+    }
 
     const cachedResult = getCachedServers(anime, epParam);
     if (cachedResult?.servers?.length) {
@@ -561,15 +688,14 @@ export default function AnimePage() {
                 fontSize: 15,
                 fontWeight: 700,
                 borderRadius: 10,
-                background: 'rgba(255,255,255,0.05)',
-                border: '1px solid rgba(255,255,255,0.05)',
-                color: 'var(--text-muted)',
-                opacity: 0.6,
-                cursor: 'not-allowed'
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer'
               }}
-              disabled
+              onClick={() => setDownloadModalOpen(true)}
             >
-              <Download size={17} />
+              <Download size={17} color="var(--accent)" fill="var(--accent)" />
               Downloads
             </button>
           </>
@@ -1032,6 +1158,181 @@ export default function AnimePage() {
             </div>
           </div>
         )}
+      </div>,
+      document.body
+    )}
+    {/* ── DOWNLOAD MODAL BOTTOM SHEET ── */}
+    {downloadModalOpen && createPortal(
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 999,
+        background: 'rgba(0,0,0,0.7)', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
+      }} onClick={() => setDownloadModalOpen(false)}>
+        <div style={{
+          background: 'var(--bg-primary)',
+          borderTopLeftRadius: 20, borderTopRightRadius: 20,
+          maxHeight: '75vh', display: 'flex', flexDirection: 'column',
+          boxSizing: 'border-box', borderTop: '1px solid var(--border)',
+          animation: 'slideUp 0.25s cubic-bezier(0.34,1.2,0.64,1)',
+        }} onClick={e => e.stopPropagation()}>
+          <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
+          
+          {/* Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-brand)', margin: 0 }}>Download Episodes</h2>
+              <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 0' }}>Select sub/dub and choose an episode to download offline</p>
+            </div>
+            <button 
+              onClick={() => setDownloadModalOpen(false)}
+              style={{ background: 'rgba(255,255,255,0.05)', border: 'none', borderRadius: '50%', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-primary)' }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Sub/Dub Track Selectors */}
+          <div style={{ display: 'flex', padding: '12px 20px', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+            <button
+              onClick={() => setDownloadAudioTrack('sub')}
+              style={{
+                flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
+                background: downloadAudioTrack === 'sub' ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
+                color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              Subtitled (SUB)
+            </button>
+            <button
+              onClick={() => setDownloadAudioTrack('dub')}
+              style={{
+                flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
+                background: downloadAudioTrack === 'dub' ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
+                color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              Dubbed (DUB)
+            </button>
+          </div>
+
+          {/* Episode List */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '10px 20px 20px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {allEps.map(n => {
+                const taskId = `${anime.id}_${n}`;
+                const isDownloaded = completedDownloads.has(taskId);
+                const progress = downloadProgress[taskId];
+                const isDownloading = progress !== undefined && progress !== 100 && progress !== 'error';
+
+                return (
+                  <div key={n} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '12px 14px', background: 'var(--bg-card)', borderRadius: 12,
+                    border: '1px solid var(--border)'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>Episode {n}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                        {isDownloaded ? (
+                          <span style={{ color: '#4caf50', fontWeight: 600 }}>✓ Downloaded</span>
+                        ) : isDownloading ? (
+                          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>⏳ Downloading {progress}%</span>
+                        ) : progress === 'error' ? (
+                          <span style={{ color: '#e50914', fontWeight: 600 }}>❌ Failed</span>
+                        ) : (
+                          'Available for offline play'
+                        )}
+                      </div>
+                    </div>
+
+                    {!isDownloaded && !isDownloading ? (
+                      <button
+                        onClick={() => handleDownloadClick(n)}
+                        style={{
+                          background: 'var(--accent)', border: 'none', borderRadius: 8,
+                          width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: '#fff', cursor: 'pointer'
+                        }}
+                      >
+                        <Download size={14} />
+                      </button>
+                    ) : isDownloading ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32 }}>
+                        <Loader size={16} className="spin" color="var(--accent)" />
+                      </div>
+                    ) : (
+                      <div style={{ background: 'rgba(76,175,80,0.1)', color: '#4caf50', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Check size={14} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
+
+    {/* ── SERVER SELECTOR FOR DOWNLOAD ── */}
+    {serverPickerData && createPortal(
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 20, boxSizing: 'border-box'
+      }}>
+        <div style={{
+          background: 'var(--bg-primary)', borderRadius: 16, border: '1px solid var(--border)',
+          width: '100%', maxWidth: 320, padding: 20, display: 'flex', flexDirection: 'column', gap: 16
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>Select Download Server</h3>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 0' }}>Episode {serverPickerData.episode}</p>
+          </div>
+
+          {serverPickerData.loading ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '20px 0' }}>
+              <Loader size={24} className="spin" color="var(--accent)" />
+              <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Searching download links...</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto' }}>
+              {serverPickerData.servers
+                .filter(s => s.type === downloadAudioTrack)
+                .map((srv, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => startDownload(serverPickerData.episode, srv)}
+                    style={{
+                      padding: '12px', background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      borderRadius: 10, color: '#fff', fontSize: 13, fontWeight: 600,
+                      cursor: 'pointer', textAlign: 'left', display: 'flex', justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <span>{srv.name}</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{srv.type}</span>
+                  </button>
+                ))}
+              {serverPickerData.servers.filter(s => s.type === downloadAudioTrack).length === 0 && (
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '10px 0' }}>
+                  No {downloadAudioTrack.toUpperCase()} servers found.
+                </p>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={() => setServerPickerData(null)}
+            style={{
+              padding: '10px', background: 'rgba(255,255,255,0.05)', border: 'none',
+              borderRadius: 10, color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            Cancel
+          </button>
+        </div>
       </div>,
       document.body
     )}
