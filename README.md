@@ -4,6 +4,24 @@ AniPlay is a premium, open-source mobile anime streaming client designed for And
 
 ---
 
+## 📱 Screenshots & Application Walkthrough
+
+AniPlay provides a sleek, modern, and intuitive user interface designed to match premium streaming platforms. Below is an overview of the key screens and features:
+
+| **Welcome & Onboarding** | **Spotlight & Home** | **Discovery Feed** |
+| :---: | :---: | :---: |
+| <img src="assets/screenshots/welcome_screen.jpg" width="220" alt="Welcome Screen"> | <img src="assets/screenshots/home_screen.jpg" width="220" alt="Home Screen"> | <img src="assets/screenshots/home_feed.jpg" width="220" alt="Discovery Feed"> |
+| **Welcome Screen**<br>A stunning glassmorphic intro screen featuring a blurred collage of popular anime art, prompting guest access ("Watch now") or credentials sign-in. | **Featured Spotlight**<br>An immersive home banner highlighting trending titles (e.g. *Solo Leveling*) with dynamic context-aware backgrounds, quick list-adds, and recent episode updates. | **Content Discovery**<br>Scrolled home view detailing *Top Airing*, *Airing This Week*, and *Popular This Season* grids with clear video quality (HD) and rating indicators. |
+
+<br>
+
+| **Upcoming Release Schedule** | **Advanced Video Player** |
+| :---: | :---: |
+| <img src="assets/screenshots/schedule_screen.jpg" width="220" alt="Schedule Screen"> | <img src="assets/screenshots/player_screen.jpg" width="220" alt="Video Player"> |
+| **Release Calendar**<br>A chronological, timezone-aware calendar displaying upcoming episode releases, integrated with AniList metadata and quick watchlist actions. | **HLS Video Player & Episode Hub**<br>Feature-packed media player with double-tap seek, fit options, sub/dub selectors, multi-source streaming routes (e.g. *AniHD1*, *Neko*, *Waves*), and a scrolling episode drawer. |
+
+---
+
 ## 🌟 Key Features
 
 * **🎭 Elegant UI & Fluid Animations**: Modern, dark-themed user interface utilizing curated indigo/violet accent gradients, responsive carousels, and micro-interactions.
