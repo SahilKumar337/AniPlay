@@ -36,6 +36,7 @@
   /* Kill the ugly Android WebView grey oval / default play icon */
   -webkit-appearance: none;
   appearance: none;
+  touch-action: none;
 }
 
 /* 
@@ -56,6 +57,7 @@
   background: #000;
   z-index: 9;
   pointer-events: auto;
+  touch-action: none;
 }
 
 /* ── Buffering spinner ─────────────────────────────────────── */
@@ -160,6 +162,7 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.22s ease;
+  touch-action: none;
 }
 .anip--ctrl .anip__overlay {
   opacity: 1;
@@ -739,4 +742,147 @@
   from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+
+/* ── Center Playback Controls ──────────────────────── */
+.anip__center-ctrls {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  z-index: 25;
+  pointer-events: auto;
+  transition: opacity 0.2s ease;
+}
+
+.anip__center-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-tap-highlight-color: transparent;
+  width: 52px;
+  height: 52px;
+}
+
+.anip__center-btn--play {
+  width: 68px;
+  height: 68px;
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.anip__center-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+  transform: scale(1.05);
+}
+
+.anip__center-btn--play:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+  transform: scale(1.08);
+}
+
+.anip__center-btn:active {
+  transform: scale(0.92);
+}
+
+.anip__center-btn--disabled {
+  opacity: 0.22;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Subtitle Sync Menu ──────────────────────────────── */
+.anip__sync-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: rgba(12, 12, 14, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 10px;
+  min-width: 154px;
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: anip-menu-pop 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.anip__sync-hd {
+  font-size: 9px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.45);
+  margin: 0 0 8px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  text-align: center;
+}
+
+.anip__sync-readout {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--accent);
+  text-align: center;
+  margin-bottom: 8px;
+  font-family: 'Inter', monospace;
+  letter-spacing: -0.5px;
+}
+
+.anip__sync-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.anip__sync-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 0;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+  outline: none;
+}
+
+.anip__sync-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.anip__sync-btn:active {
+  transform: scale(0.95);
+}
+
+.anip__sync-btn--reset {
+  grid-column: span 2;
+  background: rgba(229, 9, 20, 0.16);
+  border-color: rgba(229, 9, 20, 0.22);
+  color: #ff4a5a;
+  margin-top: 2px;
+  padding: 6px 0;
+  font-size: 11px;
+}
+
+.anip__sync-btn--reset:hover {
+  background: rgba(229, 9, 20, 0.28);
+  border-color: rgba(229, 9, 20, 0.4);
+  color: #fff;
+}
+
 

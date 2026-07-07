@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -54,19 +54,38 @@ function AppInner({ showWelcome, onEnter }) {
   }, [navigate, location.pathname]);
 
   // ── Capacitor Android back button handler ─────────────────────────
-  // This fires when the Android hardware/gesture back button is pressed.
-  // We navigate(-1) within React Router; only exit if there's no history.
+  // Keep path in a ref so back button listener doesn't need to re-register
+  const currentPathRef = useRef(location.pathname);
+  useEffect(() => {
+    currentPathRef.current = location.pathname;
+  }, [location.pathname]);
+
   useEffect(() => {
     if (!isNative) return;
-    const listener = CapApp.addListener('backButton', ({ canGoBack }) => {
-      if (location.pathname === '/' || !canGoBack) {
-        CapApp.exitApp();
-      } else {
-        navigate(-1);
-      }
-    });
-    return () => { listener.then(l => l.remove()).catch(() => {}); };
-  }, [navigate, isNative, location]);
+    
+    const setupListener = async () => {
+      const handle = await CapApp.addListener('backButton', ({ canGoBack }) => {
+        const path = currentPathRef.current;
+        console.log('[BackButton] Clicked. Path:', path, 'canGoBack:', canGoBack);
+        
+        const mainTabs = ['/browse', '/schedule', '/mylist', '/download', '/profile'];
+        
+        if (path === '/') {
+          CapApp.exitApp();
+        } else if (mainTabs.includes(path)) {
+          navigate('/');
+        } else {
+          navigate(-1);
+        }
+      });
+      return handle;
+    };
+
+    const handlePromise = setupListener();
+    return () => {
+      handlePromise.then(l => l.remove()).catch(() => {});
+    };
+  }, [navigate, isNative]);
 
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>
@@ -215,6 +234,14 @@ export default function App() {
     }
 
     try {
+      // Check install permission first (on Android 8+)
+      const permInfo = await APKUpdater.checkInstallPermission();
+      if (permInfo && !permInfo.granted) {
+        showToast('Please enable "Install unknown apps" permission to update AniPlay');
+        await APKUpdater.requestInstallPermission();
+        return; // Pause here so user can toggle and click update again
+      }
+
       setUpdateProgress(0);
 
       // Listen for download progress events

@@ -27,6 +27,8 @@ export default function Home() {
   const [weekSchedule,   setWeekSchedule]   = useState([]);
   const [scrolled,       setScrolled]       = useState(false);
   const [ready,          setReady]          = useState(false);
+  const [apiError,       setApiError]        = useState(null);
+  const [retryCount,     setRetryCount]      = useState(0);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -52,9 +54,24 @@ export default function Home() {
       }
     }
 
+    // Clear error state on every load attempt
+    setApiError(null);
+
     (async () => {
       // Load trending first so hero appears ASAP
-      await load(getTrending, setTrending, 1, 15);
+      try {
+        const d = await getTrending(1, 15);
+        if (live && d?.length) setTrending(d.filter(a => getCover(a)));
+      } catch (e) {
+        console.warn('[Home] trending failed:', e.message);
+        // Detect AniList global outage (403 or their specific error message)
+        if (live && (e.message?.includes('temporarily disabled') || e.message?.includes('stability'))) {
+          setApiError('AniList API is temporarily down. Please try again later or check the AniList Discord for updates.');
+        } else if (live) {
+          setApiError(e.message || 'Failed to load anime data. Check your internet connection.');
+        }
+      }
+      // Always mark ready so the page renders (even if empty or errored)
       if (live) setReady(true);
 
       // Wave 1: most important rows (stagger to avoid AniList 429s)
@@ -81,9 +98,32 @@ export default function Home() {
     })();
 
     return () => { live = false; };
-  }, []);
+  }, [retryCount]);
 
   if (!ready) return <HomeSkeleton />;
+
+  // AniList is globally down — show a clear error screen
+  if (apiError && trending.length === 0) {
+    return (
+      <div className="page" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', padding: '0 24px', textAlign: 'center' }}>
+        <div style={{ fontSize: 52, marginBottom: 16 }}>📡</div>
+        <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 10, fontFamily: 'var(--font-brand)' }}>Service Unavailable</h2>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65, maxWidth: 300, marginBottom: 28 }}>
+          {apiError}
+        </p>
+        <button
+          onClick={() => { setReady(false); setRetryCount(c => c + 1); }}
+          style={{
+            padding: '12px 32px', borderRadius: 12, border: 'none',
+            background: 'linear-gradient(135deg, #6366f1, #a78bfa)',
+            color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer'
+          }}
+        >
+          🔄 Retry
+        </button>
+      </div>
+    );
+  }
 
   // Personalize rows using K-Nearest Neighbors based on watch history
   const personalizedAiring        = rankAnimeByKnn(airing,        recentlyViewed);

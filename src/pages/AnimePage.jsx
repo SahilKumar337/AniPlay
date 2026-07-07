@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
@@ -11,12 +11,102 @@ import {
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 import AnimeCard from '../components/AnimeCard';
-import { getAniNekoServers, getCachedServers, checkProxy } from '../api/stream';
+import { getAniNekoServers, getCachedServers, checkProxy, fetchM3U8Playlist, parseMasterPlaylist } from '../api/stream';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
 import { scrapeEmbedNative } from '../api/embedScraper';
 import { downloadManager } from '../utils/DownloadManager';
 
+const isDownloadable = (srv) => {
+  if (!srv) return false;
+  const name = (srv.name || '').toLowerCase();
+  const url = (srv.embedUrl || srv.videoUrl || '').toLowerCase();
+  
+  // Exclude swiftstream.top / AniHD (Animetsu HLS)
+  if (url.includes('swiftstream.top')) return false;
+  if (name.includes('anihd')) return false;
+  
+  // Exclude WavesHD
+  if (name.includes('waveshd') || name.includes('waves')) return false;
+  
+  // Exclude Gogo-Direct
+  if (name.includes('gogo-direct')) return false;
+
+  // Only allow NekoHD (served by vivibebe.site / anizara.store)
+  const isNeko = name.includes('nekohd') || name.includes('neko');
+  if (!isNeko) return false;
+
+  // For SUB, it must have English subtitles
+  if (srv.type === 'sub') {
+    return srv.subtitles && srv.subtitles.length > 0;
+  }
+  
+  return true;
+};
+
+const enrichDubSubtitles = (list) => {
+  if (!list || !list.length) return list;
+
+  return list.map(s => {
+    if (s.type !== 'dub') return s;
+
+    // Match by server family: "NekoHD (DUB)" -> "NekoHD", "AniHD (DUB)" -> "AniHD"
+    const dubBase = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
+
+    // Find the matching sub server in the same family
+    const matchingSub = list.find(x =>
+      x.type === 'sub' &&
+      x.name.replace(/\s*\(DUB\)\s*/i, '').trim() === dubBase &&
+      x.subtitles?.length > 0
+    );
+
+    // Use matched family sub's subtitles, or empty if none available
+    return { ...s, subtitles: matchingSub?.subtitles || [] };
+  });
+};
+
+/**
+ * Builds a merged list of all subtitle tracks from all sub servers,
+ * tagged with a source label so the user can pick their preferred source.
+ * Labels: "English (Neko)", "English (Ani)"
+ */
+const buildAllSubtitleTracks = (list) => {
+  if (!list || !list.length) return [];
+
+  const getSourceLabel = (serverName) => {
+    const n = (serverName || '').toLowerCase();
+    if (n.includes('neko')) return 'Neko';
+    if (n.includes('anihd') || n.includes('ani')) return 'Ani';
+    if (n.includes('waves')) return 'Waves';
+    return null;
+  };
+
+  const seen = new Set();
+  const tracks = [];
+  let idCounter = 1000; // start from 1000 to avoid collisions with server-local IDs
+
+  for (const srv of list) {
+    if (srv.type !== 'sub' || !srv.subtitles?.length) continue;
+    const source = getSourceLabel(srv.name);
+    if (!source) continue;
+
+    for (const sub of srv.subtitles) {
+      if (!sub.file || seen.has(sub.file)) continue;
+      const labelLower = (sub.label || 'english').toLowerCase();
+      if (!labelLower.includes('english') && !labelLower.includes('eng')) continue;
+      seen.add(sub.file);
+      tracks.push({
+        id: idCounter++,
+        label: 'English',
+        file: sub.file,
+        referer: sub.referer || '',
+        _source: source,
+      });
+    }
+  }
+
+  return tracks;
+};
 
 
 export default function AnimePage() {
@@ -43,7 +133,8 @@ export default function AnimePage() {
   const epParam = parseInt(searchParams.get('ep')) || null;
 
   // Stream/Player State
-  const [servers,       setServers]      = useState([]);
+  const [servers,           setServers]          = useState([]);
+  const [allSubtitleTracks, setAllSubtitleTracks] = useState([]);
   const [activeUrl,     setActiveUrl]    = useState('');
   const [activeName,    setActiveName]   = useState('');
   const [activeType,    setActiveType]   = useState('sub');
@@ -54,38 +145,49 @@ export default function AnimePage() {
   const [extracting,    setExtracting]   = useState(false);
   const [activeServer,  setActiveServer] = useState(null);
   const [fsActive,      setFsActive]     = useState(false);
+  const hasAutoSelectedRef = useRef(false);
 
   // Secure Downloads State
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({});
-  const [completedDownloads, setCompletedDownloads] = useState(new Set());
-  const [downloadsList, setDownloadsList] = useState([]);
+  const [sessionDownloadedEps, setSessionDownloadedEps] = useState(new Set());
   const [serverPickerData, setServerPickerData] = useState(null); // { episode, servers, loading }
+  const [qualityPickerData, setQualityPickerData] = useState(null); // { episode, variants, onSelect, onCancel }
   const [downloadAudioTrack, setDownloadAudioTrack] = useState('sub');
 
-  const loadDownloads = useCallback(async () => {
-    try {
-      const list = await downloadManager.getDownloadsList();
-      setDownloadsList(list);
-      const completed = new Set(list.filter(d => d.status === 'completed').map(d => `${d.animeId}_${d.episode}_${d.track || 'sub'}`));
-      setCompletedDownloads(completed);
-    } catch (e) {
-      console.error('[Downloads] Failed to get list:', e);
-    }
-  }, []);
-
-  // Subscribe to download progress updates
+  // Initialize already downloaded episodes from current session & subscribe to updates
   useEffect(() => {
-    loadDownloads();
+    const fetchExisting = async () => {
+      try {
+        const list = await downloadManager.getDownloadsList();
+        const epsSet = new Set();
+        for (const item of list) {
+          if (String(item.animeId) === String(id) && item.status === 'completed') {
+            epsSet.add(`${item.episode}_${item.track}`);
+          }
+        }
+        setSessionDownloadedEps(epsSet);
+      } catch (e) {
+        console.warn('[AnimePage] Failed to fetch existing session downloads:', e);
+      }
+    };
+    fetchExisting();
 
     const unsubscribe = downloadManager.subscribe((data) => {
       if (data.taskId) {
+        const parts = data.taskId.split('_');
+        const animeId = parts[0];
+        const epNum = parts[1] ? Number(parts[1]) : null;
+        const track = parts[2] || 'sub';
+
         if (data.status === 'completed') {
-          setCompletedDownloads(prev => {
-            const next = new Set(prev);
-            next.add(data.taskId);
-            return next;
-          });
+          if (String(animeId) === String(id) && epNum !== null) {
+            setSessionDownloadedEps(prev => {
+              const next = new Set(prev);
+              next.add(`${epNum}_${track}`);
+              return next;
+            });
+          }
         }
         setDownloadProgress(prev => ({
           ...prev,
@@ -95,15 +197,109 @@ export default function AnimePage() {
     });
 
     return () => unsubscribe();
-  }, [loadDownloads]);
+  }, [id]);
+
+  const parseM3U8Qualities = async (masterUrl, referer) => {
+    try {
+      const res = await fetch(masterUrl, { 
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36', 
+          'Referer': referer 
+        } 
+      });
+      if (!res.ok) return [];
+      const text = await res.text();
+      if (!text.includes('#EXT-X-STREAM-INF')) return [];
+      
+      const lines = text.split('\n');
+      const qualities = [];
+      const base = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('#EXT-X-STREAM-INF:')) {
+          let resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+          let name = 'SD';
+          if (resMatch) {
+            const h = parseInt(resMatch[2]);
+            if (h >= 1080) name = '1080p';
+            else if (h >= 720) name = '720p';
+            else if (h >= 480) name = '480p';
+            else name = '360p';
+          }
+          
+          let urlLine = '';
+          for (let j = i + 1; j < lines.length; j++) {
+            if (lines[j].trim() && !lines[j].startsWith('#')) {
+              urlLine = lines[j].trim();
+              break;
+            }
+          }
+          
+          if (urlLine) {
+            const absoluteUrl = urlLine.startsWith('http') ? urlLine : (urlLine.startsWith('/') ? new URL(masterUrl).origin + urlLine : base + urlLine);
+            qualities.push({ name, url: absoluteUrl });
+          }
+        }
+      }
+      return qualities;
+    } catch (e) {
+      console.error('Error parsing qualities:', e);
+      return [];
+    }
+  };
 
   const handleDownloadClick = async (epNum) => {
-    setServerPickerData({ episode: epNum, servers: [], loading: true });
+    setServerPickerData({ episode: epNum, servers: [], slug: '', loading: true });
     try {
       // Find servers for this episode
       const result = await getAniNekoServers(anime, epNum);
       if (result && result.servers && result.servers.length > 0) {
-        setServerPickerData({ episode: epNum, servers: result.servers, loading: false });
+        const enriched = enrichDubSubtitles(result.servers);
+        const expandedServers = [];
+        for (const srv of enriched) {
+          if (isDownloadable(srv)) {
+            try {
+              let finalUrl = srv.videoUrl;
+              let referer = (srv.name.toLowerCase().includes('neko') && srv.embedUrl) ? srv.embedUrl : (srv.referer || '');
+              const isEmbed = !srv.isHLS && srv.embedUrl;
+              if (isEmbed) {
+                if (Capacitor.isNativePlatform()) {
+                  finalUrl = await scrapeEmbedNative(srv.embedUrl, referer, 25000);
+                } else {
+                  finalUrl = srv.embedUrl;
+                }
+              } else if (srv.isHLS && srv.embedUrl) {
+                finalUrl = srv.embedUrl;
+              }
+              
+              if (finalUrl && finalUrl.includes('.m3u8')) {
+                const qualities = await parseM3U8Qualities(finalUrl, referer);
+                if (qualities.length > 0) {
+                  for (const q of qualities) {
+                    expandedServers.push({
+                      ...srv,
+                      name: `${srv.name.split(' (')[0]} (${q.name})`,
+                      videoUrl: q.url,
+                      isHLS: true
+                    });
+                  }
+                  continue;
+                }
+              }
+            } catch (e) {
+              console.error('Error parsing HLS variants:', e);
+            }
+          }
+          expandedServers.push(srv);
+        }
+
+        setServerPickerData({
+          episode: epNum,
+          servers: expandedServers,
+          slug: result.slug || '',
+          loading: false
+        });
       } else {
         showToast('No servers available for download.');
         setServerPickerData(null);
@@ -115,7 +311,7 @@ export default function AnimePage() {
     }
   };
 
-  const startDownload = async (epNum, selectedServer) => {
+  const startDownload = async (epNum, selectedServer, isExternal = false, targetPackage = '') => {
     setServerPickerData(null);
     const taskId = `${anime.id}_${epNum}_${downloadAudioTrack}`;
     try {
@@ -123,7 +319,7 @@ export default function AnimePage() {
       setDownloadProgress(prev => ({ ...prev, [taskId]: 0 }));
 
       let finalUrl = selectedServer.videoUrl;
-      let referer = selectedServer.referer || '';
+      let referer = (selectedServer.name.toLowerCase().includes('neko') && selectedServer.embedUrl) ? selectedServer.embedUrl : (selectedServer.referer || '');
 
       // If it is an embed server, scrape it first to get direct stream url
       const isEmbed = !selectedServer.isHLS && selectedServer.embedUrl;
@@ -133,21 +329,121 @@ export default function AnimePage() {
         } else {
           finalUrl = selectedServer.embedUrl;
         }
+      } else if (selectedServer.isHLS && selectedServer.embedUrl && selectedServer.embedUrl.includes('.m3u8')) {
+        // Direct HLS stream: bypass browser-specific CORS proxies and use the raw URL directly
+        finalUrl = selectedServer.embedUrl;
       }
 
       if (!finalUrl) {
         throw new Error('Failed to resolve stream link');
       }
 
-      showToast(`Starting download for Episode ${epNum}...`);
+      const animeTitle = anime.title?.english || anime.title?.romaji || 'Anime';
+
+      if (isExternal) {
+        showToast(targetPackage === 'com.hub.splayer' ? "Opening in SPlayer..." : "Opening in external downloader...");
+        const title = `${animeTitle} - Ep ${epNum}`;
+        await downloadManager.openExternalDownloader(finalUrl, referer, title, targetPackage);
+        // Clear progress indicator
+        setDownloadProgress(prev => {
+          const next = { ...prev };
+          delete next[taskId];
+          return next;
+        });
+        return;
+      }
+
+      // Sniff HLS stream and fetch master playlist if needed
+      let isHLS = finalUrl.includes('.m3u8') || selectedServer.isHLS === true;
+      let playlistText = '';
       
+      // If it doesn't end with .m3u8 and isn't explicitly marked as direct MP4, sniff it safely
+      if (!isHLS && selectedServer.isHLS !== false && !finalUrl.includes('.mp4')) {
+        try {
+          console.log('[Downloads] Sniffing stream type via HEAD request...');
+          const checkRes = await fetch(finalUrl, { 
+            method: 'HEAD', 
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': referer } 
+          });
+          const ct = checkRes.headers.get('Content-Type') || '';
+          if (ct.includes('mpegurl') || ct.includes('x-mpegURL') || ct.includes('application/vnd.apple.mpegurl')) {
+            isHLS = true;
+          }
+        } catch (e) {
+          console.warn('[Downloads] HEAD signature check failed, trying Range sniff:', e.message);
+          try {
+            // Fetch only first 500 bytes to check signature, preventing large MP4 downloads
+            const checkText = await clientFetch(finalUrl, { 
+              headers: { 'Range': 'bytes=0-500' }, 
+              referer, 
+              timeout: 5000 
+            });
+            isHLS = checkText.trim().startsWith('#EXTM3U');
+          } catch (e2) {
+            console.warn('[Downloads] Range signature sniff failed:', e2);
+          }
+        }
+      }
+
+      if (isHLS) {
+        try {
+          playlistText = await fetchM3U8Playlist(finalUrl, referer);
+        } catch (e) {
+          console.warn('[Downloads] Failed to fetch HLS playlist:', e);
+        }
+      }
+
+      if (isHLS && playlistText) {
+        try {
+          const variants = parseMasterPlaylist(finalUrl, playlistText);
+          if (variants && variants.length > 1) {
+            // Open a quality selector modal
+            const chosenQuality = await new Promise((resolve) => {
+              setQualityPickerData({
+                episode: epNum,
+                variants,
+                onSelect: (variant) => resolve(variant),
+                onCancel: () => resolve(null)
+              });
+            });
+            
+            // Close quality modal
+            setQualityPickerData(null);
+            
+            if (!chosenQuality) {
+              // User cancelled selection
+              showToast('Download cancelled.');
+              setDownloadProgress(prev => {
+                const next = { ...prev };
+                delete next[taskId];
+                return next;
+              });
+              return;
+            }
+            finalUrl = chosenQuality.url;
+            showToast(`Selected quality: ${chosenQuality.label}`);
+          }
+        } catch (playlistErr) {
+          console.warn('[Downloads] Failed to parse master playlist (falling back to original):', playlistErr);
+        }
+      }
+
+      // Pre-fetch the media playlist from JS (CapacitorHttp handles auth that Java can't)
+      let mediaPlaylistContent = '';
+      if (isHLS && finalUrl) {
+        try {
+          mediaPlaylistContent = await fetchM3U8Playlist(finalUrl, referer);
+          console.log('[Downloads] Pre-fetched media playlist:', mediaPlaylistContent.length, 'chars');
+        } catch (e) {
+          console.warn('[Downloads] Media playlist pre-fetch failed (Java will retry):', e);
+        }
+      }
+
+      showToast(`Downloading Episode ${epNum}...`);
+
       await downloadManager.downloadEpisode(
-        anime,
-        epNum,
-        finalUrl,
-        referer,
-        downloadAudioTrack,
-        selectedServer.subtitles || []
+        anime, epNum, finalUrl, referer, downloadAudioTrack,
+        selectedServer.subtitles || [], isHLS, mediaPlaylistContent
       );
     } catch (e) {
       console.error('[Downloads] Error initiating download:', e);
@@ -159,6 +455,8 @@ export default function AnimePage() {
       });
     }
   };
+
+
 
   useEffect(() => {
     const handleScroll = () => {
@@ -201,30 +499,7 @@ export default function AnimePage() {
       setState('done');
     } catch (e) {
       console.warn('[AnimePage] Failed to fetch details from AniList:', e);
-      try {
-        const list = await downloadManager.getDownloadsList();
-        const offlineMeta = list.find(d => String(d.animeId) === String(id));
-        if (offlineMeta) {
-          const fallbackData = {
-            id: Number(id),
-            title: {
-              english: offlineMeta.animeTitle,
-              romaji: offlineMeta.animeTitle
-            },
-            coverImage: {
-              large: offlineMeta.cover,
-              medium: offlineMeta.cover
-            },
-            episodes: Number(offlineMeta.episode)
-          };
-          setAnime(fallbackData);
-          setState('done');
-          return;
-        }
-      } catch (metaErr) {
-        console.error('[AnimePage] Local downloads metadata resolution failed:', metaErr);
-      }
-      setErrMsg(e.message || 'Failed to load');
+      setErrMsg('You are offline. Streaming requires an internet connection. You can play your downloaded videos directly from your device\'s Gallery.');
       setState('error');
     }
   }, [id]);
@@ -266,7 +541,7 @@ export default function AnimePage() {
         setActiveUrl('');
         setExtracting(true);
 
-        scrapeEmbedNative(embedUrl, referer, 40000)
+        scrapeEmbedNative(embedUrl, referer, 15000)
           .then(m3u8Url => {
             setExtracting(false);
             setActiveUrl(m3u8Url);
@@ -298,55 +573,31 @@ export default function AnimePage() {
   const fetchStream = useCallback(async () => {
     if (!anime || !epParam) return;
 
-    // Check if downloaded offline
-    const taskId = `${anime.id}_${epParam}_${audioTrack}`;
-    if (completedDownloads.has(taskId)) {
-      setStreamErr(null);
-      setServers([]);
-      
-      const taskMeta = downloadsList.find(d => d.taskId === taskId);
-      const isHls = taskMeta ? !taskMeta.url?.endsWith('.mp4') : true;
-      const playUrl = downloadManager.getPlaybackUrl(anime.id, epParam, isHls, audioTrack);
-      
-      let localSubtitles = [];
-      if (taskMeta && taskMeta.subtitles) {
-        localSubtitles = taskMeta.subtitles;
-      }
-
-      setActiveName('Offline Play');
-      setActiveType('local');
-      setIsActiveHLS(isHls);
-      setActiveUrl(playUrl);
-      
-      setActiveServer({
-        referer: '',
-        embedUrl: '',
-        subtitles: localSubtitles
-      });
-
-      setExtracting(false);
-      setLoadStream(false);
-      return;
-    }
+    hasAutoSelectedRef.current = false;
 
     const cachedResult = getCachedServers(anime, epParam);
     if (cachedResult?.servers?.length) {
       setStreamErr(null);
-      setServers(cachedResult.servers);
+      const enriched = enrichDubSubtitles(cachedResult.servers);
+      setServers(enriched);
+      setAllSubtitleTracks(buildAllSubtitleTracks(cachedResult.servers));
       
       const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
-      let matchingServers = cachedResult.servers.filter(s => s.type === preferredTrack);
+      let matchingServers = enriched.filter(s => s.type === preferredTrack);
       if (matchingServers.length === 0) {
-        matchingServers = cachedResult.servers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+        matchingServers = enriched.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
       }
       const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
                      || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
                      || matchingServers[0]
-                     || cachedResult.servers[0];
+                     || enriched[0];
       
-      setActiveType(preferred.type || 'sub');
-      setAudioTrack(preferred.type || 'sub');
-      selectServer(preferred, cachedResult.servers);
+      if (preferred) {
+        hasAutoSelectedRef.current = true;
+        setActiveType(preferred.type || 'sub');
+        setAudioTrack(preferred.type || 'sub');
+        selectServer(preferred, enriched);
+      }
 
       const nextEp = epParam + 1;
       const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
@@ -365,30 +616,30 @@ export default function AnimePage() {
     setActiveServer(null);
 
     const handleFound = (currentServers) => {
-      setServers(currentServers);
+      const enriched = enrichDubSubtitles(currentServers);
+      setServers(enriched);
+      setAllSubtitleTracks(buildAllSubtitleTracks(currentServers));
       
-      setActiveServer(prev => {
-        if (prev) return prev;
-        
+      if (!hasAutoSelectedRef.current) {
         const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
-        let matchingServers = currentServers.filter(s => s.type === preferredTrack);
+        let matchingServers = enriched.filter(s => s.type === preferredTrack);
         if (matchingServers.length === 0) {
-          matchingServers = currentServers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+          matchingServers = enriched.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
         }
         const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
                        || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
                        || matchingServers[0]
-                       || currentServers[0];
+                       || enriched[0];
         
         if (preferred) {
+          hasAutoSelectedRef.current = true;
           setActiveType(preferred.type || 'sub');
           setAudioTrack(preferred.type || 'sub');
-          selectServer(preferred, currentServers);
+          selectServer(preferred, enriched);
           setLoadStream(false);
           setStreamErr(null);
         }
-        return preferred;
-      });
+      }
     };
 
     try {
@@ -479,11 +730,14 @@ export default function AnimePage() {
   const prog    = getEpisodeProgress(anime.id);
   // ── Fix: isNotReleased was hardcoded false — now checks real status ──
   const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (eps === 0 && !anime.nextAiringEpisode);
+
   const totalEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
     ? anime.nextAiringEpisode.episode - 1 
     : (eps || 0);
+
+  const allEps = Array.from({ length: totalEps }, (_, i) => i + 1);
+
   const resumeEp = prog?.episode ? Math.min(prog.episode, Math.max(totalEps, 1)) : 1;
-  const allEps   = Array.from({ length: totalEps }, (_, i) => i + 1);
   const filtered = epQuery ? allEps.filter(n => String(n).includes(epQuery.trim())) : allEps;
   // Pagination
   const totalPages = Math.ceil(filtered.length / EP_PER_PAGE);
@@ -880,7 +1134,7 @@ export default function AnimePage() {
                       {/* Label */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 14, fontWeight: 600, color: isWatched ? 'var(--text-muted)' : 'var(--text-primary)' }}>
-                          Episode {n}
+                          Episode {n} {(sessionDownloadedEps.has(`${n}_sub`) || sessionDownloadedEps.has(`${n}_dub`)) && <span style={{ color: '#4caf50', marginLeft: 6, fontWeight: 800 }}>✓</span>}
                         </div>
                         {isCurrent && (
                           <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2, fontWeight: 600 }}>▶ Resume here</div>
@@ -922,7 +1176,7 @@ export default function AnimePage() {
                       Page {epPage} / {totalPages}
                     </span>
                     <button
-                      onClick={() => setEpPage(p => Math.min(totalPages, p + 1))}
+              onClick={() => setEpPage(p => Math.min(totalPages, p + 1))}
                       disabled={epPage >= totalPages}
                       style={{
                         padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600,
@@ -1048,13 +1302,28 @@ export default function AnimePage() {
                 referer={activeServer?.referer}
                 embedUrl={activeServer?.embedUrl}
                 subtitles={activeServer?.subtitles || []}
+                extraSubtitles={allSubtitleTracks}
                 onBack={() => setSearchParams({})}
                 onFullscreenChange={setFsActive}
+                currentEpisode={epParam}
+                totalEpisodes={totalEps}
+                onEpisodeChange={(newEp) => {
+                  setSearchParams({ play: 'true', ep: String(newEp) });
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
               />
             ) : (
               <IframePlayer
-                url={activeUrl}
+                src={activeUrl}
                 onBack={() => setSearchParams({})}
+                onStreamCaptured={(m3u8Url, ref) => {
+                  if (m3u8Url) {
+                    setActiveUrl(m3u8Url);
+                    setIsActiveHLS(true);
+                  } else {
+                    handleScrapeError();
+                  }
+                }}
               />
             )
           ) : null}
@@ -1253,7 +1522,7 @@ export default function AnimePage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {allEps.map(n => {
                 const taskId = `${anime.id}_${n}_${downloadAudioTrack}`;
-                const isDownloaded = completedDownloads.has(taskId);
+                const isDownloaded = sessionDownloadedEps.has(`${n}_${downloadAudioTrack}`);
                 const progress = downloadProgress[taskId];
                 const isDownloading = progress !== undefined && progress !== 100 && progress !== 'error';
 
@@ -1333,28 +1602,46 @@ export default function AnimePage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto' }}>
               {serverPickerData.servers
                 .filter(s => s.type === downloadAudioTrack)
+                .filter(isDownloadable)
                 .map((srv, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => startDownload(serverPickerData.episode, srv)}
-                    style={{
-                      padding: '12px', background: 'var(--bg-card)', border: '1px solid var(--border)',
-                      borderRadius: 10, color: '#fff', fontSize: 13, fontWeight: 600,
-                      cursor: 'pointer', textAlign: 'left', display: 'flex', justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}
-                  >
-                    <span>{srv.name}</span>
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{srv.type}</span>
-                  </button>
+                  <div key={idx} style={{ 
+                    background: 'rgba(255,255,255,0.03)', 
+                    borderRadius: 12, 
+                    border: '1px solid var(--border)', 
+                    padding: 12, 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    gap: 10 
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{srv.name}</span>
+                      <span style={{ fontSize: 9, color: 'var(--accent)', fontWeight: 800, textTransform: 'uppercase' }}>{srv.type}</span>
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <button
+                        onClick={() => startDownload(serverPickerData.episode, srv, false)}
+                        style={{
+                          padding: '12px 16px', background: 'var(--accent)', border: 'none',
+                          borderRadius: 8, color: '#fff', fontSize: 12, fontWeight: 700,
+                          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+                        }}
+                      >
+                        <Download size={14} />
+                        Download In-App
+                      </button>
+                    </div>
+                  </div>
                 ))}
-              {serverPickerData.servers.filter(s => s.type === downloadAudioTrack).length === 0 && (
+              {serverPickerData.servers.filter(s => s.type === downloadAudioTrack).filter(isDownloadable).length === 0 && (
                 <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '10px 0' }}>
-                  No {downloadAudioTrack.toUpperCase()} servers found.
+                  No compatible {downloadAudioTrack.toUpperCase()} servers found.
                 </p>
               )}
             </div>
           )}
+
+
 
           <button
             onClick={() => setServerPickerData(null)}
@@ -1363,6 +1650,66 @@ export default function AnimePage() {
               borderRadius: 10, color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700,
               cursor: 'pointer'
             }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>,
+      document.body
+    )}
+
+    {/* ── QUALITY SELECTOR FOR DOWNLOAD ── */}
+    {qualityPickerData && createPortal(
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 1001,
+        background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 20, boxSizing: 'border-box'
+      }}>
+        <div style={{
+          background: 'var(--bg-primary)', borderRadius: 16, border: '1px solid var(--border)',
+          width: '100%', maxWidth: 320, padding: 20, display: 'flex', flexDirection: 'column', gap: 16,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+          animation: 'zoomIn 0.2s ease'
+        }}>
+          <style>{`
+            @keyframes zoomIn {
+              from { transform: scale(0.9); opacity: 0; }
+              to { transform: scale(1); opacity: 1; }
+            }
+          `}</style>
+          <div style={{ textAlign: 'center' }}>
+            <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, fontFamily: 'var(--font-brand)' }}>Select Video Quality</h3>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 0' }}>Episode {qualityPickerData.episode}</p>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 220, overflowY: 'auto' }}>
+            {qualityPickerData.variants.map((v, idx) => (
+              <button
+                key={idx}
+                onClick={() => qualityPickerData.onSelect(v)}
+                style={{
+                  padding: '12px', background: 'var(--bg-card)', border: '1px solid var(--border)',
+                  borderRadius: 10, color: '#fff', fontSize: 13, fontWeight: 700,
+                  cursor: 'pointer', textAlign: 'center', transition: 'background 0.2s',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-card)'}
+              >
+                <span>{v.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={() => qualityPickerData.onCancel()}
+            style={{
+              padding: '12px', background: 'rgba(255,255,255,0.05)', border: 'none',
+              borderRadius: 10, color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', transition: 'background 0.2s'
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
           >
             Cancel
           </button>

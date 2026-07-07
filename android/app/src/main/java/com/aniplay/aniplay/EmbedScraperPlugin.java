@@ -89,6 +89,30 @@ public class EmbedScraperPlugin extends Plugin {
                     }
                     return super.shouldInterceptRequest(view, request);
                 }
+
+                @Override
+                public void onPageFinished(WebView view, String url) {
+                    super.onPageFinished(view, url);
+                    // Inject a trigger-click script to start playback automatically
+                    String js = "javascript:(function() { " +
+                            "var clickTimer = setInterval(function() {" +
+                            "  var selectors = ['video', '#player', '.jw-video', '.jw-display-icon-container', '.vjs-big-play-button', '.play-button', '[class*=\"play\"]', '[id*=\"play\"]'];" +
+                            "  for (var i=0; i<selectors.length; i++) {" +
+                            "    var el = document.querySelector(selectors[i]);" +
+                            "    if (el) {" +
+                            "      el.click();" +
+                            "      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));" +
+                            "    }" +
+                            "  }" +
+                            "}, 300);" +
+                            "setTimeout(function() { clearInterval(clickTimer); }, 8000);" +
+                            "})()";
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                        view.evaluateJavascript(js.replace("javascript:", ""), null);
+                    } else {
+                        view.loadUrl(js);
+                    }
+                }
             });
 
             // Load with custom Referer header — this is the key difference

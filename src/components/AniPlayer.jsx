@@ -5,7 +5,7 @@ import { CapacitorHttp, CapacitorCookies, registerPlugin } from '@capacitor/core
 import {
   Play, Pause, Volume2, VolumeX, Volume1,
   Maximize, Minimize, Settings, Subtitles,
-  RotateCcw, RotateCw, ArrowLeft
+  RotateCcw, RotateCw, ArrowLeft, Clock, SkipForward, SkipBack
 } from 'lucide-react';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
@@ -49,12 +49,13 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
     }
 
     load(context, config, callbacks) {
-      if (!isNative) {
-        // On desktop browser, fall back to the default fetch-based loader
+      const url = context.url;
+      const isLocalhost = url.includes('localhost:8081') || url.includes('127.0.0.1:8081');
+      if (!isNative || isLocalhost) {
+        // Use default fetch loader for localhost/local downloads to ensure offline play works without CapacitorHttp checking internet state
         return super.load(context, config, callbacks);
       }
 
-      const url = context.url;
       const isPlaylist = context.type === 'manifest' || context.type === 'level';
       const t0 = performance.now();
       this._aborted = false;
@@ -147,6 +148,26 @@ function fmt(s) {
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
 
+const isGestureTarget = (target) => {
+  if (!target) return true;
+  const selectors = [
+    '.anip__ctrls', 
+    '.anip__menu', 
+    '.anip__btn', 
+    '.anip__sync-panel', 
+    '.anip__sync-btn', 
+    'button', 
+    'input', 
+    'select', 
+    'a',
+    '.anip__center-btn'
+  ];
+  for (const s of selectors) {
+    if (target.closest && target.closest(s)) return false;
+  }
+  return true;
+};
+
 /* ─── Skip ripple ───────────────────────────────────────────── */
 function SkipRipple({ side, label }) {
   return (
@@ -175,7 +196,19 @@ function SwipeBar({ type, value, visible }) {
 }
 
 /* ─── Main component ────────────────────────────────────────── */
-export default function AniPlayer({ url, title, subtitles, referer, embedUrl, onBack, onFullscreenChange }) {
+export default function AniPlayer({
+  url,
+  title,
+  subtitles,
+  extraSubtitles,
+  referer,
+  embedUrl,
+  onBack,
+  onFullscreenChange,
+  currentEpisode = 1,
+  totalEpisodes = 1,
+  onEpisodeChange
+}) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
   const hlsRef     = useRef(null);
@@ -205,6 +238,8 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
   const [cues,      setCues]      = useState([]);
   const [showQ,     setShowQ]     = useState(false);
   const [showSub,   setShowSub]   = useState(false);
+  const [subDelay,  setSubDelay]  = useState(0);      // subtitle sync offset in seconds
+  const [showSync,  setShowSync]  = useState(false);  // subtitle sync delay menu visibility
   const [ripple,    setRipple]    = useState(null);
   const [swipeVol,  setSwipeVol]  = useState(false);
   const [swipeBri,  setSwipeBri]  = useState(false);
@@ -327,11 +362,27 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, d) => {
         log(`Subtitle tracks updated: found ${d.subtitleTracks?.length || 0} tracks`);
-        if (d.subtitleTracks?.length)
-          setSubs(d.subtitleTracks.map((t, i) => ({
+        if (d.subtitleTracks?.length) {
+          const mapped = d.subtitleTracks.map((t, i) => ({
             id: i,
             label: t.name || t.lang || `Track ${i + 1}`
-          })));
+          }));
+          const filtered = mapped.filter(t => 
+            (t.label || '').toLowerCase().includes('english') || 
+            (t.label || '').toLowerCase().includes('eng')
+          ).map(t => ({ ...t, label: 'English' }));
+          
+          const finalTracks = filtered.length > 0 ? filtered : mapped;
+          const unique = [];
+          const seenLabels = new Set();
+          for (const track of finalTracks) {
+            if (!seenLabels.has(track.label)) {
+              seenLabels.add(track.label);
+              unique.push(track);
+            }
+          }
+          setSubs(unique);
+        }
       });
 
       hls.attachMedia(v);
@@ -354,18 +405,53 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
   }, [url, log]);
 
 
-  // Sync subtitle tracks when props change (using stringify for stable comparison)
+  // Sync subtitle tracks when props change — merge server-specific + global source tracks
   const subTracksJson = JSON.stringify(subtitles);
+  const extraTracksJson = JSON.stringify(extraSubtitles);
   useEffect(() => {
-    const loadedSubs = subtitles || [];
-    setSubs(loadedSubs);
-    // Auto-select English subtitle track by default if available
-    if (loadedSubs.length > 0) {
-      setActiveSub(0);
+    const serverSubs = subtitles || [];
+    const globalExtras = extraSubtitles || [];
+
+    const filterEnglish = (list) => {
+      return list.filter(s => {
+        const labelLower = (s.label || 'english').toLowerCase();
+        return labelLower.includes('english') || labelLower.includes('eng');
+      }).map(s => ({
+        ...s,
+        label: 'English'
+      }));
+    };
+
+    let filteredServer = filterEnglish(serverSubs);
+    let filteredExtras = filterEnglish(globalExtras);
+
+    if (filteredServer.length === 0 && filteredExtras.length === 0 && (serverSubs.length > 0 || globalExtras.length > 0)) {
+      filteredServer = serverSubs;
+      filteredExtras = globalExtras;
+    }
+
+    // Merge: server-specific subtitles first, then any global extras not already in the list
+    const seenFiles = new Set(filteredServer.map(s => s.file).filter(Boolean));
+    const uniqueExtras = filteredExtras.filter(x => x.file && !seenFiles.has(x.file));
+    
+    // Deduplicate by label to keep only one "English" track if there are multiple duplicates
+    const merged = [];
+    const seenLabels = new Set();
+    for (const track of [...filteredServer, ...uniqueExtras]) {
+      if (!seenLabels.has(track.label)) {
+        seenLabels.add(track.label);
+        merged.push(track);
+      }
+    }
+
+    setSubs(merged);
+    // Auto-select first English track if available
+    if (merged.length > 0) {
+      setActiveSub(merged[0].id !== undefined ? merged[0].id : 0);
     } else {
       setActiveSub(-1);
     }
-  }, [subTracksJson]);
+  }, [subTracksJson, extraTracksJson]);
 
   useEffect(() => { if (hlsRef.current) hlsRef.current.currentLevel  = activeQ;  }, [activeQ]);
   
@@ -375,6 +461,15 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
       hlsRef.current.subtitleTrack = activeSub; 
     }
   }, [activeSub]);
+
+  // Close menus when controls fade out
+  useEffect(() => {
+    if (!ctrlVis) {
+      setShowQ(false);
+      setShowSub(false);
+      setShowSync(false);
+    }
+  }, [ctrlVis]);
 
   // Fetch and parse subtitles when activeSub changes
   useEffect(() => {
@@ -389,7 +484,8 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     const loadSubtitlesText = async () => {
       // Per-subtitle referer takes priority over player-level referer prop
       const subReferer = subs[activeSub]?.referer || referer;
-      if (isNative) {
+      const isLocalhost = url.includes('localhost:8081') || url.includes('127.0.0.1:8081');
+      if (isNative && !isLocalhost) {
         const reqHeaders = {
           'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
         };
@@ -784,12 +880,14 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     if (!el) return;
 
     const handleTouchStart = (e) => {
+      if (!isGestureTarget(e.target)) return;
       lastTouchTime.current = Date.now();
       const t = e.touches[0];
       if (t) onGestureStart(t.clientX, t.clientY);
     };
 
     const handleTouchMove = (e) => {
+      if (!isGestureTarget(e.target)) return;
       // Prevent Android scroll/bounce if actively swiping volume/brightness or dragging seek
       if (seekDrag.current || (gesture.current && gesture.current.moved)) {
         if (e.cancelable) e.preventDefault();
@@ -799,6 +897,10 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
     };
 
     const handleTouchEnd = (e) => {
+      if (!isGestureTarget(e.target)) {
+        seekDrag.current = false;
+        return;
+      }
       lastTouchTime.current = Date.now();
       // ── Fix: if we were dragging the seek bar, consume the event and return ──
       // Without this guard, the outer touchend fires after seek and triggers handleTap
@@ -830,7 +932,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
-  const activeCue = Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= c.startTime && curTime <= c.endTime) : null;
+  const activeCue = Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= (c.startTime + subDelay) && curTime <= (c.endTime + subDelay)) : null;
   // Convert VTT HTML tags (<i>, <b> etc) to real HTML, strip unknown ones cleanly
   const cueHtml = activeCue ? activeCue.text
     .replace(/<i>/g, '<em>').replace(/<\/i>/g, '</em>')
@@ -845,6 +947,12 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
       className={['anip', fs ? 'anip--fs' : '', ctrlVis ? 'anip--ctrl' : '', isTouch() ? 'anip--touch' : ''].filter(Boolean).join(' ')}
       onMouseMove={() => { if (!isTouch()) showCtrl(); }}
       onMouseLeave={() => { if (!isTouch() && playing) setCtrlVis(false); }}
+      onClick={(e) => {
+        if (isTouch()) return;
+        if (!isGestureTarget(e.target)) return;
+        if (Date.now() - lastTouchTime.current < 500) return;
+        handleTap(e.clientX, e.clientY);
+      }}
     >
       {/* ── video ───────────────────────────────────────────── */}
       <video
@@ -966,11 +1074,89 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
           >
             {title}
           </span>
+
+          {/* Subtitle sync delay adjuster on top-right */}
+          <div className="anip__menu-anchor" style={{ zIndex: 10 }}>
+            <button
+              className={`anip__btn ${subDelay !== 0 ? 'anip__btn--active' : ''}`}
+              onClick={e => { e.stopPropagation(); setShowSync(x => !x); setShowQ(false); setShowSub(false); }}
+              title="Subtitle Delay"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '6px 12px',
+                background: 'rgba(0, 0, 0, 0.6)',
+                borderRadius: 20,
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                color: subDelay !== 0 ? 'var(--accent)' : 'rgba(255, 255, 255, 0.95)',
+                cursor: 'pointer'
+              }}
+            >
+              <Clock size={15} />
+              <span style={{ fontSize: 11, fontWeight: 700 }}>Sub Sync</span>
+              {subDelay !== 0 && (
+                <span style={{ fontSize: 10, background: 'var(--accent)', color: '#fff', borderRadius: 4, padding: '1px 4px', marginLeft: 2 }}>
+                  {subDelay > 0 ? `+${subDelay.toFixed(1)}s` : `${subDelay.toFixed(1)}s`}
+                </span>
+              )}
+            </button>
+            {showSync && (
+              <div className="anip__sync-menu" onClick={e => e.stopPropagation()}>
+                <p className="anip__sync-hd">Subtitle Sync</p>
+                <div className="anip__sync-readout">
+                  {subDelay > 0 ? `+${subDelay.toFixed(1)}s` : `${subDelay.toFixed(1)}s`}
+                </div>
+                <div className="anip__sync-grid">
+                  <button className="anip__sync-btn" onClick={() => setSubDelay(d => d - 0.5)}>-0.5s</button>
+                  <button className="anip__sync-btn" onClick={() => setSubDelay(d => d + 0.5)}>+0.5s</button>
+                  <button className="anip__sync-btn" onClick={() => setSubDelay(d => d - 0.1)}>-0.1s</button>
+                  <button className="anip__sync-btn" onClick={() => setSubDelay(d => d + 0.1)}>+0.1s</button>
+                  <button className="anip__sync-btn anip__sync-btn--reset" onClick={() => setSubDelay(0)}>Reset (0.0s)</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
 
         {/* ── Spacer (click to toggle controls) ──────────────── */}
         <div className="anip__spacer" />
+
+        {/* ── Center Controls (Prev, Play/Pause, Next) ──────── */}
+        {!(showQ || showSub || showSync) && (
+          <div className="anip__center-ctrls" onClick={e => e.stopPropagation()}>
+          {onEpisodeChange && (
+            <button
+              className={`anip__center-btn ${currentEpisode <= 1 ? 'anip__center-btn--disabled' : ''}`}
+              disabled={currentEpisode <= 1}
+              onClick={(e) => { e.stopPropagation(); onEpisodeChange(currentEpisode - 1); }}
+              title="Previous Episode"
+            >
+              <SkipBack size={22} fill="currentColor" />
+            </button>
+          )}
+          
+          <button
+            className="anip__center-btn anip__center-btn--play"
+            onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+            title={playing ? 'Pause' : 'Play'}
+          >
+            {playing ? <Pause size={32} fill="currentColor" strokeWidth={0} /> : <Play size={32} fill="currentColor" strokeWidth={0} style={{ marginLeft: 3 }} />}
+          </button>
+
+          {onEpisodeChange && (
+            <button
+              className={`anip__center-btn ${currentEpisode >= totalEpisodes ? 'anip__center-btn--disabled' : ''}`}
+              disabled={currentEpisode >= totalEpisodes}
+              onClick={(e) => { e.stopPropagation(); onEpisodeChange(currentEpisode + 1); }}
+              title="Next Episode"
+            >
+              <SkipForward size={22} fill="currentColor" />
+            </button>
+          )}
+        </div>
+      )}
 
         {/* ── Bottom group: seek bar + controls bar ────────── */}
         <div className="anip__bottom-group"
@@ -1021,23 +1207,7 @@ export default function AniPlayer({ url, title, subtitles, referer, embedUrl, on
                   : <Play   size={20} fill="currentColor" strokeWidth={0} />}
               </button>
 
-              {/* Rewind */}
-              <button className="anip__btn anip__btn--skip"
-                onClick={e => { e.stopPropagation(); skip(-10); }}
-                title="Rewind 10s"
-              >
-                <RotateCcw size={17} />
-                <span className="anip__skip-num">10</span>
-              </button>
 
-              {/* Forward */}
-              <button className="anip__btn anip__btn--skip"
-                onClick={e => { e.stopPropagation(); skip(10); }}
-                title="Forward 10s"
-              >
-                <RotateCw size={17} />
-                <span className="anip__skip-num">10</span>
-              </button>
 
 
 

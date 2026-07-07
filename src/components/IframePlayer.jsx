@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CapacitorHttp } from '@capacitor/core';
-import { ArrowLeft, Loader, AlertCircle } from 'lucide-react';
+import { Loader } from 'lucide-react';
 
 const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 
@@ -113,22 +113,32 @@ async function prepareIframeSrc(embedUrl) {
   if (!isNative || !embedUrl) return embedUrl;
 
   try {
-    // Extract the actual embed URL if wrapped in iframe-proxy query
+    // Extract the actual embed URL and original referer if wrapped in proxy query
     let targetUrl = embedUrl;
+    let refererHeader = '';
     try {
       const parsed = new URL(embedUrl);
       const inner = parsed.searchParams.get('url');
       if (inner) targetUrl = inner;
+      const refParam = parsed.searchParams.get('referer');
+      if (refParam) refererHeader = refParam;
     } catch {}
 
+    if (!refererHeader) {
+      try {
+        refererHeader = new URL(targetUrl).origin + '/';
+      } catch {}
+    }
+
     console.log('[IframePlayer] Fetching embed HTML via CapacitorHttp:', targetUrl.slice(0, 100));
+    console.log('[IframePlayer] Using Referer header:', refererHeader);
 
     const resp = await CapacitorHttp.request({
       url: targetUrl,
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
-        'Referer': new URL(targetUrl).origin + '/',
+        'Referer': refererHeader,
         'Accept': 'text/html,application/xhtml+xml,*/*',
       },
       responseType: 'text',
@@ -166,9 +176,8 @@ async function prepareIframeSrc(embedUrl) {
 }
 
 export default function IframePlayer({ src, onBack, onStreamCaptured }) {
-  const [status, setStatus] = useState('loading'); // 'loading' | 'playing' | 'timeout'
+  const [status, setStatus] = useState('loading'); // 'loading' | 'playing'
   const [iframeSrc, setIframeSrc] = useState('');
-  const timerRef = useRef(null);
   const blobUrlRef = useRef(null);
   const iframeRef = useRef(null);
 
@@ -188,10 +197,12 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
       if (prepared.startsWith('blob:')) {
         blobUrlRef.current = prepared;
       }
-      // Add cache-buster only for non-blob URLs
+      // Add cache-buster to avoid cache issues
       const withBust = prepared.startsWith('blob:')
         ? prepared
-        : (prepared.includes('?') ? `${prepared}&_t=${Date.now()}` : `${prepared}?_t=${Date.now()}`);
+        : (prepared.includes('?') 
+            ? `${prepared}&_t=${Date.now()}` 
+            : `${prepared}?_t=${Date.now()}`);
       setIframeSrc(withBust);
     });
 
@@ -226,28 +237,19 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
         setStatus('playing');
       }
 
-      // ── Embed page shows a file-deleted / error page ─────────
+      // ── Embed page shows a file-deleted / error — log silently, keep spinner ──
       if (data.type === 'EMBED_ERROR') {
-        console.warn('[IframePlayer] Embed error detected:', data.reason);
-        // Notify parent so it can auto-switch to next server
-        onStreamCaptured(null, null, { error: true, reason: data.reason });
-        setStatus('error');
+        console.warn('[IframePlayer] Embed error detected (continuing to wait):', data.reason);
       }
     };
 
     window.addEventListener('message', handleMessage);
-
-    // Timeout after 40 seconds if no stream captured
-    timerRef.current = setTimeout(() => {
-      setStatus(prev => prev === 'loading' ? 'timeout' : prev);
-    }, 40000);
+    // No timeout — spinner stays until stream is captured
 
     return () => {
       window.removeEventListener('message', handleMessage);
-      clearTimeout(timerRef.current);
     };
   }, [src, onStreamCaptured]);
-
 
   return (
     <div style={{
@@ -276,7 +278,7 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
         />
       )}
 
-      {/* ── Black loading overlay ──────────────────────────────── */}
+      {/* ── Infinite loading overlay (shown until stream is captured) ── */}
       {status === 'loading' && (
         <div style={{
           position: 'absolute', inset: 0,
@@ -288,38 +290,6 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
           <Loader size={38} color="rgba(255,255,255,0.7)" style={{ animation: 'spin 1s linear infinite' }} />
         </div>
       )}
-
-      {/* ── Timeout overlay ───────────────────────────────────── */}
-      {status === 'timeout' && (
-        <div style={{
-          position: 'absolute', inset: 0,
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          gap: 14, background: 'rgba(0,0,0,0.88)', zIndex: 10,
-          padding: 24, textAlign: 'center',
-        }}>
-          <AlertCircle size={44} color="#e50914" style={{ opacity: 0.75 }} />
-          <p style={{ color: '#fff', fontSize: 15, fontWeight: 700, margin: 0 }}>
-            Stream taking too long
-          </p>
-          <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, margin: 0, maxWidth: 260, lineHeight: 1.6 }}>
-            The player is loading. Tap below to interact with it directly.
-          </p>
-          <button
-            onClick={() => setStatus('playing')}
-            style={{
-              marginTop: 6, padding: '10px 22px',
-              background: '#e50914', color: '#fff',
-              border: 'none', borderRadius: 20,
-              fontSize: 13, fontWeight: 700, cursor: 'pointer',
-            }}
-          >
-            Show Player
-          </button>
-        </div>
-      )}
-
-
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

@@ -19,8 +19,8 @@ export function setDynamicDomains(newDomains) {
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
-const STREAM_PROXY = import.meta.env.VITE_STREAM_PROXY_URL || '';
-const PROXY = import.meta.env.VITE_PROXY_URL || '';
+const STREAM_PROXY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_STREAM_PROXY_URL) || '';
+const PROXY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_PROXY_URL) || '';
 
 function formatProxyUrl(targetUrl, referer) {
   if (!STREAM_PROXY) return targetUrl;
@@ -78,9 +78,18 @@ function extractSeason(t) {
   if ((m = s.match(/\b(\d+)(?:st|nd|rd|th)\s+season\b/))) return parseInt(m[1]);
   if ((m = s.match(/\bpart\s*(\d+)\b/)))       return parseInt(m[1]);
   if ((m = s.match(/\bs(\d+)\b/)))             return parseInt(m[1]);
+  
   if (/\biv\b/.test(s)) return 4;
   if (/\biii\b/.test(s)) return 3;
   if (/\bii\b/.test(s)) return 2;
+
+  // Match any trailing space followed by a number at the end of the clean title
+  // e.g. "Oshi no Ko 2", "Oshi no Ko 2 (Dub)", "Oshi no Ko 2nd"
+  const cleanTitle = s.replace(/\b(dub|sub|uncensored|uncut|tv|movie|ova|ona|special|recap|film|series|audio|multi)\b/g, '').trim();
+  if ((m = cleanTitle.match(/\b(\d+)(?:nd|rd|th|st)?$/))) {
+    return parseInt(m[1]);
+  }
+
   return 1;
 }
 
@@ -93,6 +102,11 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   const rSeason = extractSeason(rn);
   const qSeason = extractSeason(qn);
   if (rSeason !== qSeason) return 0;
+
+  // Gate spin-offs, summaries, recaps, previews, side-stories
+  const resultHasRecap = /\b(recap|summary|preview|side\s*story|special|specials)\b/i.test(resultTitle);
+  const queryHasRecap = /\b(recap|summary|preview|side\s*story|special|specials)\b/i.test(queryTitle);
+  if (resultHasRecap && !queryHasRecap) return 0;
 
   // Check if result or query title mentions "movie" or "film"
   const resultHasMovie = /\b(movie|film)\b/i.test(resultTitle) || /\b(movie|film)\b/i.test(rn);
@@ -110,7 +124,7 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   const strip = t => t
     .replace(/\b(season|part|s)\s*\d+\b/gi, '')
     .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
-    .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio)\b/gi, '')
+    .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio|recap|summary|preview|side\s*story)\b/gi, '')
     .trim();
 
   const qWords = strip(qn).split(/\s+/).filter(w => w.length > 1);
@@ -121,7 +135,16 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   const intersection = qWords.filter(w => rWords.includes(w));
   if (intersection.length === 0) return 0;
 
-  return (2 * intersection.length) / (qWords.length + rWords.length);
+  const score = (2 * intersection.length) / (qWords.length + rWords.length);
+
+  // Penalize extra non-metadata words in the result title (gates different shows/spin-offs)
+  const extraWords = rWords.filter(w => !qWords.includes(w));
+  const nonMetaExtra = extraWords.filter(w => !/^(season|part|episode|ep|tv|movie|ova|ona|special|specials|dub|sub|uncensored|uncut|multi|audio)$/i.test(w));
+  if (nonMetaExtra.length > 0) {
+    return Math.max(0, score - 0.25 * nonMetaExtra.length);
+  }
+
+  return score;
 }
 
 function getLongestWord(title) {
@@ -200,30 +223,40 @@ async function awSearch(title, isMovie = false) {
   const strategies = [cleaned, firstThree, firstTwo, longestWord].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
   let results = [];
 
-  for (const keyword of strategies) {
+  const promises = strategies.map(async (keyword) => {
     try {
       const rawText = await clientFetch(`${AW}/ajax/anime/search?keyword=${encodeURIComponent(keyword)}`, {
         headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
         referer: AW,
-        timeout: 20000,
+        timeout: 6000,
       });
       const parsed = JSON.parse(rawText);
-      if (parsed.status === 404 || !parsed.result?.html) continue;
+      if (parsed.status === 404 || !parsed.result?.html) return [];
 
       const html = parsed.result.html;
       const itemRe = /href="\/watch\/([\w%-]+-(\d+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
       let m;
+      const localResults = [];
       while ((m = itemRe.exec(html)) !== null) {
-        results.push({ slug: m[1], animeId: m[2], animeTitle: m[3].trim() });
+        localResults.push({ slug: m[1], animeId: m[2], animeTitle: m[3].trim() });
       }
-      if (results.length === 0) {
+      if (localResults.length === 0) {
         const slugRe = /href="\/watch\/([\w-]+-(\d+))"/g;
         while ((m = slugRe.exec(html)) !== null) {
-          results.push({ slug: m[1], animeId: m[2], animeTitle: m[1].replace(/-\d+$/, '').replace(/-/g, ' ') });
+          localResults.push({ slug: m[1], animeId: m[2], animeTitle: m[1].replace(/-\d+$/, '').replace(/-/g, ' ') });
         }
       }
-      if (results.length) break;
-    } catch {}
+      return localResults;
+    } catch {
+      return [];
+    }
+  });
+
+  const settled = await Promise.allSettled(promises);
+  for (const res of settled) {
+    if (res.status === 'fulfilled' && res.value?.length > 0) {
+      results.push(...res.value);
+    }
   }
 
   if (results.length === 0) throw new Error(`Anime "${title}" not found on AniWaves`);
@@ -247,7 +280,7 @@ async function awGetServers(animeId, episode, slug) {
   const referer = slug ? `${AW}/watch/${slug}` : AW;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': referer },
-    timeout: 20000,
+    timeout: 8000,
   });
   const parsed = JSON.parse(text);
   if (parsed.status !== 200 || !parsed.result) {
@@ -256,17 +289,22 @@ async function awGetServers(animeId, episode, slug) {
 
   const html = parsed.result;
   const servers = [];
-  const sectionRe = /<div class="type" data-type="(sub|dub)">([\s\S]+?)<\/div>/g;
-  let secMatch;
-  while ((secMatch = sectionRe.exec(html)) !== null) {
-    const type = secMatch[1];
-    const listHtml = secMatch[2];
-    const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([^<]+)<\/li>/g;
+  
+  // Robust parsing: split by the start of each type block to avoid fragile regex div nesting issues
+  const sections = html.split(/<div\s+class="type"/i);
+  for (const section of sections) {
+    const typeMatch = section.match(/data-type="(sub|dub)"/i);
+    if (!typeMatch) continue;
+    const type = typeMatch[1].toLowerCase();
+
+    const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([\s\S]+?)<\/li>/g;
     let liMatch;
-    while ((liMatch = liRe.exec(listHtml)) !== null) {
-      servers.push({ type, linkId: liMatch[1], serverName: liMatch[2].trim() });
+    while ((liMatch = liRe.exec(section)) !== null) {
+      const name = liMatch[2].replace(/<[^>]+>/g, '').trim();
+      servers.push({ type, linkId: liMatch[1], serverName: name });
     }
   }
+
   return servers;
 }
 
@@ -274,7 +312,7 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
   const url = `${AW}/ajax/sources?id=${encodeURIComponent(linkId)}&asi=0&autoPlay=0`;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': `${AW}/watch/${watchPageSlug}` },
-    timeout: 4000,
+    timeout: 8000,
   });
   const parsed = JSON.parse(text);
   if (parsed.status !== 200 || !parsed.result?.url) throw new Error(`No embed URL`);
@@ -289,32 +327,27 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   }
   const { slug, animeId, animeTitle } = searchResult;
   const rawServers = await awGetServers(animeId, episode, slug);
-  const subServers = rawServers.filter(s => s.type === 'sub');
-  const dubServers = rawServers.filter(s => s.type === 'dub');
-  const toResolve = [...subServers.slice(0, 2), ...dubServers.slice(0, 2)];
+  // Only take first sub server (HD-1) and first dub server (HD-1)
+  const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 1);
+  const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 1);
+  const toResolve = [...subServers, ...dubServers];
 
   const resolved = await Promise.allSettled(
     toResolve.map(async s => {
       const embedUrl = await awGetEmbedUrl(s.linkId, slug);
-      const host = new URL(embedUrl).hostname;
-      const isSupported = ['play.echovideo.ru', 'megacloud.club', 'megacloud.tv', 'myvidplay.com', 'sb1254w9megshle.org', 'vidplay.online'].some(p => host.includes(p));
-      if (!isSupported) throw new Error('Unsupported provider');
+      // Allow any embed provider through — IframePlayer HLS interceptor handles extraction
       const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
       return { videoUrl, type: s.type, embedUrl, serverName: s.serverName };
     })
   );
 
   const working = resolved.filter(r => r.status === 'fulfilled').map(r => r.value);
-  let subCount = 0, dubCount = 0;
   const servers = [];
   for (const s of working) {
-    const displayName = s.serverName || 'Waves';
     if (s.type === 'sub') {
-      subCount++;
-      servers.push({ name: `Waves ${displayName}`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
+      servers.push({ name: 'WavesHD', videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
     } else if (s.type === 'dub') {
-      dubCount++;
-      servers.push({ name: `Waves ${displayName} (DUB)`, videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
+      servers.push({ name: 'WavesHD (DUB)', videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
     }
   }
   return { servers, animeTitle, slug };
@@ -362,7 +395,10 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
       const score = titleScore(r.title, title, isMovie);
       if (score > maxScore) { maxScore = score; best = r; }
     }
-    if (!best || maxScore < 0.5) throw new Error(`No match on AniNeko`);
+    const threshold = (maxScore >= 0.6 && results.length <= 3) ? 0.6 : 0.75;
+    if (!best || maxScore < threshold) {
+      throw new Error(`No match on AniNeko for "${title}" (score: ${maxScore.toFixed(2)})`);
+    }
 
     nekoSearchCache.set(title, { best, results });
   }
@@ -409,7 +445,7 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
 
   const seen = new Set();
   const servers = [];
-  let subCount = 0, dubCount = 0;
+  let subAdded = false, dubAdded = false;
   for (const s of rawServers) {
     if (seen.has(s.videoUrl)) continue;
     seen.add(s.videoUrl);
@@ -422,15 +458,15 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
 
     const subtitles = subtitleUrl ? [{ id: 0, label: 'English', file: formatSubtitleProxyUrl(subtitleUrl, s.videoUrl) }] : [];
     const proxiedUrl = formatIframeProxyUrl(s.videoUrl, ANINEKO);
-    const displayName = s.serverName || 'Neko';
 
-    if (s.isDub) {
-      dubCount++;
-      servers.push({ name: `Neko ${displayName} (DUB)`, videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles, isHLS: false });
-    } else {
-      subCount++;
-      servers.push({ name: `Neko ${displayName}`, videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
+    if (s.isDub && !dubAdded) {
+      dubAdded = true;
+      servers.push({ name: 'NekoHD (DUB)', videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles, isHLS: false });
+    } else if (!s.isDub && !subAdded) {
+      subAdded = true;
+      servers.push({ name: 'NekoHD', videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
     }
+    // Note: NekoHD names stay as-is — subtitle enrichment uses 'NekoHD' family
   }
 
   return { servers, animeTitle: best.title, slug: best.slug };
@@ -530,7 +566,7 @@ export async function scrapeAnimetsu(title, episode, isMovie = false) {
       const score = titleScore(r.title, title, isMovie);
       if (score > maxScore) { maxScore = score; best = r; }
     }
-    if (!best || maxScore < 0.5) throw new Error(`No match on Animetsu`);
+    if (!best || maxScore < 0.75) throw new Error(`No match on Animetsu (score too low: ${maxScore.toFixed(2)})`);  // Strict threshold prevents wrong-anime matches
 
     animetsuSearchCache.set(title, best);
   }
@@ -566,15 +602,143 @@ export async function scrapeAnimetsu(title, episode, isMovie = false) {
       file: formatSubtitleProxyUrl(sub.url, `${ANIMETSU}/`),
       referer: `${ANIMETSU}/`,
     }));
-    servers.push({ name: 'AniHD1', videoUrl, type: 'sub', embedUrl: rawVideoUrl, referer: `${ANIMETSU}/`, subtitles, isHLS: true });
+    servers.push({ name: 'AniHD', videoUrl, type: 'sub', embedUrl: rawVideoUrl, referer: `${ANIMETSU}/`, subtitles, isHLS: true });
   }
   if (dubResult.status === 'fulfilled' && dubResult.value) {
     const { rawVideoUrl } = dubResult.value;
     const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-    servers.push({ name: 'AniHD1 (DUB)', videoUrl, type: 'dub', embedUrl: rawVideoUrl, subtitles: [], isHLS: true });
+    servers.push({ name: 'AniHD (DUB)', videoUrl, type: 'dub', embedUrl: rawVideoUrl, subtitles: [], isHLS: true });
   }
 
   if (!servers.length) throw new Error(`No sources available from Animetsu for episode ${episode}`);
 
   return { servers, animeTitle: best.title, slug: best.id };
+}
+
+// ── GogoAnime Direct MP4 Scraper ──
+export async function scrapeGogoDirect(title, episode, track = 'sub', isMovie = false) {
+  const domain = 'https://gogoanime3.co';
+  
+  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const searchUrl = `${domain}/search.html?keyword=${encodeURIComponent(cleanTitle)}`;
+  
+  console.log(`[GogoDirect] Searching for: ${cleanTitle}`);
+  let html;
+  try {
+    html = await clientFetch(searchUrl, { referer: domain, timeout: 20000 });
+  } catch (e) {
+    console.warn(`[GogoDirect] Search failed on primary mirror, trying fallback...`);
+    // Fallback mirror if primary is down
+    const fallbackDomain = 'https://anitaku.to';
+    html = await clientFetch(`${fallbackDomain}/search.html?keyword=${encodeURIComponent(cleanTitle)}`, { referer: fallbackDomain, timeout: 20000 });
+  }
+  
+  // Follow JS challenge redirect if needed (mirror protection)
+  const redirectMatch = html.match(/window\.location\.replace\('([^']+)'\)/);
+  if (redirectMatch) {
+    const redirectUrl = redirectMatch[1];
+    console.log(`[GogoDirect] Bypassing JS challenge redirect: ${redirectUrl}`);
+    html = await clientFetch(redirectUrl, { referer: searchUrl, timeout: 20000 });
+  }
+
+  // Parse search results
+  const results = [];
+  const searchRe = /<p class="name">\s*<a href="\/category\/([^"]+)"\s*title="([^"]+)">/g;
+  let m;
+  while ((m = searchRe.exec(html)) !== null) {
+    results.push({ slug: m[1], title: m[2] });
+  }
+
+  if (results.length === 0) {
+    throw new Error('Anime not found on GogoAnime');
+  }
+
+  // Find best match using titleScore
+  let best = results[0];
+  let maxScore = -1;
+  for (const r of results) {
+    const score = titleScore(r.title, title, isMovie);
+    if (score > maxScore) { maxScore = score; best = r; }
+  }
+  if (!best || maxScore < 0.4) {
+    throw new Error('No close match on GogoAnime');
+  }
+
+  console.log(`[GogoDirect] Best match slug: ${best.slug} (Score: ${maxScore})`);
+
+  // 2. Build watch URL
+  let slugToUse = best.slug;
+  if (track === 'dub' && !slugToUse.endsWith('-dub')) {
+    slugToUse = `${slugToUse}-dub`;
+  }
+  
+  const watchUrl = `${domain}/${slugToUse}-episode-${episode}`;
+  console.log(`[GogoDirect] Fetching watch page: ${watchUrl}`);
+  let watchHtml;
+  try {
+    watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 20000 });
+  } catch (e) {
+    if (track === 'dub') {
+      watchHtml = await clientFetch(`${domain}/${best.slug}-episode-${episode}`, { referer: domain, timeout: 20000 });
+    } else {
+      throw e;
+    }
+  }
+
+  // Follow JS challenge redirect for watch page if needed
+  const watchRedirect = watchHtml.match(/window\.location\.replace\('([^']+)'\)/);
+  if (watchRedirect) {
+    watchHtml = await clientFetch(watchRedirect[1], { referer: watchUrl, timeout: 20000 });
+  }
+
+  // 3. Find download page URL
+  const dlMatch = watchHtml.match(/<li class="dowloads">\s*<a href="([^"]+)"/i) || watchHtml.match(/class="download-anime"[\s\S]*?href="([^"]+)"/);
+  let downloadUrl = dlMatch ? dlMatch[1] : null;
+
+  if (!downloadUrl) {
+    const playMatch = watchHtml.match(/data-video="([^"]+)"/);
+    if (playMatch) {
+      let embedUrl = playMatch[1];
+      if (embedUrl.startsWith('//')) embedUrl = 'https:' + embedUrl;
+      downloadUrl = embedUrl.replace('streaming.php', 'download');
+    }
+  }
+
+  if (!downloadUrl) {
+    throw new Error('Direct download page not found on watch page');
+  }
+
+  console.log(`[GogoDirect] Fetching download page: ${downloadUrl}`);
+  let dlPageHtml = await clientFetch(downloadUrl, { referer: watchUrl, timeout: 20000 });
+
+  // 4. Extract direct MP4 download links
+  const directLinks = [];
+  const linkRe = /<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  let m2;
+  while ((m2 = linkRe.exec(dlPageHtml)) !== null) {
+    const href = m2[1];
+    const label = m2[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    
+    const isDirect = href.includes('storage.googleapis.com') || 
+                     href.includes('gogocdn') || 
+                     href.includes('token=') || 
+                     href.endsWith('.mp4') ||
+                     label.toLowerCase().includes('mp4') ||
+                     /1080p|720p|480p|360p/i.test(label);
+                     
+    if (isDirect) {
+      let cleanLabel = label.replace(/Download/i, '').replace(/[\(\)]/g, '').replace(/\s+/g, ' ').trim();
+      if (!cleanLabel) cleanLabel = 'Direct MP4 Link';
+      
+      directLinks.push({
+        name: `Gogo-Direct (${cleanLabel})`,
+        videoUrl: href,
+        referer: downloadUrl,
+        type: track,
+        isHLS: false
+      });
+    }
+  }
+
+  return { servers: directLinks, animeTitle: best.title, slug: best.slug };
 }

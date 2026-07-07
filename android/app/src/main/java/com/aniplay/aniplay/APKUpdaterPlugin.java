@@ -23,6 +23,34 @@ public class APKUpdaterPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void checkInstallPermission(PluginCall call) {
+        JSObject ret = new JSObject();
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            ret.put("granted", getContext().getPackageManager().canRequestPackageInstalls());
+        } else {
+            ret.put("granted", true);
+        }
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void requestInstallPermission(PluginCall call) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                android.content.Intent intent = new android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    android.net.Uri.parse("package:" + getContext().getPackageName())
+                );
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(intent);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
+    }
+
+    @PluginMethod
     public void downloadAndInstall(PluginCall call) {
         String urlString = call.getString("url");
         if (urlString == null) {
@@ -94,17 +122,6 @@ public class APKUpdaterPlugin extends Plugin {
         intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-        
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            if (!context.getPackageManager().canRequestPackageInstalls()) {
-                android.content.Intent settingsIntent = new android.content.Intent(
-                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    android.net.Uri.parse("package:" + context.getPackageName())
-                );
-                settingsIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(settingsIntent);
-            }
-        }
         
         context.startActivity(intent);
     }

@@ -61,10 +61,9 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   const handleScraperResult = (data) => {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
-        // Filter: Only allow AniHD1, Neko HD-1, Neko HD-2, Waves Vidplay
-        const allowedKeywords = ['anihd1', 'neko hd-1', 'neko hd-2', 'waves vidplay', 'vidplay'];
-        const isAllowed = allowedKeywords.some(keyword => s.name.toLowerCase().includes(keyword));
-        if (!isAllowed) return; // skip this server
+        const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
+        const isAllowed = ['AniHD', 'NekoHD', 'WavesHD'].includes(baseName) || baseName.startsWith('Gogo-Direct');
+        if (!isAllowed) return; // skip all other servers
 
         // Prevent duplicate server items
         if (!combinedServers.some(x => x.name === s.name && x.type === s.type)) {
@@ -74,12 +73,13 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // Deduplicate and prioritize servers list: Animetsu -> Neko -> Waves
+      // Deduplicate and prioritize servers list: NekoHD → AniHD → WavesHD → Gogo-Direct
       combinedServers.sort((a, b) => {
         const getPriority = (name) => {
+          if (name.includes('NekoHD')) return 0;
           if (name.includes('AniHD')) return 1;
-          if (name.includes('Neko')) return 2;
-          if (name.includes('Waves')) return 3;
+          if (name.includes('WavesHD')) return 2;
+          if (name.includes('Gogo-Direct')) return 3;
           return 4;
         };
         return getPriority(a.name) - getPriority(b.name);
@@ -180,4 +180,114 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
 export async function checkProxy() {
   // Client-side scraper engine is always ready in Capacitor mobile app!
   return true;
+}
+
+export async function fetchM3U8Playlist(url, referer) {
+  const isCapacitor = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform();
+  if (isCapacitor) {
+    const { CapacitorHttp } = await import('@capacitor/core');
+    const response = await CapacitorHttp.request({
+      url,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        ...(referer ? { 'Referer': referer } : {})
+      }
+    });
+    if (response.status >= 400) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+    return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+  } else {
+    // Dev browser fallback - proxy it if possible, or try direct
+    const PROXY_URL = import.meta.env.VITE_STREAM_PROXY_URL || '';
+    let fetchUrl = url;
+    if (PROXY_URL) {
+      fetchUrl = `${PROXY_URL}?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(referer || '')}`;
+    }
+    const response = await fetch(fetchUrl);
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+    return response.text();
+  }
+}
+
+export function parseMasterPlaylist(playlistUrl, playlistText) {
+  const lines = playlistText.split('\n');
+  const variants = [];
+  
+  let currentInfo = null;
+  const baseUrl = playlistUrl.substring(0, playlistUrl.lastIndexOf('/') + 1);
+  
+  for (let line of lines) {
+    line = line.trim();
+    if (line.startsWith('#EXT-X-STREAM-INF:')) {
+      currentInfo = line;
+    } else if (line && !line.startsWith('#') && currentInfo) {
+      // This is the URL line for the previous stream info
+      let resolution = '';
+      const resMatch = currentInfo.match(/RESOLUTION=(\d+x\d+)/i);
+      if (resMatch) {
+        const res = resMatch[1];
+        if (res.includes('1920x1080')) resolution = '1080p (FHD)';
+        else if (res.includes('1280x720')) resolution = '720p (HD)';
+        else if (res.includes('854x480')) resolution = '480p (SD)';
+        else if (res.includes('640x360')) resolution = '360p (LQ)';
+        else {
+          const height = res.split('x')[1];
+          resolution = `${height}p`;
+        }
+      }
+      
+      // If resolution is not found, try to estimate by bandwidth
+      if (!resolution) {
+        const bwMatch = currentInfo.match(/BANDWIDTH=(\d+)/i);
+        if (bwMatch) {
+          const bw = parseInt(bwMatch[1], 10);
+          if (bw > 2500000) resolution = '1080p (FHD)';
+          else if (bw > 1200000) resolution = '720p (HD)';
+          else if (bw > 600000) resolution = '480p (SD)';
+          else resolution = '360p (LQ)';
+        } else {
+          resolution = 'Auto';
+        }
+      }
+      
+      let resolvedUrl = line;
+      if (!resolvedUrl.startsWith('http://') && !resolvedUrl.startsWith('https://')) {
+        if (resolvedUrl.startsWith('/')) {
+          try {
+            const parsedUrl = new URL(playlistUrl);
+            resolvedUrl = `${parsedUrl.origin}${resolvedUrl}`;
+          } catch {
+            resolvedUrl = `${baseUrl}${resolvedUrl}`;
+          }
+        } else {
+          resolvedUrl = `${baseUrl}${resolvedUrl}`;
+        }
+      }
+      
+      variants.push({
+        label: resolution,
+        url: resolvedUrl
+      });
+      currentInfo = null;
+    }
+  }
+  
+  // Sort variants by quality high to low
+  variants.sort((a, b) => {
+    const getResValue = (lbl) => {
+      if (lbl.includes('1080')) return 1080;
+      if (lbl.includes('720')) return 720;
+      if (lbl.includes('480')) return 480;
+      if (lbl.includes('360')) return 360;
+      const parsed = parseInt(lbl, 10);
+      return isNaN(parsed) ? 0 : parsed;
+    };
+    return getResValue(b.label) - getResValue(a.label);
+  });
+  
+  return variants;
 }

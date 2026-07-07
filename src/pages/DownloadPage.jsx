@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download as DownloadIcon, Trash2, PlayCircle, Smartphone } from 'lucide-react';
+import { Download as DownloadIcon, Trash2, CheckCircle2, Loader } from 'lucide-react';
 import { downloadManager } from '../utils/DownloadManager';
 
 export default function DownloadPage() {
@@ -11,12 +11,6 @@ export default function DownloadPage() {
   const fetchDownloads = async () => {
     try {
       const list = await downloadManager.getDownloadsList();
-      // Sort: Completed downloads first, then by timestamp descending
-      list.sort((a, b) => {
-        if (a.status === 'completed' && b.status !== 'completed') return -1;
-        if (a.status !== 'completed' && b.status === 'completed') return 1;
-        return b.timestamp - a.timestamp;
-      });
       setDownloads(list);
     } catch (e) {
       console.error('[DownloadPage] Error loading downloads:', e);
@@ -28,7 +22,6 @@ export default function DownloadPage() {
   useEffect(() => {
     fetchDownloads();
 
-    // Live update of progress in list if downloads are running
     const unsubscribe = downloadManager.subscribe(() => {
       fetchDownloads();
     });
@@ -37,27 +30,19 @@ export default function DownloadPage() {
   }, []);
 
   const handleDelete = async (animeId, episode, track) => {
-    if (window.confirm(`Delete Episode ${episode} (${(track || 'sub').toUpperCase()})?`)) {
-      try {
-        await downloadManager.deleteDownload(animeId, episode, track || 'sub');
-        fetchDownloads();
-      } catch (e) {
-        console.error('[DownloadPage] Failed to delete download:', e);
-      }
+    try {
+      await downloadManager.deleteDownload(animeId, episode, track || 'sub');
+      fetchDownloads();
+    } catch (e) {
+      console.error('[DownloadPage] Failed to clear download:', e);
     }
-  };
-
-  const formatSize = (bytes) => {
-    if (!bytes) return '0 MB';
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(1)} MB`;
   };
 
   return (
     <div className="page fade-in-up">
       <div style={{ padding: '16px 16px 8px' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--font-brand)', marginBottom: 4 }}>Downloads</h1>
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Manage your offline secure downloads</p>
+        <h1 style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--font-brand)', marginBottom: 4 }}>Download Center</h1>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Track active downloads. Videos are saved directly to your Gallery.</p>
       </div>
 
       {loading ? (
@@ -67,8 +52,8 @@ export default function DownloadPage() {
       ) : downloads.length === 0 ? (
         <div className="empty-state" style={{ paddingTop: 60 }}>
           <DownloadIcon size={50} color="var(--text-muted)" style={{ opacity: 0.3 }} />
-          <p className="empty-title" style={{ marginTop: 16 }}>No Downloads Yet</p>
-          <p className="empty-sub">Tap download on any episode inside details page</p>
+          <p className="empty-title" style={{ marginTop: 16 }}>No Active Downloads</p>
+          <p className="empty-sub">Go to any episode watch details page to download</p>
           <button
             className="btn btn-primary"
             style={{ marginTop: 20 }}
@@ -90,36 +75,40 @@ export default function DownloadPage() {
                 borderRadius: 14, padding: 12, border: '1px solid var(--border)',
                 alignItems: 'center'
               }}>
-                {/* Cover Image */}
-                <img src={item.cover} alt={item.animeTitle} style={{
-                  width: 50, height: 70, borderRadius: 8, objectFit: 'cover',
-                  background: '#222', flexShrink: 0
-                }} />
+                {/* Download indicator icon */}
+                <div style={{
+                  width: 40, height: 40, borderRadius: 10,
+                  background: isCompleted ? 'rgba(76,175,80,0.1)' : 'rgba(229,9,20,0.06)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  {isCompleted ? (
+                    <CheckCircle2 size={22} color="#4caf50" />
+                  ) : (
+                    <Loader size={20} className="spin" color="var(--accent)" />
+                  )}
+                </div>
 
                 {/* Info */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                    {item.animeTitle}
+                    Episode {item.episode} ({(item.track || 'sub').toUpperCase()})
                   </h3>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '4px 0 2px' }}>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                      Episode {item.episode}
-                    </span>
-                    <span style={{
-                      background: 'rgba(99, 102, 241, 0.15)', padding: '2px 6px',
-                      borderRadius: 4, fontSize: 10, fontWeight: 800, color: 'var(--accent)'
-                    }}>
-                      {(item.track || 'sub').toUpperCase()}
-                    </span>
-                  </div>
                   
                   {isCompleted ? (
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                      {formatSize(item.size)} • Completed
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ fontSize: 11, color: '#4caf50', fontWeight: 600 }}>
+                        ✓ Completed • Saved to Gallery
+                      </span>
+                      {item.remuxError && (
+                        <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 500, display: 'block', wordBreak: 'break-word', opacity: 0.8 }}>
+                          ℹ️ Fallback TS ({item.remuxError}) - Use VLC/MX
+                        </span>
+                      )}
+                    </div>
                   ) : item.status === 'error' ? (
-                    <span style={{ fontSize: 11, color: '#e50914', fontWeight: 600 }}>
-                      ⚠️ Error occurred
+                    <span style={{ fontSize: 11, color: '#e50914', fontWeight: 600, display: 'block', wordBreak: 'break-word' }}>
+                      ⚠️ Download failed: {item.error || 'Unknown error'}
                     </span>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
@@ -133,34 +122,17 @@ export default function DownloadPage() {
                   )}
                 </div>
 
-                {/* Action buttons */}
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {isCompleted && (
-                    <button
-                      onClick={() => {
-                        localStorage.setItem('anilab_preferred_track', item.track || 'sub');
-                        navigate(`/anime/${item.animeId}?play=true&ep=${item.episode}`);
-                      }}
-                      style={{
-                        background: 'rgba(229,9,20,0.1)', border: 'none', borderRadius: 10,
-                        width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: 'var(--accent)', cursor: 'pointer'
-                      }}
-                    >
-                      <PlayCircle size={20} fill="var(--accent)" color="#fff" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleDelete(item.animeId, item.episode, item.track)}
-                    style={{
-                      background: 'rgba(255,255,255,0.04)', border: 'none', borderRadius: 10,
-                      width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      color: 'var(--text-secondary)', cursor: 'pointer'
-                    }}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
+                {/* Actions */}
+                <button
+                  onClick={() => handleDelete(item.animeId, item.episode, item.track)}
+                  style={{
+                    background: 'rgba(255,255,255,0.04)', border: 'none', borderRadius: 10,
+                    width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--text-secondary)', cursor: 'pointer'
+                  }}
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             );
           })}

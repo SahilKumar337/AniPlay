@@ -94,36 +94,6 @@ public class MainActivity extends BridgeActivity {
         configureWebView();
     }
 
-    /**
-     * Route the Android hardware back button into the React Router SPA.
-     * We evaluate JS to check history.length and call history.back().
-     * Only if there is nowhere to go back to (history.length <= 1) do we exit the app.
-     */
-    @Override
-    public void onBackPressed() {
-        WebView webView = getBridge().getWebView();
-        if (webView == null) {
-            super.onBackPressed();
-            return;
-        }
-
-        // Evaluate JS: go back if possible, return whether we could
-        webView.evaluateJavascript(
-            "(function() { "
-            + "  if (window.history && window.history.length > 1) { "
-            + "    window.history.back(); "
-            + "    return true; "
-            + "  } "
-            + "  return false; "
-            + "})()",
-            canGoBack -> {
-                if (!"true".equals(canGoBack)) {
-                    // No more history — exit the app
-                    runOnUiThread(() -> super.onBackPressed());
-                }
-            }
-        );
-    }
 
     private void configureWebView() {
         WebView webView = getBridge().getWebView();

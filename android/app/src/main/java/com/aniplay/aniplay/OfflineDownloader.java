@@ -1,7 +1,18 @@
 package com.aniplay.aniplay;
 
+import android.content.ContentValues;
 import android.content.Context;
+import android.media.MediaScannerConnection;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.util.Log;
+
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegKitConfig;
+import com.arthenica.ffmpegkit.ReturnCode;
+
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -9,664 +20,1084 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.Dns;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import org.json.JSONObject;
+import org.json.JSONArray;
+import javax.net.ssl.*;
+import java.security.cert.CertificateException;
+
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.net.URL;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+
+// ─── OfflineDownloader — v2.0 (OkHttp + JS pre-fetch) ───────────────────────
+//
+//  Download flow:
+//    Path A (HLS, JS fetched playlist):
+//       1. JS pre-fetches media playlist (CapacitorHttp, full browser auth)
+//       2. JS calls initDownload → writeSegment(×N) → finalizeDownload
+//          Each segment is base64-encoded binary passed from JS fetch()
+//       3. Java muxes local segments → MP4 → Gallery
+//
+//    Path B (fallback, Java-native HLS download):
+//       1. Java fetches playlist via OkHttp (WebView cookie jar synced)
+//       2. Java downloads segments in parallel (OkHttp, 4 threads)
+//       3. Java muxes local segments → MP4 → Gallery
+//
+//    Path C (direct MP4):
+//       1. OkHttp downloads directly → stream to Gallery
 
 @CapacitorPlugin(name = "OfflineDownloader")
 public class OfflineDownloader extends Plugin {
-    private static final String TAG = "OfflineDownloader";
-    private static final byte[] XOR_KEY = { 0x4e, 0x65, 0x6b, 0x6f, 0x44, 0x6c, 0x6f, 0x61, 0x64 }; // "NekoDload"
-    
-    private ExecutorService downloadExecutor = Executors.newFixedThreadPool(2);
-    private LocalHttpServer httpServer;
-    private Map<String, DownloadTask> activeDownloads = new ConcurrentHashMap<>();
+    private static final String TAG = "AniPlayDL";
+
+    // OkHttp client shared across all downloads — syncs cookies with WebView
+    private OkHttpClient http;
+    private final ExecutorService executor = Executors.newFixedThreadPool(3);
+
+    // JS-driven download state (Path A)
+    private final Map<String, JSDownloadState> jsDLs = new ConcurrentHashMap<>();
+    // Java-driven download tracking (Path B)
+    private final Map<String, JavaDLTask> javaDLs = new ConcurrentHashMap<>();
 
     @Override
     public void load() {
         super.load();
-        httpServer = new LocalHttpServer(8081, getContext());
-        httpServer.start();
-        Log.d(TAG, "OfflineDownloader plugin loaded, HTTP playback server started on port 8081");
+        // Build OkHttp with WebView CookieJar
+        OkHttpClient.Builder builder = new OkHttpClient.Builder()
+            .cookieJar(new CookieJar() {
+                @Override
+                public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+                    android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                    for (Cookie c : cookies) cm.setCookie(url.toString(), c.name() + "=" + c.value());
+                }
+                @Override
+                public List<Cookie> loadForRequest(HttpUrl url) {
+                    android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                    String raw = cm.getCookie(url.toString());
+                    if (raw == null || raw.isEmpty()) return Collections.emptyList();
+                    List<Cookie> list = new ArrayList<>();
+                    for (String pair : raw.split(";")) {
+                        String t = pair.trim();
+                        int eq = t.indexOf('=');
+                        if (eq > 0) {
+                            list.add(new Cookie.Builder()
+                                .name(t.substring(0, eq).trim())
+                                .value(t.substring(eq + 1).trim())
+                                .domain(url.host())
+                                .path("/")
+                                .build());
+                        }
+                    }
+                    return list;
+                }
+            })
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .dns(new Dns() {
+                @Override
+                public List<InetAddress> lookup(String hostname) throws UnknownHostException {
+                    if (hostname.contains("vivibebe") || hostname.contains("anizara") || hostname.contains("anineko") || hostname.contains("ibyteimg")) {
+                        List<InetAddress> ips = resolveDnsOverHttps(hostname);
+                        if (ips != null && !ips.isEmpty()) {
+                            return ips;
+                        }
+                    }
+                    return Dns.SYSTEM.lookup(hostname);
+                }
+            });
+        configureUnsafeSsl(builder);
+        http = builder.build();
+        Log.d(TAG, "OfflineDownloader v2.0 loaded (OkHttp + JS pre-fetch)");
     }
 
+    // ── PLUGIN METHODS ────────────────────────────────────────────────────────
+
+    // Path B: Java-native download (full HLS + fallback for non-JS)
     @PluginMethod
     public void downloadEpisode(PluginCall call) {
-        String animeId = call.getString("animeId");
+        String animeId    = call.getString("animeId");
         String animeTitle = call.getString("animeTitle");
-        String episode = call.getString("episode");
-        String srvUrl = call.getString("url");
-        String referer = call.getString("referer", "");
-        String cover = call.getString("cover", "");
-        String track = call.getString("track", "sub");
-        
-        String subtitlesJson = "";
-        try {
-            JSArray subs = call.getArray("subtitles");
-            if (subs != null) {
-                subtitlesJson = subs.toString();
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error parsing subtitles array", e);
-        }
+        String episode    = call.getString("episode");
+        String url        = call.getString("url");
+        String referer    = call.getString("referer", "");
+        String cover      = call.getString("cover", "");
+        String track      = call.getString("track", "sub");
+        String subsJson   = "";
+        try { JSArray s = call.getArray("subtitles"); if (s != null) subsJson = s.toString(); }
+        catch (Exception ignored) {}
+        String playlistContent = call.getString("playlistContent", "");
+        if (playlistContent == null) playlistContent = "";
 
-        if (animeId == null || episode == null || srvUrl == null) {
-            call.reject("animeId, episode, and url are required");
-            return;
+        if (animeId == null || episode == null || url == null) {
+            call.reject("animeId, episode, and url are required"); return;
         }
-
         String taskId = animeId + "_" + episode + "_" + track;
-        if (activeDownloads.containsKey(taskId)) {
-            call.reject("Download already in progress for this episode");
-            return;
-        }
+        if (javaDLs.containsKey(taskId)) { call.reject("Already downloading"); return; }
 
-        DownloadTask task = new DownloadTask(taskId, animeId, animeTitle, episode, srvUrl, referer, cover, track, subtitlesJson, getContext(), this);
-        activeDownloads.put(taskId, task);
-        downloadExecutor.submit(task);
+        boolean isHls = call.getBoolean("isHls", url.contains(".m3u8"));
+        JavaDLTask task = new JavaDLTask(taskId, animeId, animeTitle, episode, url,
+            referer, cover, track, subsJson, isHls, playlistContent, getContext(), this, http);
+        javaDLs.put(taskId, task);
+        executor.submit(task);
 
-        JSObject ret = new JSObject();
-        ret.put("status", "started");
-        call.resolve(ret);
+        call.resolve(new JSObject().put("status", "started"));
     }
 
+    // Path A: JS-driven segment download — init
     @PluginMethod
-    public void getDownloadsList(PluginCall call) {
-        File downloadsDir = new File(getContext().getFilesDir(), "downloads");
-        JSArray arr = new JSArray();
-        if (downloadsDir.exists() && downloadsDir.isDirectory()) {
-            File[] dirs = downloadsDir.listFiles();
-            if (dirs != null) {
-                for (File dir : dirs) {
-                    if (dir.isDirectory()) {
-                        File metadataFile = new File(dir, "metadata.json");
-                        if (metadataFile.exists()) {
-                            try (BufferedReader reader = new BufferedReader(new FileReader(metadataFile))) {
-                                StringBuilder sb = new StringBuilder();
-                                String line;
-                                while ((line = reader.readLine()) != null) {
-                                    sb.append(line);
-                                }
-                                arr.put(new JSObject(sb.toString()));
-                            } catch (Exception e) {
-                                Log.e(TAG, "Error reading metadata in " + dir.getName(), e);
+    public void initDownload(PluginCall call) {
+        String taskId    = call.getString("taskId", "dl_" + System.currentTimeMillis());
+        String name      = call.getString("outputName", "video.mp4");
+        int    total     = call.getInt("total", 0);
+        boolean isFmp4   = call.getBoolean("isFmp4", false);
+
+        File tempDir = new File(getContext().getCacheDir(), "jsdl_" + Math.abs(taskId.hashCode()));
+        rmrf(tempDir);
+        tempDir.mkdirs();
+
+        JSDownloadState s = new JSDownloadState();
+        s.outputName = name; s.tempDir = tempDir; s.total = total; s.isFmp4 = isFmp4;
+        jsDLs.put(taskId, s);
+        Log.d(TAG, "initDownload taskId=" + taskId + " total=" + total + " fmp4=" + isFmp4);
+        call.resolve();
+    }
+
+    // Path A: JS-driven segment download — write one segment
+    @PluginMethod
+    public void writeSegment(PluginCall call) {
+        String taskId = call.getString("taskId", "");
+        int    index  = call.getInt("index", 0);
+        String data   = call.getString("data", "");
+        String type   = call.getString("type", "ts"); // "ts", "m4s", "init"
+
+        JSDownloadState s = jsDLs.get(taskId);
+        if (s == null) { call.reject("Unknown taskId: " + taskId); return; }
+
+        try {
+            byte[] bytes = android.util.Base64.decode(data, android.util.Base64.NO_WRAP);
+            String fn = index < 0 ? "init.mp4"
+                                  : String.format(java.util.Locale.US, "seg_%06d.%s", index, type);
+            try (FileOutputStream fos = new FileOutputStream(new File(s.tempDir, fn))) {
+                fos.write(bytes);
+            }
+            if (index >= 0) {
+                int done = s.written.incrementAndGet();
+                int prog = Math.min(90, (int)(done * 90L / Math.max(1, s.total)));
+                emit(taskId, prog, "downloading", null);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            Log.e(TAG, "writeSegment error", e);
+            call.reject("Write failed: " + e.getMessage());
+        }
+    }
+
+    // Path A: JS-driven segment download — mux and save
+    @PluginMethod
+    public void finalizeDownload(PluginCall call) {
+        String taskId  = call.getString("taskId", "");
+        boolean isFmp4 = call.getBoolean("isFmp4", false);
+
+        JSDownloadState s = jsDLs.remove(taskId);
+        if (s == null) { call.reject("Unknown taskId: " + taskId); return; }
+        call.resolve();   // Resolve immediately; completion arrives via downloadProgress event
+
+        final JSDownloadState st = s;
+        executor.submit(() -> {
+            try {
+                emit(taskId, 92, "processing", null);
+                File outMp4 = muxConcat(st.tempDir, st.total, isFmp4, taskId);
+                emit(taskId, 97, "processing", null);
+                saveToGallery(outMp4, st.outputName);
+                rmrf(st.tempDir);
+                emit(taskId, 100, "completed", null);
+            } catch (Exception e) {
+                Log.e(TAG, "finalizeDownload error for " + taskId, e);
+                rmrf(st.tempDir);
+                emit(taskId, 0, "error", e.getMessage());
+            }
+        });
+    }
+
+    @PluginMethod public void getDownloadsList(PluginCall call) {
+        call.resolve(new JSObject().put("downloads", new JSArray()));
+    }
+    @PluginMethod public void deleteDownload(PluginCall call) { call.resolve(); }
+
+    @PluginMethod
+    public void openExternalDownloader(PluginCall call) {
+        String url     = call.getString("url");
+        String referer = call.getString("referer", "");
+        String title   = call.getString("title", "Video");
+
+        if (url == null) {
+            call.reject("url is required");
+            return;
+        }
+
+        try {
+            String pkg = call.getString("package", "");
+            android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.parse(url), "video/*");
+            
+            // Pass standard headers for VLC, MX Player, 1DM, ADM, SPlayer, etc.
+            intent.putExtra("title", title);
+            if (pkg != null && !pkg.isEmpty()) {
+                intent.setPackage(pkg);
+            }
+            
+            // Resolve exact WebView User-Agent
+            String ua;
+            try { ua = android.webkit.WebSettings.getDefaultUserAgent(getContext()); }
+            catch (Exception e) { ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"; }
+
+            // Merge cookies from stream URL and referer URL
+            StringBuilder sb = new StringBuilder();
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            String c1 = cm.getCookie(url);
+            String c2 = referer != null && !referer.isEmpty() ? cm.getCookie(referer) : null;
+            if (c1 != null && !c1.isEmpty()) sb.append(c1);
+            if (c2 != null && !c2.isEmpty()) {
+                if (sb.length() > 0) sb.append("; ");
+                sb.append(c2);
+            }
+            String mergedCookies = sb.toString();
+
+            android.os.Bundle headers = new android.os.Bundle();
+            headers.putString("User-Agent", ua);
+            if (referer != null && !referer.isEmpty()) {
+                headers.putString("Referer", referer);
+            }
+            if (!mergedCookies.isEmpty()) {
+                headers.putString("Cookie", mergedCookies);
+            }
+            
+            intent.putExtra("android.media.intent.extra.HTTP_HEADERS", headers);
+            intent.putExtra("headers", headers);
+
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            
+            try {
+                getContext().startActivity(intent);
+                call.resolve();
+            } catch (android.content.ActivityNotFoundException e) {
+                if ("com.hub.splayer".equals(pkg)) {
+                    // SPlayer is not installed, redirect to Google Play Store
+                    android.content.Intent playStoreIntent = new android.content.Intent(
+                        android.content.Intent.ACTION_VIEW, 
+                        Uri.parse("market://details?id=com.hub.splayer")
+                    );
+                    playStoreIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    getContext().startActivity(playStoreIntent);
+                    call.resolve();
+                } else {
+                    call.reject("App not installed: " + pkg);
+                }
+            }
+        } catch (Exception e) {
+            call.reject("Failed to launch external downloader: " + e.getMessage());
+        }
+    }
+
+    // ── SHARED HELPERS ────────────────────────────────────────────────────────
+
+    void emit(String taskId, int progress, String status, String error) {
+        JSObject ev = new JSObject();
+        ev.put("taskId", taskId); ev.put("progress", progress); ev.put("status", status);
+        if (error != null) ev.put("error", error);
+        notifyListeners("downloadProgress", ev);
+    }
+
+    // Mux a set of local segment files → single MP4 using FFmpegKit
+    File muxConcat(File tempDir, int total, boolean isFmp4, String taskId) throws Exception {
+        if (!isFmp4) {
+            // For raw TS segments, append them first into combined.ts to ensure FFmpeg can remux it correctly with valid headers
+            File combinedTs = new File(tempDir, "combined.ts");
+            try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(combinedTs))) {
+                byte[] buffer = new byte[65536];
+                for (int i = 0; i < total; i++) {
+                    File seg = new File(tempDir, String.format(java.util.Locale.US, "seg_%06d.ts", i));
+                    if (seg.exists()) {
+                        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(seg))) {
+                            int read;
+                            while ((read = bis.read(buffer)) != -1) {
+                                bos.write(buffer, 0, read);
                             }
                         }
                     }
                 }
             }
-        }
-        JSObject ret = new JSObject();
-        ret.put("downloads", arr);
-        call.resolve(ret);
-    }
 
-    @PluginMethod
-    public void deleteDownload(PluginCall call) {
-        String animeId = call.getString("animeId");
-        String episode = call.getString("episode");
-        String track = call.getString("track", "sub");
-        if (animeId == null || episode == null) {
-            call.reject("animeId and episode are required");
-            return;
-        }
+            File outMp4 = new File(tempDir, "output.mp4");
+            
+            // Remux the single combined.ts file to output.mp4, writing correct headers and codecs
+            com.arthenica.ffmpegkit.FFmpegSession sess = FFmpegKit.executeWithArguments(new String[]{
+                "-hide_banner", "-loglevel", "error",
+                "-i", combinedTs.getAbsolutePath(),
+                "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart",
+                "-y", outMp4.getAbsolutePath()
+            });
 
-        String taskId = animeId + "_" + episode + "_" + track;
-        File downloadDir = new File(new File(getContext().getFilesDir(), "downloads"), taskId);
-        if (downloadDir.exists()) {
-            deleteRecursive(downloadDir);
-            call.resolve();
-        } else {
-            call.reject("Download not found");
-        }
-    }
-
-    private void deleteRecursive(File fileOrDirectory) {
-        if (fileOrDirectory.isDirectory()) {
-            for (File child : fileOrDirectory.listFiles()) {
-                deleteRecursive(child);
+            if (!ReturnCode.isSuccess(sess.getReturnCode())) {
+                outMp4.delete();
+                sess = FFmpegKit.executeWithArguments(new String[]{
+                    "-hide_banner", "-loglevel", "error",
+                    "-i", combinedTs.getAbsolutePath(),
+                    "-c", "copy", "-movflags", "+faststart",
+                    "-y", outMp4.getAbsolutePath()
+                });
             }
+
+            combinedTs.delete(); // delete temp combined TS file
+
+            if (!ReturnCode.isSuccess(sess.getReturnCode()) || !outMp4.exists() || outMp4.length() < 50_000) {
+                throw new Exception("FFmpeg remux failed (code=" + sess.getReturnCode() + ")");
+            }
+            Log.d(TAG, "Mux success: " + outMp4.length() + " bytes for taskId=" + taskId);
+            return outMp4;
+        } else {
+            // Original concat demuxer for fMP4 files (which already have correct MP4 headers)
+            File concatFile = new File(tempDir, "concat.txt");
+            try (BufferedWriter bw = new BufferedWriter(new FileWriter(concatFile))) {
+                bw.write("ffconcat version 1.0\n");
+                File init = new File(tempDir, "init.mp4");
+                if (init.exists()) bw.write("file '" + init.getAbsolutePath() + "'\n");
+                for (int i = 0; i < total; i++) {
+                    File seg = new File(tempDir, String.format(java.util.Locale.US, "seg_%06d.m4s", i));
+                    if (seg.exists()) bw.write("file '" + seg.getAbsolutePath() + "'\n");
+                }
+            }
+
+            File outMp4 = new File(tempDir, "output.mp4");
+            String[] args = buildMuxArgs(concatFile.getAbsolutePath(), outMp4.getAbsolutePath(), true, true);
+            com.arthenica.ffmpegkit.FFmpegSession sess = FFmpegKit.executeWithArguments(args);
+
+            if (!ReturnCode.isSuccess(sess.getReturnCode())) {
+                outMp4.delete();
+                sess = FFmpegKit.executeWithArguments(
+                    buildMuxArgs(concatFile.getAbsolutePath(), outMp4.getAbsolutePath(), true, false));
+            }
+
+            if (!ReturnCode.isSuccess(sess.getReturnCode()) || !outMp4.exists() || outMp4.length() < 50_000) {
+                throw new Exception("FFmpeg concat failed (code=" + sess.getReturnCode() + ")");
+            }
+            Log.d(TAG, "Mux success: " + outMp4.length() + " bytes for taskId=" + taskId);
+            return outMp4;
         }
-        fileOrDirectory.delete();
     }
 
-    // Helper class representing an HLS/MP4 download task
-    private static class DownloadTask implements Runnable {
-        private String taskId;
-        private String animeId;
-        private String animeTitle;
-        private String episode;
-        private String srvUrl;
-        private String referer;
-        private String cover;
-        private String track;
-        private String subtitlesJson;
-        private String localSubtitlesJson = "[]";
-        private Context context;
-        private OfflineDownloader plugin;
-        private File destDir;
+    private String[] buildMuxArgs(String concatPath, String outPath, boolean isFmp4, boolean withBsf) {
+        List<String> a = new ArrayList<>(Arrays.asList(
+            "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0",
+            "-i", concatPath,
+            "-c", "copy"
+        ));
+        if (withBsf && !isFmp4) { a.add("-bsf:a"); a.add("aac_adtstoasc"); }
+        a.add("-movflags"); a.add("+faststart");
+        a.add("-y"); a.add(outPath);
+        return a.toArray(new String[0]);
+    }
 
-        public DownloadTask(String taskId, String animeId, String animeTitle, String episode, String srvUrl, String referer, String cover, String track, String subtitlesJson, Context context, OfflineDownloader plugin) {
-            this.taskId = taskId;
-            this.animeId = animeId;
-            this.animeTitle = animeTitle;
-            this.episode = episode;
-            this.srvUrl = srvUrl;
-            this.referer = referer;
-            this.cover = cover;
-            this.track = track;
-            this.subtitlesJson = subtitlesJson;
-            this.context = context;
-            this.plugin = plugin;
-            this.destDir = new File(new File(context.getFilesDir(), "downloads"), taskId);
+    void saveToGallery(File src, String name) throws Exception {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+            Uri uri = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) throw new Exception("MediaStore insert null");
+            try (InputStream in  = new BufferedInputStream(new FileInputStream(src));
+                 OutputStream out = getContext().getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new Exception("MediaStore stream null");
+                byte[] buf = new byte[65536]; int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                out.flush();
+            }
+        } else {
+            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AniPlay");
+            dir.mkdirs();
+            File dest = new File(dir, name);
+            try (InputStream in = new FileInputStream(src); OutputStream out = new FileOutputStream(dest)) {
+                byte[] buf = new byte[65536]; int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                out.flush();
+            }
+            MediaScannerConnection.scanFile(getContext(), new String[]{dest.getAbsolutePath()},
+                new String[]{"video/mp4"}, null);
+        }
+    }
+
+    static void rmrf(File f) {
+        if (f == null) return;
+        if (f.isDirectory()) { File[] c = f.listFiles(); if (c != null) for (File k : c) rmrf(k); }
+        f.delete();
+    }
+
+    // ── Inner state classes ───────────────────────────────────────────────────
+
+    private static class JSDownloadState {
+        String outputName; File tempDir; int total; boolean isFmp4;
+        final AtomicInteger written = new AtomicInteger(0);
+    }
+
+    // ── Path B: Java-native HLS download task ─────────────────────────────────
+
+    static class JavaDLTask implements Runnable {
+        final String taskId, animeId, animeTitle, episode, srvUrl, referer, cover, track, subsJson;
+        final boolean isHls;
+        final String playlistContent;
+        final Context ctx;
+        final OfflineDownloader plugin;
+        final OkHttpClient http;
+        final AtomicInteger lastProg = new AtomicInteger(-1);
+
+        JavaDLTask(String taskId, String animeId, String animeTitle, String episode,
+                   String srvUrl, String referer, String cover, String track,
+                   String subsJson, boolean isHls, String playlistContent,
+                   Context ctx, OfflineDownloader plugin, OkHttpClient http) {
+            this.taskId = taskId; this.animeId = animeId; this.animeTitle = animeTitle;
+            this.episode = episode; this.srvUrl = srvUrl; this.referer = referer;
+            this.cover = cover; this.track = track; this.subsJson = subsJson;
+            this.isHls = isHls; this.playlistContent = playlistContent;
+            this.ctx = ctx; this.plugin = plugin; this.http = http;
+        }
+
+        private String getUniqueFileName(String baseName, String extension) {
+            String candidate = baseName + extension;
+            Uri contentUri = extension.endsWith(".mp4") ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI : MediaStore.Files.getContentUri("external");
+            String pathColumn = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ? MediaStore.MediaColumns.RELATIVE_PATH : MediaStore.MediaColumns.DATA;
+            
+            boolean exists = false;
+            try (android.database.Cursor cursor = ctx.getContentResolver().query(
+                contentUri,
+                new String[]{ MediaStore.MediaColumns.DISPLAY_NAME },
+                MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + pathColumn + " LIKE ?",
+                new String[]{ candidate, "%Download/AniPlay%" },
+                null
+            )) {
+                if (cursor != null) exists = cursor.getCount() > 0;
+            } catch (Exception ignored) {}
+            
+            if (!exists) return baseName;
+            
+            int idx = 1;
+            while (true) {
+                candidate = baseName + " (" + idx + ")" + extension;
+                exists = false;
+                try (android.database.Cursor cursor = ctx.getContentResolver().query(
+                    contentUri,
+                    new String[]{ MediaStore.MediaColumns.DISPLAY_NAME },
+                    MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + pathColumn + " LIKE ?",
+                    new String[]{ candidate, "%Download/AniPlay%" },
+                    null
+                )) {
+                    if (cursor != null) exists = cursor.getCount() > 0;
+                } catch (Exception ignored) {}
+                
+                if (!exists) return baseName + " (" + idx + ")";
+                idx++;
+            }
         }
 
         @Override
         public void run() {
-            if (!destDir.exists()) {
-                destDir.mkdirs();
-            }
-
+            String safe = animeTitle.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String base = safe + " - Ep " + episode + " (" + track.toUpperCase() + ")";
+            String uniqueBaseName = getUniqueFileName(base, ".mp4");
+            String fileName = uniqueBaseName + ".mp4";
             try {
-                // Initialize metadata
-                writeMetadata("downloading", 0, 0);
-
-                if (srvUrl.contains(".m3u8")) {
-                    downloadHLS(destDir);
-                } else {
-                    downloadMP4(destDir);
-                }
-
-                // Download subtitle files
-                downloadSubtitles(destDir);
-
-                writeMetadata("completed", 100, getDirSize(destDir));
-                JSObject progressObj = new JSObject();
-                progressObj.put("taskId", taskId);
-                progressObj.put("progress", 100);
-                progressObj.put("status", "completed");
-                plugin.notifyListeners("downloadProgress", progressObj);
+                plugin.emit(taskId, 1, "downloading", null);
+                if (isHls) downloadHLS(fileName);
+                else downloadMP4Direct(fileName);
+                downloadSubtitles(uniqueBaseName);
+                plugin.emit(taskId, 100, "completed", null);
             } catch (Exception e) {
-                Log.e(TAG, "Download failed: " + taskId, e);
-                writeMetadata("error", 0, 0);
-                JSObject errObj = new JSObject();
-                errObj.put("taskId", taskId);
-                errObj.put("error", e.getMessage());
-                plugin.notifyListeners("downloadProgress", errObj);
+                Log.e(TAG, "Download failed for " + taskId, e);
+                plugin.emit(taskId, 0, "error", e.getMessage());
             } finally {
-                plugin.activeDownloads.remove(taskId);
+                plugin.javaDLs.remove(taskId);
             }
         }
 
-        private InputStream getInputStreamWithRedirects(String urlString, String referer) throws Exception {
-            String currentUrl = urlString;
-            int redirectCount = 0;
-            while (redirectCount < 5) {
-                URL url = new URL(currentUrl);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(15000);
-                conn.setReadTimeout(15000);
-                conn.setInstanceFollowRedirects(true);
-                if (!referer.isEmpty()) {
-                    conn.setRequestProperty("Referer", referer);
-                }
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-                
-                int status = conn.getResponseCode();
-                if (status == HttpURLConnection.HTTP_MOVED_TEMP || status == HttpURLConnection.HTTP_MOVED_PERM || status == 307 || status == 308) {
-                    String newUrl = conn.getHeaderField("Location");
-                    if (newUrl != null) {
-                        if (!newUrl.startsWith("http")) {
-                            URL base = new URL(currentUrl);
-                            newUrl = base.getProtocol() + "://" + base.getHost() + newUrl;
-                        }
-                        currentUrl = newUrl;
-                        redirectCount++;
-                        continue;
-                    }
-                }
-                if (status >= 400) {
-                    throw new IOException("Server returned HTTP error code: " + status + " for URL: " + currentUrl);
-                }
-                return conn.getInputStream();
-            }
-            throw new IOException("Too many redirects");
-        }
-
-        private List<String> fetchPlaylistLines(String urlString, String referer) throws Exception {
-            InputStream is = getInputStreamWithRedirects(urlString, referer);
-            BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-            List<String> lines = new ArrayList<>();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
-            }
-            reader.close();
-            is.close();
-            return lines;
-        }
-
-        private void downloadMP4(File destDir) throws Exception {
-            InputStream is = getInputStreamWithRedirects(srvUrl, referer);
-            File outFile = new File(destDir, "video.enc");
-            OutputStream os = new BufferedOutputStream(new FileOutputStream(outFile));
-
-            byte[] data = new byte[8192];
-            long total = 0;
-            int count;
-            int lastProgress = 0;
-            long length = -1;
-            try {
-                URL url = new URL(srvUrl);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                if (!referer.isEmpty()) {
-                    conn.setRequestProperty("Referer", referer);
-                }
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-                conn.setRequestMethod("HEAD");
-                length = conn.getContentLength();
-                conn.disconnect();
-            } catch (Exception e) {}
-
-            while ((count = is.read(data)) != -1) {
-                total += count;
-                for (int i = 0; i < count; i++) {
-                    data[i] = (byte) (data[i] ^ XOR_KEY[(int) ((total - count + i) % XOR_KEY.length)]);
-                }
-                os.write(data, 0, count);
-
-                if (length > 0) {
-                    int progress = (int) (total * 100 / length);
-                    if (progress > lastProgress) {
-                        lastProgress = progress;
-                        writeMetadata("downloading", progress, total);
-                        JSObject progressObj = new JSObject();
-                        progressObj.put("taskId", taskId);
-                        progressObj.put("progress", progress);
-                        progressObj.put("status", "downloading");
-                        plugin.notifyListeners("downloadProgress", progressObj);
-                    }
-                } else {
-                    if (total % (1024 * 1024) == 0) {
-                        writeMetadata("downloading", 50, total);
-                        JSObject progressObj = new JSObject();
-                        progressObj.put("taskId", taskId);
-                        progressObj.put("progress", 50);
-                        progressObj.put("status", "downloading");
-                        plugin.notifyListeners("downloadProgress", progressObj);
-                    }
-                }
-            }
-            os.flush();
-            os.close();
-            is.close();
-        }
-
-        private void downloadHLS(File destDir) throws Exception {
+        private void downloadHLS(String fileName) throws Exception {
             String targetUrl = srvUrl;
-            List<String> lines = fetchPlaylistLines(targetUrl, referer);
-            boolean isMaster = false;
-            String variantUrl = null;
-            
+
+            // Use pre-fetched playlist from JS if available
+            List<String> lines;
+            if (playlistContent != null && playlistContent.length() > 20
+                && (playlistContent.contains("#EXTM3U") || playlistContent.contains("#EXT-X"))) {
+                lines = new ArrayList<>(Arrays.asList(playlistContent.replace("\r\n", "\n").split("\n")));
+                Log.d(TAG, "Using JS pre-fetched playlist (" + lines.size() + " lines)");
+            } else {
+                Log.d(TAG, "Fetching playlist via OkHttp");
+                lines = fetchLines(targetUrl);
+            }
+
+            // Handle master playlist
             for (String l : lines) {
                 if (l.contains("#EXT-X-STREAM-INF")) {
-                    isMaster = true;
-                }
-                if (isMaster && !l.startsWith("#") && !l.trim().isEmpty()) {
-                    variantUrl = l.trim();
+                    String best = pickBestVariant(lines, targetUrl);
+                    if (best != null) { targetUrl = best; lines = fetchLines(best); }
                     break;
                 }
             }
 
-            if (isMaster && variantUrl != null) {
-                Log.d(TAG, "Master playlist detected. Resolving variant: " + variantUrl);
-                if (!variantUrl.startsWith("http")) {
-                    String baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
-                    variantUrl = baseUrl + variantUrl;
-                }
-                targetUrl = variantUrl;
-                lines = fetchPlaylistLines(targetUrl, referer);
-            }
+            // Parse and clean
+            String base = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
+            String rootProto;
+            try { URL u = new URL(targetUrl); rootProto = u.getProtocol() + "://" + u.getHost(); }
+            catch (Exception e) { rootProto = "https://"; }
 
-            List<String> segmentUrls = new ArrayList<>();
-            String baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
-            
-            for (String line : lines) {
-                if (line.trim().endsWith(".ts") || line.contains(".ts?") || (!line.startsWith("#") && !line.trim().isEmpty())) {
-                    String segUrl = line.trim();
-                    if (!segUrl.startsWith("http")) {
-                        if (segUrl.startsWith("/")) {
-                            URL u = new URL(targetUrl);
-                            String host = u.getProtocol() + "://" + u.getHost();
-                            if (u.getPort() != -1) {
-                                host += ":" + u.getPort();
-                            }
-                            segUrl = host + segUrl;
-                        } else {
-                            segUrl = baseUrl + segUrl;
+            List<String> cleanLines = new ArrayList<>();
+            List<String> segUrls   = new ArrayList<>();
+            List<byte[]> segIVs    = new ArrayList<>();
+            double totalDur = 0.0;
+            String initUrl = null; boolean isFmp4 = false;
+            boolean isEnc = false; byte[] curKey = null; byte[] curIV = null;
+            int seqNum = 0; String pendingExtInf = null;
+
+            for (String raw : lines) {
+                String t = raw.trim();
+                if (t.startsWith("#EXT-X-MEDIA-SEQUENCE")) {
+                    try { seqNum = Integer.parseInt(t.split(":")[1].trim()); } catch (Exception ignored) {}
+                    cleanLines.add(t);
+                } else if (t.startsWith("#EXT-X-MAP")) {
+                    isFmp4 = true;
+                    String uri = extractAttr(t, "URI");
+                    if (uri != null) {
+                        uri = uri.replaceAll("^\"|\"$", "");
+                        if (!uri.startsWith("http")) uri = uri.startsWith("/") ? rootProto + uri : base + uri;
+                        initUrl = uri;
+                        t = "#EXT-X-MAP:URI=\"" + uri + "\"";
+                    }
+                    cleanLines.add(t);
+                } else if (t.startsWith("#EXT-X-KEY")) {
+                    String method = extractAttr(t, "METHOD");
+                    if ("AES-128".equalsIgnoreCase(method)) {
+                        isEnc = true;
+                        String uri = extractAttr(t, "URI");
+                        if (uri != null) {
+                            uri = uri.replaceAll("^\"|\"$", "");
+                            if (!uri.startsWith("http")) uri = uri.startsWith("/") ? rootProto + uri : base + uri;
+                            try { curKey = fetchBytes(uri); } catch (Exception ignored) {}
                         }
-                    }
-                    segmentUrls.add(segUrl);
-                }
-            }
-
-            if (segmentUrls.isEmpty()) {
-                throw new Exception("No HLS TS segments found in variant m3u8");
-            }
-
-            File playlistFile = new File(destDir, "index.m3u8");
-            BufferedWriter writer = new BufferedWriter(new FileWriter(playlistFile));
-            int segIndex = 0;
-            for (String l : lines) {
-                if (l.trim().endsWith(".ts") || l.contains(".ts?") || (!l.startsWith("#") && !l.trim().isEmpty())) {
-                    writer.write("segment_" + segIndex + ".ts");
-                    segIndex++;
-                } else {
-                    writer.write(l);
-                }
-                writer.newLine();
-            }
-            writer.flush();
-            writer.close();
-
-            int totalSegs = segmentUrls.size();
-            long totalBytes = 0;
-            for (int i = 0; i < totalSegs; i++) {
-                String segUrl = segmentUrls.get(i);
-                File segFile = new File(destDir, "segment_" + i + ".enc");
-                
-                InputStream sIs = getInputStreamWithRedirects(segUrl, referer);
-                OutputStream sOs = new BufferedOutputStream(new FileOutputStream(segFile));
-
-                byte[] data = new byte[8192];
-                int count;
-                long segOffset = 0;
-                while ((count = sIs.read(data)) != -1) {
-                    for (int j = 0; j < count; j++) {
-                        data[j] = (byte) (data[j] ^ XOR_KEY[(int) ((segOffset + j) % XOR_KEY.length)]);
-                    }
-                    sOs.write(data, 0, count);
-                    segOffset += count;
-                    totalBytes += count;
-                }
-                sOs.flush();
-                sOs.close();
-                sIs.close();
-
-                int progress = (int) ((i + 1) * 100 / totalSegs);
-                writeMetadata("downloading", progress, totalBytes);
-                JSObject progressObj = new JSObject();
-                progressObj.put("taskId", taskId);
-                progressObj.put("progress", progress);
-                progressObj.put("status", "downloading");
-                plugin.notifyListeners("downloadProgress", progressObj);
-            }
-        }
-
-        private void writeMetadata(String status, int progress, long size) {
-            File metaFile = new File(destDir, "metadata.json");
-            try {
-                JSObject json = new JSObject();
-                json.put("taskId", taskId);
-                json.put("animeId", animeId);
-                json.put("animeTitle", animeTitle);
-                json.put("episode", episode);
-                json.put("cover", cover);
-                json.put("status", status);
-                json.put("progress", progress);
-                json.put("size", size);
-                json.put("track", track);
-                try {
-                    json.put("subtitles", new JSArray(localSubtitlesJson));
-                } catch (Exception e) {
-                    json.put("subtitles", new JSArray());
-                }
-                json.put("timestamp", System.currentTimeMillis());
-
-                try (FileWriter fw = new FileWriter(metaFile)) {
-                    fw.write(json.toString());
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error writing metadata", e);
-            }
-        }
-
-        private long getDirSize(File dir) {
-            long size = 0;
-            if (dir.exists() && dir.isDirectory()) {
-                for (File f : dir.listFiles()) {
-                    if (f.isFile()) size += f.length();
-                }
-            }
-            return size;
-        }
-
-        private void downloadSubtitles(File destDir) {
-            if (subtitlesJson == null || subtitlesJson.isEmpty()) return;
-            File subsDir = new File(destDir, "subtitles");
-            if (!subsDir.exists()) {
-                subsDir.mkdirs();
-            }
-
-            try {
-                org.json.JSONArray arr = new org.json.JSONArray(subtitlesJson);
-                org.json.JSONArray localSubs = new org.json.JSONArray();
-
-                for (int i = 0; i < arr.length(); i++) {
-                    org.json.JSONObject sub = arr.getJSONObject(i);
-                    String subUrl = sub.optString("url");
-                    String lang = sub.optString("lang", "Lang_" + i);
-                    
-                    if (subUrl == null || subUrl.isEmpty()) continue;
-
-                    try {
-                        String cleanLang = lang.replaceAll("[^a-zA-Z0-9_-]", "_");
-                        File subFile = new File(subsDir, cleanLang + ".vtt");
+                        String ivStr = extractAttr(t, "IV");
+                        curIV = (ivStr != null && ivStr.startsWith("0x")) ? hex2bytes(ivStr.substring(2)) : null;
                         
-                        URL url = new URL(subUrl);
-                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                        conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-                        conn.connect();
-
-                        InputStream is = new BufferedInputStream(conn.getInputStream());
-                        OutputStream os = new BufferedOutputStream(new FileOutputStream(subFile));
-
-                        byte[] data = new byte[4096];
-                        int count;
-                        while ((count = is.read(data)) != -1) {
-                            os.write(data, 0, count);
+                        // Point to local key.bin file in clean.m3u8
+                        t = "#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"";
+                        if (ivStr != null) {
+                            t += ",IV=" + ivStr;
                         }
-                        os.flush();
-                        os.close();
-                        is.close();
+                    }
+                    cleanLines.add(t);
+                } else if (t.startsWith("#EXTINF:")) {
+                    pendingExtInf = t;
+                } else if (!t.isEmpty() && !t.startsWith("#")) {
+                    String abs = t.startsWith("http") ? t : (t.startsWith("/") ? rootProto + t : base + t);
+                    boolean isAd = abs.contains("/ad/") || abs.contains("adserver") || abs.contains("doubleclick");
+                    if (!isAd) {
+                        if (pendingExtInf != null) {
+                            cleanLines.add(pendingExtInf);
+                            try { totalDur += Double.parseDouble(pendingExtInf.substring(8).split(",")[0].trim()); }
+                            catch (Exception ignored) {}
+                            pendingExtInf = null;
+                        }
+                        cleanLines.add(abs); segUrls.add(abs);
+                        if (isEnc) {
+                            if (curIV != null) { segIVs.add(curIV.clone()); }
+                            else { byte[] iv = new byte[16]; int s = seqNum; for (int b = 15; b >= 0; b--) { iv[b] = (byte)(s & 0xFF); s >>= 8; } segIVs.add(iv); }
+                        }
+                        seqNum++;
+                    } else { pendingExtInf = null; }
+                } else { cleanLines.add(t); }
+            }
 
-                        // Add to local subtitles list
-                        org.json.JSONObject localSub = new org.json.JSONObject();
-                        localSub.put("lang", lang);
-                        localSub.put("url", "http://localhost:8081/play/" + taskId + "/subtitles/" + cleanLang + ".vtt");
-                        localSubs.put(localSub);
+            if (segUrls.isEmpty()) throw new Exception("No video segments found in playlist");
+            final double dur = totalDur > 0 ? totalDur : 1440.0;
+            Log.d(TAG, "Segments: " + segUrls.size() + " fmp4=" + isFmp4 + " enc=" + isEnc);
 
-                        Log.d(TAG, "Downloaded subtitle for lang: " + lang);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Failed to download subtitle: " + subUrl, e);
+            // Temp dir
+            File tempDir = new File(ctx.getCacheDir(), "dl_" + taskId);
+            OfflineDownloader.rmrf(tempDir); tempDir.mkdirs();
+
+            // Stage 2: OkHttp downloads each segment -> FFmpegKit local mux
+            plugin.emit(taskId, 2, "downloading", null);
+            File segDir = new File(tempDir, "segs"); segDir.mkdirs();
+
+            // Init segment (fMP4)
+            if (isFmp4 && initUrl != null) {
+                byte[] initData = fetchBytes(initUrl);
+                try (FileOutputStream fos = new FileOutputStream(new File(segDir, "init.mp4"))) { fos.write(initData); }
+            }
+
+            // Download segments in parallel (2 threads for rate limit protection)
+            int total = segUrls.size();
+            AtomicInteger done = new AtomicInteger(0);
+            AtomicBoolean failed = new AtomicBoolean(false);
+            AtomicReference<Exception> failEx = new AtomicReference<>();
+            final boolean enc = isEnc; final byte[] fKey = curKey; final List<byte[]> fIVs = segIVs;
+
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < total; i++) {
+                final int idx = i;
+                final String segUrl = segUrls.get(i);
+                final byte[] iv = enc && idx < fIVs.size() ? fIVs.get(idx) : null;
+                final File segFile = new File(segDir, String.format(java.util.Locale.US, "seg_%06d.%s", idx, isFmp4 ? "m4s" : "ts"));
+                futures.add(pool.submit(() -> {
+                    if (failed.get()) return;
+                    for (int r = 0; r < 10; r++) {
+                        try {
+                            Request req = buildRequest(segUrl);
+                            try (Response resp = http.newCall(req).execute()) {
+                                if (!resp.isSuccessful() || resp.body() == null) {
+                                    throw new IOException("HTTP " + resp.code() + " for segment " + idx);
+                                }
+                                if (enc && fKey != null && iv != null) {
+                                    byte[] encryptedData = resp.body().bytes();
+                                    byte[] decryptedData = aesDecrypt(encryptedData, fKey, iv);
+                                    try (FileOutputStream fos = new FileOutputStream(segFile)) {
+                                        fos.write(decryptedData);
+                                    }
+                                } else {
+                                    try (InputStream is = resp.body().byteStream();
+                                         FileOutputStream fos = new FileOutputStream(segFile)) {
+                                        java.io.BufferedInputStream bis = new java.io.BufferedInputStream(is);
+                                        bis.mark(1024);
+                                        byte[] header = new byte[8];
+                                        int readHead = bis.read(header);
+                                        boolean isPng = readHead == 8
+                                            && header[0] == (byte) 0x89 && header[1] == (byte) 0x50
+                                            && header[2] == (byte) 0x4e && header[3] == (byte) 0x47
+                                            && header[4] == (byte) 0x0d && header[5] == (byte) 0x0a
+                                            && header[6] == (byte) 0x1a && header[7] == (byte) 0x0a;
+                                        bis.reset();
+                                        if (isPng) {
+                                            int matchIndex = 0;
+                                            byte[] target = new byte[]{ 0x49, 0x45, 0x4e, 0x44 };
+                                            while (true) {
+                                                int b = bis.read();
+                                                if (b == -1) break;
+                                                if (b == (target[matchIndex] & 0xFF)) {
+                                                    matchIndex++;
+                                                    if (matchIndex == 4) {
+                                                        bis.skip(4);
+                                                        break;
+                                                    }
+                                                } else {
+                                                    matchIndex = (b == (target[0] & 0xFF)) ? 1 : 0;
+                                                }
+                                            }
+                                        }
+                                        byte[] buf = new byte[32768];
+                                        int read;
+                                        while ((read = bis.read(buf)) != -1) {
+                                            fos.write(buf, 0, read);
+                                        }
+                                        fos.flush();
+                                    }
+                                }
+                            }
+                            int comp = done.incrementAndGet();
+                            int prog = Math.min(90, (int)(comp * 90L / total));
+                            int last = lastProg.get();
+                            if (prog > last && lastProg.compareAndSet(last, prog)) {
+                                plugin.emit(taskId, prog, "downloading", null);
+                            }
+                            return;
+                        } catch (Exception e) {
+                            Log.w(TAG, "Segment " + idx + " download failed (attempt " + (r + 1) + "/10): " + e.getMessage());
+                            if (r >= 9) { failed.set(true); failEx.set(e); }
+                            else { try { Thread.sleep((r + 1) * 1000); } catch (Exception ignored) {} }
+                        }
+                    }
+                }));
+            }
+            for (Future<?> f : futures) { try { f.get(120, TimeUnit.SECONDS); } catch (Exception e) { failed.set(true); } }
+            pool.shutdown();
+
+            if (failed.get()) {
+                OfflineDownloader.rmrf(tempDir);
+                throw new Exception("Segment download failed: " + (failEx.get() != null ? failEx.get().getMessage() : "unknown"));
+            }
+
+            plugin.emit(taskId, 92, "processing", null);
+            // Move segments into correct location for muxConcat
+            File[] allSegs = segDir.listFiles();
+            if (allSegs != null) for (File f : allSegs) f.renameTo(new File(tempDir, f.getName()));
+
+            File muxed = plugin.muxConcat(tempDir, total, isFmp4, taskId);
+            plugin.emit(taskId, 97, "processing", null);
+            plugin.saveToGallery(muxed, fileName);
+            OfflineDownloader.rmrf(tempDir);
+        }
+
+        private void downloadMP4Direct(String fileName) throws Exception {
+            Request req = buildRequest(srvUrl);
+            try (Response resp = http.newCall(req).execute()) {
+                if (!resp.isSuccessful() || resp.body() == null) throw new IOException("HTTP " + resp.code());
+                InputStream is = resp.body().byteStream();
+                long length = resp.body().contentLength();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+                    cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
+                    cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+                    Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                    if (uri == null) throw new Exception("MediaStore insert null");
+                    try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
+                        if (os == null) throw new Exception("MediaStore stream null");
+                        pipe(is, os, length);
+                    }
+                } else {
+                    File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AniPlay");
+                    dir.mkdirs();
+                    File out = new File(dir, fileName);
+                    try (OutputStream os = new FileOutputStream(out)) { pipe(is, os, length); }
+                    MediaScannerConnection.scanFile(ctx, new String[]{out.getAbsolutePath()}, new String[]{"video/mp4"}, null);
+                }
+            }
+        }
+
+        // ── Helpers ─────────────────────────────────────────────────────────
+
+        private List<String> fetchLines(String urlStr) throws Exception {
+            byte[] body = fetchBytes(urlStr);
+            String text = new String(body, "UTF-8").replace("\uFEFF", "");
+            List<String> ls = new ArrayList<>(Arrays.asList(text.split("\\r?\\n")));
+            if (!ls.isEmpty()) {
+                String first = ls.get(0).trim();
+                if (!first.startsWith("#EXTM3U") && !first.startsWith("#EXT")) {
+                    String preview = first.length() > 80 ? first.substring(0, 80) : first;
+                    throw new IOException("Non-M3U8 response: " + preview);
+                }
+            }
+            Log.d(TAG, "fetchLines " + urlStr + " → " + ls.size() + " lines");
+            return ls;
+        }
+
+        byte[] fetchBytes(String urlStr) throws Exception {
+            Request req = buildRequest(urlStr);
+            try (Response resp = http.newCall(req).execute()) {
+                if (!resp.isSuccessful() || resp.body() == null) throw new IOException("HTTP " + resp.code() + " for " + urlStr);
+                return resp.body().bytes();
+            }
+        }
+
+        private Request buildRequest(String urlStr) {
+            Request.Builder b = new Request.Builder().url(urlStr).get();
+            
+            String ua;
+            try { ua = android.webkit.WebSettings.getDefaultUserAgent(ctx); }
+            catch (Exception e) { ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"; }
+            
+            b.header("User-Agent", ua);
+            b.header("Accept", "*/*");
+            b.header("Accept-Language", "en-US,en;q=0.9");
+            if (!referer.isEmpty()) {
+                b.header("Referer", referer);
+                try { URL ref = new URL(referer); b.header("Origin", ref.getProtocol() + "://" + ref.getHost()); }
+                catch (Exception ignored) {}
+            }
+            
+            // Inject merged cookies manually to guarantee transmission
+            try {
+                StringBuilder sb = new StringBuilder();
+                android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                String c1 = cm.getCookie(urlStr);
+                String c2 = referer.isEmpty() ? null : cm.getCookie(referer);
+                if (c1 != null && !c1.isEmpty()) sb.append(c1);
+                if (c2 != null && !c2.isEmpty()) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(c2);
+                }
+                String cookie = sb.toString();
+                if (!cookie.isEmpty()) {
+                    b.header("Cookie", cookie);
+                }
+            } catch (Exception ignored) {}
+
+            return b.build();
+        }
+
+        private void pipe(InputStream in, OutputStream out, long total) throws IOException {
+            byte[] buf = new byte[65536]; long done = 0; int n; int lastP = 0;
+            while ((n = in.read(buf)) != -1) {
+                out.write(buf, 0, n); done += n;
+                if (total > 0) {
+                    int p = (int)(done * 95L / total);
+                    if (p > lastP) { lastP = p; plugin.emit(taskId, Math.min(p, 95), "downloading", null); }
+                }
+            }
+            out.flush();
+        }
+
+        private String pickBestVariant(List<String> lines, String masterUrl) {
+            String base = masterUrl.substring(0, masterUrl.lastIndexOf("/") + 1);
+            long maxBw = -1; int maxRes = -1; String best = null; String inf = null;
+            for (String l : lines) {
+                l = l.trim();
+                if (l.startsWith("#EXT-X-STREAM-INF")) { inf = l; }
+                else if (!l.isEmpty() && !l.startsWith("#") && inf != null) {
+                    long bw = 0; int rw = 0;
+                    java.util.regex.Matcher m1 = java.util.regex.Pattern.compile("BANDWIDTH=(\\d+)").matcher(inf);
+                    if (m1.find()) bw = Long.parseLong(m1.group(1));
+                    java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("RESOLUTION=(\\d+)x(\\d+)").matcher(inf);
+                    if (m2.find()) rw = Integer.parseInt(m2.group(1));
+                    if (rw > maxRes || (rw == maxRes && bw > maxBw)) { maxRes = rw; maxBw = bw; best = l; }
+                    inf = null;
+                }
+            }
+            if (best == null) return null;
+            if (best.startsWith("http")) return best;
+            try {
+                if (best.startsWith("/")) { URL u = new URL(masterUrl); return u.getProtocol() + "://" + u.getHost() + best; }
+            } catch (Exception ignored) {}
+            return base + best;
+        }
+
+        private String extractAttr(String line, String attr) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                attr + "=(?:\"([^\"]*)\"|'([^']*)'|([^,\\s]+))",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(line);
+            if (m.find()) { for (int g = 1; g <= 3; g++) if (m.group(g) != null) return m.group(g); }
+            return null;
+        }
+
+        private byte[] hex2bytes(String hex) {
+            byte[] d = new byte[hex.length() / 2];
+            for (int i = 0; i < hex.length(); i += 2)
+                d[i/2] = (byte)((Character.digit(hex.charAt(i), 16) << 4) + Character.digit(hex.charAt(i+1), 16));
+            return d;
+        }
+
+        private byte[] aesDecrypt(byte[] data, byte[] key, byte[] iv) throws Exception {
+            javax.crypto.spec.SecretKeySpec ks = new javax.crypto.spec.SecretKeySpec(key, "AES");
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/CBC/NoPadding");
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, ks, new javax.crypto.spec.IvParameterSpec(iv));
+            return cipher.doFinal(data);
+        }
+
+        private void downloadSubtitles(String baseName) {
+            if (subsJson == null || subsJson.isEmpty()) return;
+            String subUrl = null;
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(subsJson);
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject obj = arr.getJSONObject(i);
+                    String lang = obj.optString("lang", "").toLowerCase();
+                    if (lang.isEmpty()) lang = obj.optString("label", "").toLowerCase();
+                    
+                    if (lang.contains("english") || lang.contains("eng") || lang.startsWith("en") || lang.isEmpty()) {
+                        subUrl = obj.optString("url", "");
+                        if (subUrl.isEmpty()) subUrl = obj.optString("file", "");
+                        if (!subUrl.isEmpty()) break;
                     }
                 }
-                
-                this.localSubtitlesJson = localSubs.toString();
+                if (subUrl == null || subUrl.isEmpty()) {
+                    if (arr.length() > 0) {
+                        subUrl = arr.getJSONObject(0).optString("url", "");
+                        if (subUrl.isEmpty()) subUrl = arr.getJSONObject(0).optString("file", "");
+                    }
+                }
+                if (subUrl == null || subUrl.isEmpty()) return;
 
-            } catch (Exception e) {
-                Log.e(TAG, "Error processing subtitles", e);
+                // Resolve protocol relative URLs
+                if (subUrl.startsWith("//")) {
+                    subUrl = "https:" + subUrl;
+                }
+
+                // Resolve proxied subtitle URLs
+                if (subUrl.contains("/api/stream/subtitle?")) {
+                    try {
+                        Uri uri = Uri.parse(subUrl);
+                        String innerUrl = uri.getQueryParameter("url");
+                        if (innerUrl != null && !innerUrl.isEmpty()) {
+                            subUrl = innerUrl;
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                // Fetch subtitles with appropriate headers to bypass CDN block
+                Request.Builder reqBuilder = new Request.Builder()
+                    .url(subUrl)
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
+                    .header("Accept", "*/*");
+                
+                if (referer != null && !referer.isEmpty()) {
+                    reqBuilder.header("Referer", referer);
+                    try {
+                        Uri refUri = Uri.parse(referer);
+                        reqBuilder.header("Origin", refUri.getScheme() + "://" + refUri.getHost());
+                    } catch (Exception ignored) {}
+                }
+
+                Request req = reqBuilder.build();
+                byte[] data;
+                try (Response resp = http.newCall(req).execute()) {
+                    if (!resp.isSuccessful() || resp.body() == null) throw new IOException("HTTP " + resp.code());
+                    data = resp.body().bytes();
+                }
+
+                String subName = baseName + ".vtt";
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        ContentValues cv = new ContentValues();
+                        cv.put(MediaStore.MediaColumns.DISPLAY_NAME, subName);
+                        cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                        cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+                        Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                        if (uri != null) {
+                            try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
+                                if (os != null) { os.write(data); os.flush(); }
+                            }
+                        } else {
+                            writeSubtitleFallback(subName, data);
+                        }
+                    } catch (Exception ex) {
+                        Log.w(TAG, "MediaStore subtitle write failed, trying fallback: " + ex.getMessage());
+                        writeSubtitleFallback(subName, data);
+                    }
+                } else {
+                    writeSubtitleFallback(subName, data);
+                }
+            } catch (Exception e) { 
+                Log.e(TAG, "Subtitle download failed", e);
+                try {
+                    StringWriter sw = new StringWriter();
+                    e.printStackTrace(new PrintWriter(sw));
+                    plugin.writeDiagLog("Subtitle download failed for " + baseName + " / " + subUrl + "\n\nStacktrace:\n" + sw.toString());
+                } catch (Exception ignored) {}
+            }
+        }
+
+        private void writeSubtitleFallback(String subName, byte[] data) throws Exception {
+            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "AniPlay");
+            dir.mkdirs();
+            File out = new File(dir, subName);
+            try (FileOutputStream fos = new FileOutputStream(out)) { 
+                fos.write(data); 
+                fos.flush();
             }
         }
     }
 
-    // Lightweight ServerSocket-based HTTP Server for seekable decryption playback streaming
-    private static class LocalHttpServer implements Runnable {
-        private int port;
-        private Context context;
-        private ServerSocket serverSocket;
-        private boolean running = false;
+    private List<InetAddress> resolveDnsOverHttps(String hostname) {
+        try {
+            OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(5, TimeUnit.SECONDS);
+            configureUnsafeSsl(builder);
+            OkHttpClient client = builder.build();
 
-        public LocalHttpServer(int port, Context context) {
-            this.port = port;
-            this.context = context;
-        }
+            String[] providers = {
+                "https://cloudflare-dns.com/dns-query?name=" + hostname + "&type=A",
+                "https://dns.google/resolve?name=" + hostname + "&type=A",
+                "https://1.1.1.1/dns-query?name=" + hostname + "&type=A",
+                "https://8.8.8.8/resolve?name=" + hostname + "&type=A"
+            };
 
-        public void start() {
-            if (running) return;
-            running = true;
-            new Thread(this).start();
-        }
-
-        @Override
-        public void run() {
-            try {
-                serverSocket = new ServerSocket(port);
-                while (running) {
-                    Socket socket = serverSocket.accept();
-                    new Thread(() -> handleRequest(socket)).start();
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Server socket error", e);
-            }
-        }
-
-        private void handleRequest(Socket socket) {
-            try {
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String requestLine = in.readLine();
-                if (requestLine == null) return;
-
-                String[] tokens = requestLine.split(" ");
-                if (tokens.length < 2) return;
-                String path = tokens[1];
-
-                // Parse headers to locate Range requests
-                String rangeHeader = "";
-                String line;
-                while ((line = in.readLine()) != null && !line.trim().isEmpty()) {
-                    if (line.toLowerCase().startsWith("range:")) {
-                        rangeHeader = line.substring(6).trim();
-                    }
-                }
-
-                // Resolve target file
-                // Path format: /play/animeId_episode/index.m3u8 or /play/animeId_episode/segment_X.ts or /play/animeId_episode/video.mp4
-                if (!path.startsWith("/play/")) {
-                    sendError(socket, 404, "Not Found");
-                    return;
-                }
-
-                String relativePath = path.substring(6);
-                int slashIdx = relativePath.indexOf("/");
-                if (slashIdx == -1) {
-                    sendError(socket, 400, "Bad Request");
-                    return;
-                }
-
-                String taskId = relativePath.substring(0, slashIdx);
-                String subPath = relativePath.substring(slashIdx + 1);
-                File downloadDir = new File(new File(context.getFilesDir(), "downloads"), taskId);
-                
-                if (subPath.equals("index.m3u8")) {
-                    File file = new File(downloadDir, "index.m3u8");
-                    sendFile(socket, file, "application/vnd.apple.mpegurl", false, 0, -1);
-                } else if (subPath.startsWith("segment_")) {
-                    String encFileName = subPath.replace(".ts", ".enc");
-                    File file = new File(downloadDir, encFileName);
-                    sendFile(socket, file, "video/mp2t", true, 0, -1);
-                } else if (subPath.equals("video.mp4")) {
-                    File file = new File(downloadDir, "video.enc");
-                    
-                    // Parse Byte Range seeks
-                    long startByte = 0;
-                    long endByte = -1;
-                    if (!rangeHeader.isEmpty() && rangeHeader.startsWith("bytes=")) {
-                        String[] rangeParts = rangeHeader.substring(6).split("-");
-                        startByte = Long.parseLong(rangeParts[0]);
-                        if (rangeParts.length > 1 && !rangeParts[1].isEmpty()) {
-                            endByte = Long.parseLong(rangeParts[1]);
-                        }
-                    }
-                    sendFile(socket, file, "video/mp4", true, startByte, endByte);
-                } else if (subPath.startsWith("subtitles/")) {
-                    File file = new File(downloadDir, subPath);
-                    sendFile(socket, file, "text/vtt", false, 0, -1);
-                } else {
-                    sendError(socket, 404, "Not Found");
-                }
-
-            } catch (Exception e) {
-                Log.e(TAG, "Request handling error", e);
-            } finally {
+            for (String url : providers) {
                 try {
-                    socket.close();
-                } catch (Exception e) {}
-            }
-        }
+                    Request req = new Request.Builder()
+                        .url(url)
+                        .header("Accept", "application/dns-json")
+                        .build();
 
-        private void sendFile(Socket socket, File file, String contentType, boolean decrypt, long startByte, long endByte) throws IOException {
-            if (!file.exists()) {
-                sendError(socket, 404, "Not Found");
-                return;
-            }
-
-            long fileLength = file.length();
-            if (endByte == -1 || endByte >= fileLength) {
-                endByte = fileLength - 1;
-            }
-            long contentLength = endByte - startByte + 1;
-
-            OutputStream out = socket.getOutputStream();
-            
-            // Write HTTP headers
-            if (startByte > 0 || endByte < fileLength - 1) {
-                out.write("HTTP/1.1 206 Partial Content\r\n".getBytes());
-                out.write(("Content-Range: bytes " + startByte + "-" + endByte + "/" + fileLength + "\r\n").getBytes());
-            } else {
-                out.write("HTTP/1.1 200 OK\r\n".getBytes());
-            }
-            out.write(("Content-Type: " + contentType + "\r\n").getBytes());
-            out.write(("Content-Length: " + contentLength + "\r\n").getBytes());
-            out.write("Access-Control-Allow-Origin: *\r\n".getBytes());
-            out.write("Connection: close\r\n\r\n".getBytes());
-
-            // Decrypt and stream requested chunks
-            try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
-                raf.seek(startByte);
-                byte[] buffer = new byte[8192];
-                long remaining = contentLength;
-
-                while (remaining > 0) {
-                    int toRead = (int) Math.min(buffer.length, remaining);
-                    int read = raf.read(buffer, 0, toRead);
-                    if (read == -1) break;
-
-                    if (decrypt) {
-                        for (int i = 0; i < read; i++) {
-                            long absoluteOffset = startByte + (contentLength - remaining) + i;
-                            buffer[i] = (byte) (buffer[i] ^ XOR_KEY[(int) (absoluteOffset % XOR_KEY.length)]);
+                    try (Response resp = client.newCall(req).execute()) {
+                        if (resp.isSuccessful() && resp.body() != null) {
+                            String body = resp.body().string();
+                            JSONObject json = new JSONObject(body);
+                            if (json.has("Answer")) {
+                                JSONArray answer = json.getJSONArray("Answer");
+                                List<InetAddress> addresses = new ArrayList<>();
+                                for (int i = 0; i < answer.length(); i++) {
+                                    JSONObject ans = answer.getJSONObject(i);
+                                    if (ans.has("type") && ans.getInt("type") == 1) {
+                                        String ip = ans.getString("data");
+                                        addresses.add(InetAddress.getByName(ip));
+                                    }
+                                }
+                                if (!addresses.isEmpty()) {
+                                    Log.d("AniPlayDL", "DoH resolved " + hostname + " to " + addresses + " via " + url);
+                                    return addresses;
+                                }
+                            }
                         }
                     }
-                    out.write(buffer, 0, read);
-                    remaining -= read;
+                } catch (Exception e) {
+                    Log.w("AniPlayDL", "DoH query failed for provider: " + url + " - " + e.getMessage());
                 }
             }
-            out.flush();
+        } catch (Exception e) {
+            Log.e("AniPlayDL", "DoH resolution failed", e);
         }
+        return null;
+    }
 
-        private void sendError(Socket socket, int code, String msg) throws IOException {
-            OutputStream out = socket.getOutputStream();
-            out.write(("HTTP/1.1 " + code + " " + msg + "\r\n").getBytes());
-            out.write("Content-Type: text/plain\r\n".getBytes());
-            out.write("Content-Length: 0\r\n\r\n".getBytes());
-            out.flush();
+    void writeDiagLog(String content) {
+        try {
+            String logName = "aniplay_diag_" + System.currentTimeMillis() + ".txt";
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, logName);
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+                Uri uri = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri != null) {
+                    try (OutputStream os = getContext().getContentResolver().openOutputStream(uri)) {
+                        if (os != null) os.write(content.getBytes("UTF-8"));
+                    }
+                }
+            } else {
+                File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AniPlay");
+                dir.mkdirs();
+                File out = new File(dir, logName);
+                try (FileOutputStream fos = new FileOutputStream(out)) {
+                    fos.write(content.getBytes("UTF-8"));
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static void configureUnsafeSsl(OkHttpClient.Builder builder) {
+        try {
+            final TrustManager[] trustAllCerts = new TrustManager[] {
+                new X509TrustManager() {
+                    @Override
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) throws java.security.cert.CertificateException {}
+                    @Override
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) throws java.security.cert.CertificateException {}
+                    @Override
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return new java.security.cert.X509Certificate[]{};
+                    }
+                }
+            };
+
+            final SSLContext sslContext = SSLContext.getInstance("SSL");
+            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+            final SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
+
+            builder.sslSocketFactory(sslSocketFactory, (X509TrustManager)trustAllCerts[0]);
+            builder.hostnameVerifier((hostname, session) -> true);
+        } catch (Exception e) {
+            Log.e("AniPlayDL", "Failed to configure unsafe SSL", e);
         }
     }
 }
