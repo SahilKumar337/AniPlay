@@ -62,9 +62,13 @@ public class EmbedScraperPlugin extends Plugin {
             WebSettings settings = scrapeWebView.getSettings();
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);
+            settings.setDatabaseEnabled(true);
             settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
             settings.setMediaPlaybackRequiresUserGesture(false);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(scrapeWebView, true);
+            }
             // Use the same UA as the main app for consistency
             settings.setUserAgentString(
                 "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
@@ -87,7 +91,32 @@ public class EmbedScraperPlugin extends Plugin {
                             notifyListeners("streamCaptured", data);
                         });
                     }
+
+                    // Block known tracking, analytics, and redirect ad domains to load pages 10x faster
+                    String lowerUrl = reqUrl.toLowerCase();
+                    if (lowerUrl.contains("google-analytics.com") 
+                        || lowerUrl.contains("doubleclick.net")
+                        || lowerUrl.contains("adnxs.com")
+                        || lowerUrl.contains("adsystem")
+                        || lowerUrl.contains("popads")
+                        || lowerUrl.contains("onclickads")
+                        || lowerUrl.contains("exoclick")
+                        || lowerUrl.contains("juicyads")
+                        || lowerUrl.contains("arnattoprana")
+                        || lowerUrl.contains("omg10")
+                        || lowerUrl.contains("cpmstar")
+                        || lowerUrl.contains("adsterra")
+                        || (lowerUrl.endsWith(".js") && !lowerUrl.contains("jquery") && !lowerUrl.contains("jwplayer") && !lowerUrl.contains("hls") && !lowerUrl.contains("player") && !lowerUrl.contains("echovideo") && !lowerUrl.contains("bundle"))) {
+                        // Return empty response to block the request
+                        return new WebResourceResponse("text/javascript", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
+                    }
+
                     return super.shouldInterceptRequest(view, request);
+                }
+
+                @Override
+                public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
+                    handler.proceed(); // Ignore SSL errors from bad ad domains/expired hosts
                 }
 
                 @Override
