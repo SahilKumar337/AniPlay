@@ -1,7 +1,7 @@
 {
   "latestVersion": "1.4",
   "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4-test/bundle.zip",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4-test/AniPlay.apk",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4-test/app-release.apk",
   "changelog": "Fixed back-button infinite loop, clean app updates (no duplicate icons), AniHD downloads enabled.",
   "forceUpdate": false,
   "domains": {
