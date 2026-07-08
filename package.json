@@ -24,6 +24,7 @@
     "@capacitor/status-bar": "^8.0.2",
     "@capgo/capacitor-updater": "^8.50.2",
     "@consumet/extensions": "^1.8.8",
+    "@supabase/supabase-js": "^2.110.1",
     "axios": "^1.18.1",
     "better-sqlite3": "^12.11.1",
     "got-scraping": "^4.2.1",

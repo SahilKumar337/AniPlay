@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { User, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock, Save, Check, X, AlertTriangle } from 'lucide-react';
+import { User, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock, Save, Check, X, AlertTriangle, Cloud, CloudLightning } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
+import AuthModal from '../components/AuthModal';
+import { cloudSignOut } from '../api/supabase';
 
 const APKUpdater = registerPlugin('APKUpdater');
 
@@ -41,13 +43,15 @@ function Modal({ title, children, onClose }) {
 
 
 export default function Profile() {
-  const { watchlist, favorites, progress } = useApp();
+  const { watchlist, favorites, progress, user, syncWithCloud } = useApp();
   const navigate = useNavigate();
 
   const [showSettings,  setShowSettings]  = useState(false);
   const [showAbout,     setShowAbout]     = useState(false);
   const [showPrivacy,   setShowPrivacy]   = useState(false);
   const [showSignOut,   setShowSignOut]   = useState(false);
+  const [showCloudLogOut, setShowCloudLogOut] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [cookieVal,     setCookieVal]     = useState('');
   const [saveStatus,    setSaveStatus]    = useState(''); // '', 'saving', 'saved', 'error'
   const [appVersion,    setAppVersion]    = useState('1.0.0');
@@ -125,11 +129,22 @@ export default function Profile() {
     window.location.reload();
   };
 
+  const handleCloudLogOut = async () => {
+    try {
+      await cloudSignOut();
+      setShowCloudLogOut(false);
+      window.location.reload();
+    } catch (e) {
+      alert(e.message || 'Failed to log out of cloud');
+    }
+  };
+
   const MENU_ITEMS = [
     { icon: Info,   label: 'About AniPlay',   action: () => setShowAbout(true)   },
     { icon: Shield, label: 'Privacy Policy',  action: () => setShowPrivacy(true) },
-    { icon: LogOut, label: 'Sign Out',        action: () => setShowSignOut(true), color: 'var(--accent)' },
-  ];
+    user ? { icon: CloudLightning, label: 'Log Out from Cloud', action: () => setShowCloudLogOut(true), color: '#38bdf8' } : null,
+    { icon: LogOut, label: 'Clear Cache & Reset', action: () => setShowSignOut(true), color: 'var(--accent)' },
+  ].filter(Boolean);
 
   if (showSettings) {
     return (
@@ -212,20 +227,77 @@ export default function Profile() {
     <div className="page fade-in-up">
       <div style={{ padding: '24px 16px 16px' }}>
         {/* Avatar + Name */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, marginBottom: 28 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, marginBottom: 20 }}>
           <div style={{
             width: 80, height: 80, borderRadius: '50%',
-            background: 'linear-gradient(135deg, var(--accent), #ff6b35)',
+            background: user ? 'linear-gradient(135deg, #38bdf8, #818cf8)' : 'linear-gradient(135deg, var(--accent), #ff6b35)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             border: '3px solid var(--border)',
+            fontWeight: 800, fontSize: 32, color: '#fff', fontFamily: 'var(--font-brand)'
           }}>
-            <User size={36} color="#fff" />
+            {user ? (user.user_metadata?.nickname || user.email).charAt(0).toUpperCase() : <User size={36} color="#fff" />}
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-brand)' }}>Anime Fan</div>
-            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>AniPlay Member</div>
+            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-brand)' }}>
+              {user ? (user.user_metadata?.nickname || user.email.split('@')[0]) : (localStorage.getItem('user_nickname') || 'Anime Fan')}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>
+              {user ? 'Cloud Backed Member' : 'Local Offline Guest'}
+            </div>
           </div>
         </div>
+
+        {/* Cloud Sync Callout Banner */}
+        {!user ? (
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border)',
+            borderRadius: 16, padding: '16px 20px', marginBottom: 28, textAlign: 'center',
+            backdropFilter: 'blur(8px)'
+          }}>
+            <h4 style={{ margin: '0 0 6px 0', fontSize: 13, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <Cloud size={16} color="var(--accent)" />
+              Backup & Sync Account
+            </h4>
+            <p style={{ margin: '0 0 14px 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+              Recover your watchlist, progress, and settings if you change or lose your device!
+            </p>
+            <button
+              onClick={() => setShowAuthModal(true)}
+              style={{
+                background: 'var(--accent)', color: '#fff', border: 'none',
+                borderRadius: 10, padding: '8px 16px', fontSize: 12, fontWeight: 700,
+                cursor: 'pointer', transition: 'all 0.2s', width: '100%'
+              }}
+            >
+              Sign Up / Log In
+            </button>
+          </div>
+        ) : (
+          <div style={{
+            background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)',
+            borderRadius: 16, padding: '12px 16px', marginBottom: 28,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            backdropFilter: 'blur(8px)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Cloud size={16} color="#38bdf8" />
+              <div style={{ textAlign: 'left' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#fff', display: 'block' }}>Permanent Cloud Storage</span>
+                <span style={{ fontSize: 10, color: '#38bdf8' }}>Synced as {user.email}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => syncWithCloud()}
+              style={{
+                background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.2)',
+                borderRadius: 8, padding: '4px 10px', fontSize: 11, color: '#38bdf8',
+                fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s'
+              }}
+            >
+              Sync Now
+            </button>
+          </div>
+        )}
 
         {/* Stats */}
         <div style={{
@@ -356,6 +428,35 @@ export default function Profile() {
           </div>
         </Modal>
       )}
+
+      {/* ── Cloud Log Out confirmation ────────────────────────────── */}
+      {showCloudLogOut && (
+        <Modal title="Log Out from Cloud" onClose={() => setShowCloudLogOut(false)}>
+          <div style={{ textAlign: 'center', padding: '8px 0 16px' }}>
+            <Cloud size={40} color="#38bdf8" style={{ marginBottom: 12 }} />
+            <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: 20 }}>
+              Are you sure you want to log out of your cloud account? Your local data will remain safe.
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => setShowCloudLogOut(false)}
+                style={{ flex: 1, padding: '12px 0', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCloudLogOut}
+                style={{ flex: 1, padding: '12px 0', borderRadius: 10, border: 'none', background: '#38bdf8', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
+              >
+                Log Out
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Supabase Auth Modal ────────────────────────────────────── */}
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </div>
   );
 }

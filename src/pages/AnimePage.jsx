@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
+import { fetchCloudComments, postCloudComment, updateUserNickname } from '../api/supabase';
 import AnimeCard from '../components/AnimeCard';
 import { getAniNekoServers, getCachedServers, checkProxy, fetchM3U8Playlist, parseMasterPlaylist } from '../api/stream';
 import AniPlayer   from '../components/AniPlayer';
@@ -215,12 +216,8 @@ export default function AnimePage() {
     if (!anime) return;
     setCommentsLoading(true);
     try {
-      const res = await fetch(`${COMMENTS_API_BASE}/api/comments?animeId=${encodeURIComponent(animeId)}&episode=${episodeNumber}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data?.ok && data?.comments) {
-        setComments(data.comments);
-      }
+      const data = await fetchCloudComments(animeId, episodeNumber);
+      setComments(data);
     } catch (e) {
       console.warn('[Comments Fetch Error]', e.message);
     } finally {
@@ -234,20 +231,7 @@ export default function AnimePage() {
     
     setSubmittingComment(true);
     try {
-      const res = await fetch(`${COMMENTS_API_BASE}/api/comments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          animeId,
-          episode: episodeNumber,
-          username: username.trim() || 'Anonymous',
-          content: newComment.trim()
-        })
-      });
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData?.error || `HTTP ${res.status}`);
-      }
+      await postCloudComment(animeId, episodeNumber, username.trim() || 'Anonymous', newComment.trim());
       setNewComment('');
       await fetchComments();
     } catch (e) {
@@ -257,12 +241,18 @@ export default function AnimePage() {
     }
   };
 
-  const handleSaveNickname = () => {
+  const handleSaveNickname = async () => {
     if (!nicknameInput.trim()) return;
     const clean = nicknameInput.trim().slice(0, 25);
     setUsername(clean);
     localStorage.setItem('user_nickname', clean);
     setEditingNickname(false);
+
+    try {
+      await updateUserNickname(clean);
+    } catch (e) {
+      console.warn('[Supabase Profile Sync Error]', e.message);
+    }
   };
 
   const toggleLikeComment = (commentId) => {
