@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.3.194",
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.3.194/bundle.zip",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.3.194/AniPlay.apk",
-  "changelog": "Beta Update: Bounded solid black system bars, static top navigation animations, and native APK updater module.",
+  "latestVersion": "1.4",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4-test/bundle.zip",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4-test/AniPlay.apk",
+  "changelog": "[TEST BUILD] Fixed back-button infinite loop, AniHD downloads enabled, clean app updates.",
   "forceUpdate": false,
   "domains": {
     "neko": "https://anineko.to",

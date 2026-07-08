@@ -1,0 +1,16 @@
+{
+  "short_name": "AniLab",
+  "name": "AniLab - Watch Anime Online",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0f0f0f",
+  "theme_color": "#e50914",
+  "display": "standalone",
+  "orientation": "any"
+}

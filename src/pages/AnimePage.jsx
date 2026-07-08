@@ -22,9 +22,8 @@ const isDownloadable = (srv) => {
   const name = (srv.name || '').toLowerCase();
   const url = (srv.embedUrl || srv.videoUrl || '').toLowerCase();
   
-  // Exclude swiftstream.top / AniHD (Animetsu HLS)
+  // Exclude swiftstream.top (proxy-only HLS — not directly downloadable)
   if (url.includes('swiftstream.top')) return false;
-  if (name.includes('anihd')) return false;
   
   // Exclude WavesHD
   if (name.includes('waveshd') || name.includes('waves')) return false;
@@ -32,9 +31,10 @@ const isDownloadable = (srv) => {
   // Exclude Gogo-Direct
   if (name.includes('gogo-direct')) return false;
 
-  // Only allow NekoHD (served by vivibebe.site / anizara.store)
+  // Allow NekoHD and AniHD
   const isNeko = name.includes('nekohd') || name.includes('neko');
-  if (!isNeko) return false;
+  const isAniHD = name.includes('anihd');
+  if (!isNeko && !isAniHD) return false;
 
   // For SUB, it must have English subtitles
   if (srv.type === 'sub') {
@@ -43,6 +43,7 @@ const isDownloadable = (srv) => {
   
   return true;
 };
+
 
 const enrichDubSubtitles = (list) => {
   if (!list || !list.length) return list;
@@ -961,7 +962,7 @@ export default function AnimePage() {
               className="btn btn-primary"
               id={`play-${anime.id}`}
               style={{ flex: 1, justifyContent: 'center', padding: '13px', fontSize: 15, fontWeight: 700, borderRadius: 10 }}
-              onClick={() => setSearchParams({ play: 'true', ep: String(resumeEp) })}
+              onClick={() => setSearchParams({ play: 'true', ep: String(resumeEp) }, { replace: true })}
             >
               <Play size={17} fill="#fff" />
               {prog && resumeEp > 0 ? `Resume Ep ${resumeEp}` : 'Play'}
@@ -1303,19 +1304,19 @@ export default function AnimePage() {
                 embedUrl={activeServer?.embedUrl}
                 subtitles={activeServer?.subtitles || []}
                 extraSubtitles={allSubtitleTracks}
-                onBack={() => setSearchParams({})}
+                onBack={() => navigate(-1)}
                 onFullscreenChange={setFsActive}
                 currentEpisode={epParam}
                 totalEpisodes={totalEps}
                 onEpisodeChange={(newEp) => {
-                  setSearchParams({ play: 'true', ep: String(newEp) });
+                  setSearchParams({ play: 'true', ep: String(newEp) }, { replace: true });
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
               />
             ) : (
               <IframePlayer
                 src={activeUrl}
-                onBack={() => setSearchParams({})}
+                onBack={() => navigate(-1)}
                 onStreamCaptured={(m3u8Url, ref) => {
                   if (m3u8Url) {
                     setActiveUrl(m3u8Url);
@@ -1337,7 +1338,7 @@ export default function AnimePage() {
             background: 'rgba(255,255,255,0.01)'
           }}>
             <button
-              onClick={() => setSearchParams({})}
+              onClick={() => navigate(-1)}
               className="floating-btn"
               style={{ width: 32, height: 32 }}
             >
@@ -1438,7 +1439,7 @@ export default function AnimePage() {
                   <div
                     key={n}
                     onClick={() => {
-                      setSearchParams({ play: 'true', ep: String(n) });
+                      setSearchParams({ play: 'true', ep: String(n) }, { replace: true });
                     }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 12,

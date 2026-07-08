@@ -1,0 +1,57 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.mjs
+
+# Playwright Profiles
+.playwright_profile_test_subs/
+.playwright_profile_test_subs*
+.playwright_profile/
+.playwright_profile_test/
+.chrome_solve_profile/
+.chrome_solve_profile*
+playwright-report/
+test-results/
+
+# Scratch/Temporary script directories
+scratch/
+
+# Scraper Backend and Server Files (hidden from client repo)
+my-anime-api/
+server/
+test_py_app.py
+stop_server.bat
+stop_server.sh
+run_invisible.vbs
+test_matching_logic.mjs
+
+# Android Builds and caches
+android/app/build/
+android/build/
+android/.gradle/
+.gradle/
+capacitor-cordova-android-plugins/
+local.properties
+*.apk
+

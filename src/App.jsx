@@ -16,7 +16,18 @@ import { useParams } from 'react-router-dom';
 
 function WatchRedirect() {
   const { id, ep } = useParams();
-  return <Navigate to={`/anime/${id}?play=true&ep=${ep}`} replace />;
+  const navigate = useNavigate();
+  
+  useEffect(() => {
+    // Replace redirect route with detail page, then push play parameters
+    navigate(`/anime/${id}`, { replace: true });
+    const timer = setTimeout(() => {
+      navigate(`/anime/${id}?play=true&ep=${ep}`);
+    }, 20);
+    return () => clearTimeout(timer);
+  }, [id, ep, navigate]);
+
+  return null;
 }
 import DownloadPage  from './pages/DownloadPage';
 import Profile       from './pages/Profile';
@@ -54,20 +65,25 @@ function AppInner({ showWelcome, onEnter }) {
   }, [navigate, location.pathname]);
 
   // ── Capacitor Android back button handler ─────────────────────────
-  // Keep path in a ref so back button listener doesn't need to re-register
+  // Keep path and search parameters in refs so listeners don't require registration cycles
   const currentPathRef = useRef(location.pathname);
+  const currentSearchRef = useRef(location.search);
+  
   useEffect(() => {
     currentPathRef.current = location.pathname;
-  }, [location.pathname]);
-
+    currentSearchRef.current = location.search;
+  }, [location.pathname, location.search]);
+ 
   useEffect(() => {
     if (!isNative) return;
     
     const setupListener = async () => {
       const handle = await CapApp.addListener('backButton', ({ canGoBack }) => {
         const path = currentPathRef.current;
-        console.log('[BackButton] Clicked. Path:', path, 'canGoBack:', canGoBack);
+        const search = currentSearchRef.current;
+        console.log('[BackButton] Clicked. Path:', path, 'search:', search, 'canGoBack:', canGoBack);
         
+
         const mainTabs = ['/browse', '/schedule', '/mylist', '/download', '/profile'];
         
         if (path === '/') {
@@ -117,7 +133,7 @@ import { setDynamicDomains } from './api/scrapers';
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
-    return !sessionStorage.getItem('anilab_welcomed');
+    return !localStorage.getItem('anilab_welcomed');
   });
 
   const [updateInfo, setUpdateInfo] = useState(null);
@@ -219,7 +235,7 @@ export default function App() {
   }, []);
 
   const handleEnter = () => {
-    sessionStorage.setItem('anilab_welcomed', '1');
+    localStorage.setItem('anilab_welcomed', '1');
     setShowWelcome(false);
   };
 

@@ -1,0 +1,33 @@
+{
+  "appId": "com.aniplay.aniplay",
+  "appName": "AniPlay",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "server": {
+    "allowNavigation": [
+      "anilab-backend.onrender.com",
+      "*.burntburst45.store",
+      "*.echovideo.ru",
+      "aniwaves.ru",
+      "animetsu.net",
+      "anineko.to",
+      "raw.githubusercontent.com",
+      "github.com",
+      "objects.githubusercontent.com"
+    ]
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "statsUrl": "",
+      "privateKey": ""
+    }
+  }
+}
