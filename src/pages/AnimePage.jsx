@@ -6,7 +6,8 @@ import {
   ArrowLeft, Share2, Bookmark, Star, Play, Download, X,
   Plus, Check, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Search as SearchIcon, ChevronLeft, ChevronRight,
-  Clock, CheckCircle, Tv, Wifi, WifiOff, Loader, Heart
+  Clock, CheckCircle, Tv, Wifi, WifiOff, Loader, Heart,
+  MessageSquare, Send, User, ThumbsUp
 } from 'lucide-react';
 import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
@@ -153,6 +154,141 @@ export default function AnimePage() {
   const [serverPickerData, setServerPickerData] = useState(null); // { episode, servers, loading }
   const [qualityPickerData, setQualityPickerData] = useState(null); // { episode, variants, onSelect, onCancel }
   const [downloadAudioTrack, setDownloadAudioTrack] = useState('sub');
+
+  // Comments Section State & Logic
+  const [comments, setComments] = useState([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [newComment, setNewComment] = useState('');
+  const [username, setUsername] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [nicknameInput, setNicknameInput] = useState('');
+  const [likedComments, setLikedComments] = useState(() => {
+    try {
+      const saved = localStorage.getItem('anilab_liked_comments');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  const COMMENTS_API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== ''
+    ? `http://${window.location.hostname}:4000`
+    : 'https://anilab-backend.onrender.com';
+
+  const animeId = anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown';
+  const episodeNumber = epParam || 1;
+
+  const getRandomAnimeName = () => {
+    const names = ['Luffy', 'Zoro', 'Nami', 'Sanji', 'Goku', 'Vegeta', 'Naruto', 'Sasuke', 'Sakura', 'Kakashi', 'Deku', 'Bakugo', 'Todoroki', 'Tanjiro', 'Nezuko', 'Zenitsu', 'Inosuke', 'Gojo', 'Itadori', 'Megumi', 'Nobara', 'Eren', 'Mikasa', 'Armin', 'Levi', 'Subaru', 'Rem', 'Emilia', 'Rimuru', 'Saitama', 'Mob', 'Reigen'];
+    const num = Math.floor(Math.random() * 1000);
+    const name = names[Math.floor(Math.random() * names.length)];
+    return `${name}_${num}`;
+  };
+
+  const getAvatarColor = (name) => {
+    const colors = ['#f43f5e', '#ec4899', '#d946ef', '#a855f7', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6', '#10b981', '#22c55e', '#84cc16', '#eab308', '#f97316'];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const index = Math.abs(hash) % colors.length;
+    return colors[index];
+  };
+
+  const formatRelativeTime = (dateStr) => {
+    try {
+      const past = new Date(dateStr.replace(' ', 'T') + 'Z'); // parse SQLite format correctly
+      const diffMs = Date.now() - past.getTime();
+      const diffSecs = Math.floor(diffMs / 1000);
+      if (diffSecs < 60) return 'just now';
+      const diffMins = Math.floor(diffSecs / 60);
+      if (diffMins < 60) return `${diffMins}m ago`;
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours}h ago`;
+      const diffDays = Math.floor(diffHours / 24);
+      return `${diffDays}d ago`;
+    } catch {
+      return 'recently';
+    }
+  };
+
+  const fetchComments = async () => {
+    if (!anime) return;
+    setCommentsLoading(true);
+    try {
+      const res = await fetch(`${COMMENTS_API_BASE}/api/comments?animeId=${encodeURIComponent(animeId)}&episode=${episodeNumber}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data?.ok && data?.comments) {
+        setComments(data.comments);
+      }
+    } catch (e) {
+      console.warn('[Comments Fetch Error]', e.message);
+    } finally {
+      setCommentsLoading(false);
+    }
+  };
+
+  const handlePostComment = async (e) => {
+    e.preventDefault();
+    if (!newComment.trim() || submittingComment) return;
+    
+    setSubmittingComment(true);
+    try {
+      const res = await fetch(`${COMMENTS_API_BASE}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          animeId,
+          episode: episodeNumber,
+          username: username.trim() || 'Anonymous',
+          content: newComment.trim()
+        })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData?.error || `HTTP ${res.status}`);
+      }
+      setNewComment('');
+      await fetchComments();
+    } catch (e) {
+      alert(e.message || 'Failed to post comment');
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleSaveNickname = () => {
+    if (!nicknameInput.trim()) return;
+    const clean = nicknameInput.trim().slice(0, 25);
+    setUsername(clean);
+    localStorage.setItem('user_nickname', clean);
+    setEditingNickname(false);
+  };
+
+  const toggleLikeComment = (commentId) => {
+    setLikedComments(prev => {
+      const next = prev.includes(commentId) ? prev.filter(x => x !== commentId) : [...prev, commentId];
+      localStorage.setItem('anilab_liked_comments', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const saved = localStorage.getItem('user_nickname');
+    if (saved) {
+      setUsername(saved);
+      setNicknameInput(saved);
+    } else {
+      const randomName = getRandomAnimeName();
+      setUsername(randomName);
+      setNicknameInput(randomName);
+      localStorage.setItem('user_nickname', randomName);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchComments();
+  }, [animeId, episodeNumber]);
 
   // Initialize already downloaded episodes from current session & subscribe to updates
   useEffect(() => {
@@ -1044,6 +1180,7 @@ export default function AnimePage() {
           {[
             { k: 'episodes',   l: 'Episodes' },
             { k: 'similar',    l: `More like this` },
+            { k: 'comments',   l: `Comments (${comments.length})` },
             { k: 'characters', l: 'Characters' },
           ].map(t => (
             <button key={t.k} onClick={() => setTab(t.k)} id={`tab-${t.k}`}
@@ -1250,6 +1387,185 @@ export default function AnimePage() {
                           />
                         </div>
                       )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {/* ── COMMENTS ─────────────────────────────────────────── */}
+        {tab === 'comments' && (
+          <div style={{ animation: 'fade-in 0.25s ease' }}>
+            {/* Nickname / Profile Customizer */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+              borderRadius: 16, padding: '12px 16px', marginBottom: 20,
+              backdropFilter: 'blur(8px)'
+            }}>
+              {editingNickname ? (
+                <div style={{ display: 'flex', gap: 10, width: '100%', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={nicknameInput}
+                    onChange={e => setNicknameInput(e.target.value.slice(0, 25))}
+                    placeholder="Enter nickname..."
+                    style={{
+                      flex: 1, background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)',
+                      borderRadius: 8, padding: '6px 12px', color: '#fff', fontSize: 13, outline: 'none'
+                    }}
+                    onKeyDown={e => { if (e.key === 'Enter') handleSaveNickname(); }}
+                  />
+                  <button onClick={handleSaveNickname} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 12, borderRadius: 8 }}>
+                    Save
+                  </button>
+                  <button onClick={() => { setEditingNickname(false); setNicknameInput(username); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 12, cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: '50%',
+                      background: getAvatarColor(username), color: '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: 700, fontSize: 13
+                    }}>
+                      {username.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{username}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block' }}>Your Comment Nickname</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setEditingNickname(true); setNicknameInput(username); }}
+                    style={{
+                      background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 8, padding: '4px 10px', fontSize: 11, color: '#fff', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 4
+                    }}
+                  >
+                    <User size={12} />
+                    Change Nickname
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Post Comment Form */}
+            <form onSubmit={handlePostComment} style={{ marginBottom: 24, position: 'relative' }}>
+              <div style={{
+                background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)',
+                borderRadius: 16, padding: 12, display: 'flex', flexDirection: 'column', gap: 8
+              }}>
+                <textarea
+                  value={newComment}
+                  onChange={e => setNewComment(e.target.value.slice(0, 500))}
+                  placeholder={`Join the discussion for Episode ${episodeNumber}...`}
+                  style={{
+                    background: 'none', border: 'none', outline: 'none', resize: 'none',
+                    color: '#fff', fontSize: 13, minHeight: 70, fontFamily: 'inherit',
+                    lineHeight: '1.5'
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handlePostComment(e);
+                    }
+                  }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: 8 }}>
+                  <span style={{ fontSize: 11, color: newComment.length >= 450 ? '#ff6b6b' : 'var(--text-muted)' }}>
+                    {500 - newComment.length} characters left
+                  </span>
+                  <button
+                    type="submit"
+                    disabled={submittingComment || !newComment.trim()}
+                    style={{
+                      background: newComment.trim() ? 'var(--accent)' : 'rgba(255,255,255,0.05)',
+                      border: 'none', borderRadius: '50%', width: 32, height: 32,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: '#fff', cursor: newComment.trim() ? 'pointer' : 'default',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    {submittingComment ? (
+                      <Loader size={14} className="spin" style={{ color: '#fff' }} />
+                    ) : (
+                      <Send size={14} style={{ color: newComment.trim() ? '#fff' : 'rgba(255,255,255,0.3)', transform: 'translate(1px, -1px)' }} />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {/* Comments List */}
+            {commentsLoading && comments.length === 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '40px 0' }}>
+                <Loader size={24} className="spin" style={{ color: 'var(--accent)' }} />
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading comments...</span>
+              </div>
+            ) : comments.length === 0 ? (
+              <div style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                padding: '40px 20px', border: '1px dashed var(--border)', borderRadius: 16,
+                textAlign: 'center', color: 'var(--text-muted)'
+              }}>
+                <MessageSquare size={32} style={{ marginBottom: 12, opacity: 0.4 }} />
+                <h4 style={{ margin: '0 0 4px 0', fontSize: 13, fontWeight: 700, color: '#fff' }}>No Comments Yet</h4>
+                <p style={{ margin: 0, fontSize: 12 }}>Be the first to share your thoughts on Episode {episodeNumber}!</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 40 }}>
+                {comments.map((c, i) => {
+                  const uniqueId = `${c.username}_${c.created_at}_${i}`;
+                  const isLiked = likedComments.includes(uniqueId);
+                  
+                  return (
+                    <div key={uniqueId} style={{
+                      background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      borderRadius: 16, padding: '12px 14px', display: 'flex', gap: 12,
+                      animation: 'fade-in 0.3s ease'
+                    }}>
+                      {/* Avatar */}
+                      <div style={{
+                        width: 36, height: 36, borderRadius: '50%',
+                        background: getAvatarColor(c.username), color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 700, fontSize: 14, flexShrink: 0
+                      }}>
+                        {c.username.charAt(0).toUpperCase()}
+                      </div>
+
+                      {/* Content Box */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', wordBreak: 'break-all' }}>{c.username}</span>
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>{formatRelativeTime(c.created_at)}</span>
+                        </div>
+                        <p style={{
+                          margin: '0 0 10px 0', fontSize: 13, color: 'rgba(255,255,255,0.9)',
+                          lineHeight: '1.5', whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+                        }}>{c.content}</p>
+                        
+                        {/* Action buttons */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                          <button
+                            onClick={() => toggleLikeComment(uniqueId)}
+                            style={{
+                              background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 4,
+                              color: isLiked ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11, cursor: 'pointer',
+                              padding: 0
+                            }}
+                          >
+                            <ThumbsUp size={11} fill={isLiked ? 'currentColor' : 'none'} />
+                            <span>{isLiked ? 1 : 'Like'}</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
