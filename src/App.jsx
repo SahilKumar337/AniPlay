@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { AppProvider } from './context/AppContext';
+import { AppProvider, useApp } from './context/AppContext';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
 const APKUpdater = registerPlugin('APKUpdater');
 import WelcomeScreen from './components/WelcomeScreen';
+import AuthModal from './components/AuthModal';
 import Home          from './pages/Home';
 import Browse        from './pages/Browse';
 import Schedule      from './pages/Schedule';
@@ -37,6 +38,7 @@ import Navbar        from './components/Navbar';
 
 // Inner component that has access to navigate (must be inside BrowserRouter)
 function AppInner({ showWelcome, onEnter }) {
+  const { user } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const isNative = Capacitor.isNativePlatform();
@@ -44,6 +46,19 @@ function AppInner({ showWelcome, onEnter }) {
   const playParam = searchParams.get('play') === 'true';
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [showFirstTimeAuth, setShowFirstTimeAuth] = useState(false);
+
+  useEffect(() => {
+    if (!showWelcome && !user) {
+      const onboarded = localStorage.getItem('aniplay_onboarded');
+      if (!onboarded) {
+        const timer = setTimeout(() => {
+          setShowFirstTimeAuth(true);
+        }, 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [showWelcome, user]);
 
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
@@ -125,6 +140,7 @@ function AppInner({ showWelcome, onEnter }) {
           {!playParam && <Navbar />}
         </>
       )}
+      <AuthModal isOpen={showFirstTimeAuth} onClose={() => { setShowFirstTimeAuth(false); localStorage.setItem('aniplay_onboarded', 'true'); }} />
     </div>
   );
 }
