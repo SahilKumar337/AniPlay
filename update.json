@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.3",
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.3/bundle.zip",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.3/AniPlay.apk",
-  "changelog": "Cleaned up subtitles to keep English only, resolved duplicate tracks, and final production release fixes.",
+  "latestVersion": "1.4",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4/bundle.zip",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.4/AniPlay.apk",
+  "changelog": "Fixed back-button infinite loop, clean app updates (no duplicate icons), AniHD downloads enabled.",
   "forceUpdate": false,
   "domains": {
     "neko": "https://anineko.to",
