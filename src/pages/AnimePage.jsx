@@ -22,9 +22,6 @@ const isDownloadable = (srv) => {
   const name = (srv.name || '').toLowerCase();
   const url = (srv.embedUrl || srv.videoUrl || '').toLowerCase();
   
-  // Exclude swiftstream.top (proxy-only HLS — not directly downloadable)
-  if (url.includes('swiftstream.top')) return false;
-  
   // Exclude WavesHD
   if (name.includes('waveshd') || name.includes('waves')) return false;
   
