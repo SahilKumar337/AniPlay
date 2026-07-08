@@ -1,9 +1,25 @@
 import { CapacitorHttp } from '@capacitor/core';
+import { scrapeEmbedNative, solveCloudflareNative, getCookiesForUrlNative, fetchViaWebViewNative } from './embedScraper.js';
 
 const isCapacitorApp = typeof window !== 'undefined' && window.Capacitor && (
   window.Capacitor.isNativePlatform() || 
   (!window.location.port && window.location.hostname === 'localhost')
 );
+
+const nativeCookieJar = new Map();
+
+export async function syncNativeCookies(url) {
+  try {
+    const origin = new URL(url).origin;
+    const cookies = await getCookiesForUrlNative(url);
+    if (cookies) {
+      nativeCookieJar.set(origin, cookies);
+      console.log(`[CookieSync] Synced cookies for ${origin}:`, cookies.slice(0, 50));
+    }
+  } catch (e) {
+    console.warn(`[CookieSync] Failed to sync cookies for ${url}:`, e.message);
+  }
+}
 
 export let ANINEKO = 'https://anineko.to';
 export let AW = 'https://aniwaves.ru';
@@ -17,13 +33,19 @@ export function setDynamicDomains(newDomains) {
   console.log('[Scrapers] Dynamic domains updated:', { ANINEKO, AW, ANIMETSU });
 }
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+const UA = isCapacitorApp 
+  ? 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36'
+  : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 const STREAM_PROXY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_STREAM_PROXY_URL) || '';
 const PROXY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_PROXY_URL) || '';
 
 function formatProxyUrl(targetUrl, referer) {
   if (!STREAM_PROXY) return targetUrl;
+  const isNative = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
+  if (isNative && (STREAM_PROXY.includes('localhost') || STREAM_PROXY.includes('127.0.0.1'))) {
+    return targetUrl;
+  }
   const hasQuery = STREAM_PROXY.includes('?');
   if (hasQuery) {
     return `${STREAM_PROXY}&url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
@@ -40,11 +62,19 @@ function formatProxyUrl(targetUrl, referer) {
 
 function formatIframeProxyUrl(targetUrl, referer) {
   if (!PROXY) return targetUrl;
+  const isNative = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
+  if (isNative && (PROXY.includes('localhost') || PROXY.includes('127.0.0.1'))) {
+    return targetUrl;
+  }
   return `${PROXY}/api/iframe-proxy?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
 }
 
 function formatSubtitleProxyUrl(targetUrl, referer) {
   if (!STREAM_PROXY) return targetUrl;
+  const isNative = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
+  if (isNative && (STREAM_PROXY.includes('localhost') || STREAM_PROXY.includes('127.0.0.1'))) {
+    return targetUrl;
+  }
   try {
     const urlObj = new URL(STREAM_PROXY);
     return `${urlObj.origin}/api/stream/subtitle?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
@@ -154,20 +184,67 @@ function getLongestWord(title) {
   return words.reduce((a, b) => a.length > b.length ? a : b);
 }
 
+// ── Helper matching and validation ──
+
+function isCloudflareChallenge(text) {
+  const lower = text.toLowerCase();
+  const isCfBlock = lower.includes('cloudflare') && (
+    lower.includes('cf-challenge') ||
+    lower.includes('ray id:') ||
+    lower.includes('just a moment') ||
+    lower.includes('checking your browser') ||
+    lower.includes('attention required!') ||
+    lower.includes('cf-cookie-error') ||
+    lower.includes('challenge-platform')
+  );
+  const isDdosGuard = lower.includes('ddos-guard') && (
+    lower.includes('ddos-guard.net') ||
+    lower.includes('checking your browser')
+  );
+  return isCfBlock || isDdosGuard;
+}
+
 // ── Generic Fetch Helper with Headers ──
 
 async function clientFetch(url, opts = {}) {
   if (isCapacitorApp) {
+    if (opts.useWebView) {
+      console.log(`[clientFetch] Executing fetch via WebView for: ${url}`);
+      try {
+        const origin = new URL(url).origin;
+        const html = await fetchViaWebViewNative(url, opts.referer, origin);
+        if (!html) throw new Error("fetchViaWebViewNative returned empty/null");
+        
+        if (isCloudflareChallenge(html)) {
+          throw new Error('Cloudflare challenge detected inside WebView fetch');
+        }
+        return html;
+      } catch (e) {
+        console.error(`[clientFetch] WebView fetch failed for ${url}:`, e.message);
+        throw e;
+      }
+    }
+
     try {
-      console.log(`[CapacitorHttp] Direct Fetching: ${url}`);
+      const urlObj = new URL(url);
+      const origin = urlObj.origin;
+      const cachedCookies = nativeCookieJar.get(origin);
+      
+      const reqHeaders = {
+        'User-Agent': UA,
+        ...(opts.referer ? { 'Referer': opts.referer } : {}),
+        ...(opts.headers || {}),
+      };
+      
+      if (cachedCookies) {
+        reqHeaders['Cookie'] = cachedCookies;
+        console.log(`[CookieInject] Injected cookies for ${origin}:`, cachedCookies.slice(0, 45));
+      }
+
       const response = await CapacitorHttp.request({
         url,
         method: 'GET',
-        headers: {
-          'User-Agent': UA,
-          ...(opts.referer ? { 'Referer': opts.referer } : {}),
-          ...(opts.headers || {}),
-        },
+        headers: reqHeaders,
         connectTimeout: opts.timeout || 60000,
         readTimeout: opts.timeout || 60000
       });
@@ -175,6 +252,10 @@ async function clientFetch(url, opts = {}) {
       const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
       if (response.status >= 300) {
         throw new Error(`HTTP ${response.status}`);
+      }
+      
+      if (isCloudflareChallenge(text)) {
+        throw new Error('Cloudflare challenge detected');
       }
       return text;
     } catch (e) {
@@ -193,7 +274,10 @@ async function clientFetch(url, opts = {}) {
         headers: opts.headers
       });
       if (!res.ok) throw new Error(`HTTP ${res.status} from proxy`);
-      return res.text();
+      
+      const pText = await res.text();
+      if (isCloudflareChallenge(pText)) throw new Error('Cloudflare block from proxy');
+      return pText;
     } catch (e) {
       console.warn(`[LocalProxy] Fetch failed for ${url} via proxy:`, e.message);
     }
@@ -206,7 +290,9 @@ async function clientFetch(url, opts = {}) {
     headers
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+  const fText = await res.text();
+  if (isCloudflareChallenge(fText)) throw new Error('Cloudflare challenge detected');
+  return fText;
 }
 
 // ── AniWaves Scraper ──
@@ -275,6 +361,47 @@ async function awSearch(title, isMovie = false) {
   return best;
 }
 
+// Session cache for Waves server lists: animeId/episode -> { servers, expires }
+// TTL = 25 minutes (matching Animetsu cache — embed URLs typically expire in ~30 min)
+const WAVES_CACHE_TTL_MS = 25 * 60 * 1000;
+
+function getWavesServersCache(animeId, episode) {
+  try {
+    const key = `waves_servers_${animeId}_${episode}`;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, expires } = JSON.parse(raw);
+    if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
+    console.log(`[AniWaves] Cache HIT for servers ep${episode} — instant play`);
+    return data;
+  } catch { return null; }
+}
+
+function setWavesServersCache(animeId, episode, data) {
+  try {
+    const key = `waves_servers_${animeId}_${episode}`;
+    sessionStorage.setItem(key, JSON.stringify({ data, expires: Date.now() + WAVES_CACHE_TTL_MS }));
+  } catch {}
+}
+
+function getWavesEmbedCache(linkId) {
+  try {
+    const key = `waves_embed_${linkId}`;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { url, expires } = JSON.parse(raw);
+    if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
+    return url;
+  } catch { return null; }
+}
+
+function setWavesEmbedCache(linkId, url) {
+  try {
+    const key = `waves_embed_${linkId}`;
+    sessionStorage.setItem(key, JSON.stringify({ url, expires: Date.now() + WAVES_CACHE_TTL_MS }));
+  } catch {}
+}
+
 async function awGetServers(animeId, episode, slug) {
   const url = `${AW}/ajax/server/list?servers=${animeId}&eps=${episode}`;
   const referer = slug ? `${AW}/watch/${slug}` : AW;
@@ -309,6 +436,13 @@ async function awGetServers(animeId, episode, slug) {
 }
 
 async function awGetEmbedUrl(linkId, watchPageSlug) {
+  // Check embed cache first — same linkId always resolves to same URL within session
+  const cached = getWavesEmbedCache(linkId);
+  if (cached) {
+    console.log(`[AniWaves] Embed cache HIT for linkId ${linkId}`);
+    return cached;
+  }
+
   const url = `${AW}/ajax/sources?id=${encodeURIComponent(linkId)}&asi=0&autoPlay=0`;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': `${AW}/watch/${watchPageSlug}` },
@@ -316,8 +450,10 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
   });
   const parsed = JSON.parse(text);
   if (parsed.status !== 200 || !parsed.result?.url) throw new Error(`No embed URL`);
+  setWavesEmbedCache(linkId, parsed.result.url);
   return parsed.result.url;
 }
+
 
 export async function scrapeAniWaves(title, episode, isMovie = false) {
   let searchResult = wavesSearchCache.get(title);
@@ -326,6 +462,11 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
     wavesSearchCache.set(title, searchResult);
   }
   const { slug, animeId, animeTitle } = searchResult;
+
+  // Check session cache — skip all API calls if same episode was already fetched
+  const cached = getWavesServersCache(animeId, episode);
+  if (cached) return { servers: cached, animeTitle, slug };
+
   const rawServers = await awGetServers(animeId, episode, slug);
   // Only take first sub server (HD-1) and first dub server (HD-1)
   const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 1);
@@ -350,10 +491,36 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
       servers.push({ name: 'WavesHD (DUB)', videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
     }
   }
+
+  // Cache the resolved server list for this episode (avoids re-fetching on revisit)
+  if (servers.length > 0) setWavesServersCache(animeId, episode, servers);
+
   return { servers, animeTitle, slug };
 }
 
 // ── AniNeko Scraper ──
+
+// Session cache for Neko episode servers: slug+episode -> { servers, expires }
+const NEKO_CACHE_TTL_MS = 25 * 60 * 1000;
+
+function getNekoEpisodeCache(slug, episode) {
+  try {
+    const key = `neko_ep_${slug}_${episode}`;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, expires } = JSON.parse(raw);
+    if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
+    console.log(`[AniNeko] Cache HIT for ${slug} ep${episode} — instant play`);
+    return data;
+  } catch { return null; }
+}
+
+function setNekoEpisodeCache(slug, episode, servers) {
+  try {
+    const key = `neko_ep_${slug}_${episode}`;
+    sessionStorage.setItem(key, JSON.stringify({ data: servers, expires: Date.now() + NEKO_CACHE_TTL_MS }));
+  } catch {}
+}
 
 export async function scrapeAniNeko(title, episode, isMovie = false) {
   let best, results;
@@ -384,7 +551,9 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
           results.push({ slug: m[1], title: m[2].trim() });
         }
         if (results.length > 0) break;
-      } catch {}
+      } catch (e) {
+        console.error('[scrapeAniNeko] Search failed for ' + keyword + ':', e.message);
+      }
     }
 
     if (!results.length) throw new Error(`Anime not found on AniNeko`);
@@ -402,6 +571,10 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
 
     nekoSearchCache.set(title, { best, results });
   }
+
+  // Check episode-level session cache before fetching any watch pages
+  const nekoEpCached = getNekoEpisodeCache(best.slug, episode);
+  if (nekoEpCached) return { servers: nekoEpCached, animeTitle: best.title, slug: best.slug };
 
   const subUrl = `${ANINEKO}/watch/${best.slug}/ep-${episode}`;
   const urlsToFetch = [{ url: subUrl, isDubPage: best.slug.endsWith('-dub') }];
@@ -423,7 +596,7 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
   for (const page of fetchedPages) {
     if (page.status !== 'fulfilled') continue;
     const { html, isDubPage } = page.value;
-    const panelsRe = /<div[^>]+data-id="(sub|dub)"[\s\S]*?<\/div>\s*<\/div>/g;
+    const panelsRe = /<div[^>]+data-id="(sub|dub)[\s\S]*?<\/div>\s*<\/div>/g;
     let pMatch;
     while ((pMatch = panelsRe.exec(html)) !== null) {
       const panelId = pMatch[1];
@@ -443,9 +616,14 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
     }
   }
 
+  // First pass: collect all subtitle URLs across all sub servers
+  // and find the best sub server (prefer one WITH a subtitle URL)
   const seen = new Set();
   const servers = [];
-  let subAdded = false, dubAdded = false;
+  let bestSubServer = null;
+  let bestSubtitleUrl = '';
+  let bestDubServer = null;
+
   for (const s of rawServers) {
     if (seen.has(s.videoUrl)) continue;
     seen.add(s.videoUrl);
@@ -456,18 +634,31 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
       subtitleUrl = urlObj.searchParams.get('sub') || urlObj.searchParams.get('caption_1') || urlObj.searchParams.get('c1_file') || '';
     } catch {}
 
-    const subtitles = subtitleUrl ? [{ id: 0, label: 'English', file: formatSubtitleProxyUrl(subtitleUrl, s.videoUrl) }] : [];
-    const proxiedUrl = formatIframeProxyUrl(s.videoUrl, ANINEKO);
-
-    if (s.isDub && !dubAdded) {
-      dubAdded = true;
-      servers.push({ name: 'NekoHD (DUB)', videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles, isHLS: false });
-    } else if (!s.isDub && !subAdded) {
-      subAdded = true;
-      servers.push({ name: 'NekoHD', videoUrl: proxiedUrl, embedUrl: s.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
+    if (!s.isDub) {
+      // Prefer server with subtitle URL; fallback to first sub server found
+      if (!bestSubServer || (subtitleUrl && !bestSubtitleUrl)) {
+        bestSubServer = s;
+        bestSubtitleUrl = subtitleUrl;
+      }
+    } else {
+      if (!bestDubServer) bestDubServer = s;
     }
-    // Note: NekoHD names stay as-is — subtitle enrichment uses 'NekoHD' family
   }
+
+  // Second pass: build the final servers array
+  if (bestSubServer) {
+    const subtitleFile = bestSubtitleUrl ? formatSubtitleProxyUrl(bestSubtitleUrl, bestSubServer.videoUrl) : '';
+    const subtitles = subtitleFile ? [{ id: 0, label: 'English', file: subtitleFile, referer: ANINEKO + '/' }] : [];
+    const proxiedUrl = formatIframeProxyUrl(bestSubServer.videoUrl, ANINEKO);
+    servers.push({ name: 'Neko', videoUrl: proxiedUrl, embedUrl: bestSubServer.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
+  }
+  if (bestDubServer) {
+    const proxiedUrl = formatIframeProxyUrl(bestDubServer.videoUrl, ANINEKO);
+    servers.push({ name: 'Neko (DUB)', videoUrl: proxiedUrl, embedUrl: bestDubServer.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles: [], isHLS: false });
+  }
+
+  // Cache the resolved servers for this episode
+  if (servers.length > 0) setNekoEpisodeCache(best.slug, episode, servers);
 
   return { servers, animeTitle: best.title, slug: best.slug };
 }
@@ -596,12 +787,15 @@ export async function scrapeAnimetsu(title, episode, isMovie = false) {
   if (subResult.status === 'fulfilled' && subResult.value) {
     const { rawVideoUrl, subs } = subResult.value;
     const videoUrl = formatProxyUrl(rawVideoUrl, `${ANIMETSU}/`);
-    const subtitles = subs.map((sub, i) => ({
-      id: i,
-      label: sub.lang || 'English',
-      file: formatSubtitleProxyUrl(sub.url, `${ANIMETSU}/`),
-      referer: `${ANIMETSU}/`,
-    }));
+    const subtitles = subs.map((sub, i) => {
+      const absoluteSubUrl = sub.url.startsWith('http') ? sub.url : `${ANIMETSU}${sub.url.startsWith('/') ? '' : '/'}${sub.url}`;
+      return {
+        id: i,
+        label: sub.lang || 'English',
+        file: absoluteSubUrl,
+        referer: `${ANIMETSU}/`,
+      };
+    });
     servers.push({ name: 'AniHD', videoUrl, type: 'sub', embedUrl: rawVideoUrl, referer: `${ANIMETSU}/`, subtitles, isHLS: true });
   }
   if (dubResult.status === 'fulfilled' && dubResult.value) {
@@ -615,130 +809,3 @@ export async function scrapeAnimetsu(title, episode, isMovie = false) {
   return { servers, animeTitle: best.title, slug: best.id };
 }
 
-// ── GogoAnime Direct MP4 Scraper ──
-export async function scrapeGogoDirect(title, episode, track = 'sub', isMovie = false) {
-  const domain = 'https://gogoanime3.co';
-  
-  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const searchUrl = `${domain}/search.html?keyword=${encodeURIComponent(cleanTitle)}`;
-  
-  console.log(`[GogoDirect] Searching for: ${cleanTitle}`);
-  let html;
-  try {
-    html = await clientFetch(searchUrl, { referer: domain, timeout: 20000 });
-  } catch (e) {
-    console.warn(`[GogoDirect] Search failed on primary mirror, trying fallback...`);
-    // Fallback mirror if primary is down
-    const fallbackDomain = 'https://anitaku.to';
-    html = await clientFetch(`${fallbackDomain}/search.html?keyword=${encodeURIComponent(cleanTitle)}`, { referer: fallbackDomain, timeout: 20000 });
-  }
-  
-  // Follow JS challenge redirect if needed (mirror protection)
-  const redirectMatch = html.match(/window\.location\.replace\('([^']+)'\)/);
-  if (redirectMatch) {
-    const redirectUrl = redirectMatch[1];
-    console.log(`[GogoDirect] Bypassing JS challenge redirect: ${redirectUrl}`);
-    html = await clientFetch(redirectUrl, { referer: searchUrl, timeout: 20000 });
-  }
-
-  // Parse search results
-  const results = [];
-  const searchRe = /<p class="name">\s*<a href="\/category\/([^"]+)"\s*title="([^"]+)">/g;
-  let m;
-  while ((m = searchRe.exec(html)) !== null) {
-    results.push({ slug: m[1], title: m[2] });
-  }
-
-  if (results.length === 0) {
-    throw new Error('Anime not found on GogoAnime');
-  }
-
-  // Find best match using titleScore
-  let best = results[0];
-  let maxScore = -1;
-  for (const r of results) {
-    const score = titleScore(r.title, title, isMovie);
-    if (score > maxScore) { maxScore = score; best = r; }
-  }
-  if (!best || maxScore < 0.4) {
-    throw new Error('No close match on GogoAnime');
-  }
-
-  console.log(`[GogoDirect] Best match slug: ${best.slug} (Score: ${maxScore})`);
-
-  // 2. Build watch URL
-  let slugToUse = best.slug;
-  if (track === 'dub' && !slugToUse.endsWith('-dub')) {
-    slugToUse = `${slugToUse}-dub`;
-  }
-  
-  const watchUrl = `${domain}/${slugToUse}-episode-${episode}`;
-  console.log(`[GogoDirect] Fetching watch page: ${watchUrl}`);
-  let watchHtml;
-  try {
-    watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 20000 });
-  } catch (e) {
-    if (track === 'dub') {
-      watchHtml = await clientFetch(`${domain}/${best.slug}-episode-${episode}`, { referer: domain, timeout: 20000 });
-    } else {
-      throw e;
-    }
-  }
-
-  // Follow JS challenge redirect for watch page if needed
-  const watchRedirect = watchHtml.match(/window\.location\.replace\('([^']+)'\)/);
-  if (watchRedirect) {
-    watchHtml = await clientFetch(watchRedirect[1], { referer: watchUrl, timeout: 20000 });
-  }
-
-  // 3. Find download page URL
-  const dlMatch = watchHtml.match(/<li class="dowloads">\s*<a href="([^"]+)"/i) || watchHtml.match(/class="download-anime"[\s\S]*?href="([^"]+)"/);
-  let downloadUrl = dlMatch ? dlMatch[1] : null;
-
-  if (!downloadUrl) {
-    const playMatch = watchHtml.match(/data-video="([^"]+)"/);
-    if (playMatch) {
-      let embedUrl = playMatch[1];
-      if (embedUrl.startsWith('//')) embedUrl = 'https:' + embedUrl;
-      downloadUrl = embedUrl.replace('streaming.php', 'download');
-    }
-  }
-
-  if (!downloadUrl) {
-    throw new Error('Direct download page not found on watch page');
-  }
-
-  console.log(`[GogoDirect] Fetching download page: ${downloadUrl}`);
-  let dlPageHtml = await clientFetch(downloadUrl, { referer: watchUrl, timeout: 20000 });
-
-  // 4. Extract direct MP4 download links
-  const directLinks = [];
-  const linkRe = /<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  let m2;
-  while ((m2 = linkRe.exec(dlPageHtml)) !== null) {
-    const href = m2[1];
-    const label = m2[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    const isDirect = href.includes('storage.googleapis.com') || 
-                     href.includes('gogocdn') || 
-                     href.includes('token=') || 
-                     href.endsWith('.mp4') ||
-                     label.toLowerCase().includes('mp4') ||
-                     /1080p|720p|480p|360p/i.test(label);
-                     
-    if (isDirect) {
-      let cleanLabel = label.replace(/Download/i, '').replace(/[\(\)]/g, '').replace(/\s+/g, ' ').trim();
-      if (!cleanLabel) cleanLabel = 'Direct MP4 Link';
-      
-      directLinks.push({
-        name: `Gogo-Direct (${cleanLabel})`,
-        videoUrl: href,
-        referer: downloadUrl,
-        type: track,
-        isHLS: false
-      });
-    }
-  }
-
-  return { servers: directLinks, animeTitle: best.title, slug: best.slug };
-}

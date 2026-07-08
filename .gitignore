@@ -28,6 +28,7 @@ dist-ssr
 .playwright_profile_test_subs/
 .playwright_profile_test_subs*
 .playwright_profile/
+.playwright_profile*
 .playwright_profile_test/
 .chrome_solve_profile/
 .chrome_solve_profile*

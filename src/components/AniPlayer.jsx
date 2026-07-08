@@ -470,47 +470,57 @@ export default function AniPlayer({
       setShowSync(false);
     }
   }, [ctrlVis]);
-
   // Fetch and parse subtitles when activeSub changes
   useEffect(() => {
-    if (activeSub === -1 || !subs[activeSub]?.file) {
+    const currentSubTrack = subs.find(s => s.id === activeSub) || subs[activeSub] || subs[0];
+    if (activeSub === -1 || !currentSubTrack?.file) {
       setCues([]);
       return;
     }
 
-    const url = subs[activeSub].file;
+    const url = currentSubTrack.file;
     log(`Fetching subtitles from: ${url}`);
 
     const loadSubtitlesText = async () => {
       // Per-subtitle referer takes priority over player-level referer prop
-      const subReferer = subs[activeSub]?.referer || referer;
+      const subReferer = currentSubTrack?.referer || referer;
       const isLocalhost = url.includes('localhost:8081') || url.includes('127.0.0.1:8081');
       if (isNative && !isLocalhost) {
-        const reqHeaders = {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
-        };
-        if (subReferer) {
-          reqHeaders['Origin'] = subReferer.replace(/\/$/, '');
-          reqHeaders['Referer'] = subReferer;
-        } else {
-          try {
-            const urlObj = new URL(url);
-            reqHeaders['Origin'] = urlObj.origin;
-            reqHeaders['Referer'] = urlObj.origin + '/';
-          } catch {}
-        }
+        try {
+          const reqHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+          };
+          if (subReferer) {
+            reqHeaders['Origin'] = subReferer.replace(/\/$/, '');
+            reqHeaders['Referer'] = subReferer;
+          } else {
+            try {
+              const urlObj = new URL(url);
+              reqHeaders['Origin'] = urlObj.origin;
+              reqHeaders['Referer'] = urlObj.origin + '/';
+            } catch {}
+          }
 
-        const response = await CapacitorHttp.request({
-          url,
-          method: 'GET',
-          headers: reqHeaders,
-          responseType: 'text',
-        });
-        return response.data;
-      } else {
-        const res = await fetch(url);
-        return await res.text();
+          const response = await CapacitorHttp.request({
+            url,
+            method: 'GET',
+            headers: reqHeaders,
+            responseType: 'text',
+          });
+          
+          if (response.status === 200 && response.data) {
+            return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+          } else {
+            throw new Error(`HTTP status ${response.status}`);
+          }
+        } catch (e) {
+          console.warn('[AniPlayer] CapacitorHttp subtitle request failed, trying fallback fetch:', e.message);
+        }
       }
+      
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
     };
 
     loadSubtitlesText()
@@ -1291,7 +1301,32 @@ export default function AniPlayer({
         </div>
       </div>
 
-      {/* Debug & stuck loading diagnostics removed to hide backend details */}
+      {/* Developer Diagnostics Overlay */}
+      {showDebug && (
+        <div className="anip__debug-panel" onClick={e => e.stopPropagation()}>
+          <div className="anip__debug-header">
+            <span>Developer Diagnostics</span>
+            <button className="anip__debug-close" onClick={() => setShowDebug(false)}>✕</button>
+          </div>
+          <div className="anip__debug-info">
+            <strong>Stream URL:</strong> <code style={{ fontSize: '10px', wordBreak: 'break-all' }}>{url}</code><br/>
+            <strong>Playback state:</strong> {playing ? 'Playing' : 'Paused'}, <strong>Waiting:</strong> {waiting ? 'Yes' : 'No'}<br/>
+            <strong>Buffer:</strong> {buffered.toFixed(1)}s / {duration.toFixed(1)}s ({pct.toFixed(0)}%)
+          </div>
+          <div className="anip__debug-logs">
+            {logs.map((logStr, idx) => (
+              <div key={idx} className="anip__debug-log-line">{logStr}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stuck buffering hint overlay */}
+      {waiting && stuckCount >= 8 && !hlsErr && !showDebug && (
+        <div className="anip__stuck-hint" onClick={e => { e.stopPropagation(); setShowDebug(true); }}>
+          <span>Stuck loading? Tap here to open diagnostics</span>
+        </div>
+      )}
 
     </div>
   );

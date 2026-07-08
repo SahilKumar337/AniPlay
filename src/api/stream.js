@@ -62,7 +62,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
         const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
-        const isAllowed = ['AniHD', 'NekoHD', 'WavesHD'].includes(baseName) || baseName.startsWith('Gogo-Direct');
+        const isAllowed = ['AniHD', 'Neko', 'WavesHD'].includes(baseName);
         if (!isAllowed) return; // skip all other servers
 
         // Prevent duplicate server items
@@ -73,14 +73,13 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // Deduplicate and prioritize servers list: NekoHD → AniHD → WavesHD → Gogo-Direct
+      // Deduplicate and prioritize servers list: Neko → AniHD → WavesHD
       combinedServers.sort((a, b) => {
         const getPriority = (name) => {
-          if (name.includes('NekoHD')) return 0;
+          if (name.includes('Neko')) return 0;
           if (name.includes('AniHD')) return 1;
           if (name.includes('WavesHD')) return 2;
-          if (name.includes('Gogo-Direct')) return 3;
-          return 4;
+          return 3;
         };
         return getPriority(a.name) - getPriority(b.name);
       });
@@ -143,6 +142,18 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
         errors.push(`Animetsu[${title.slice(0, 30)}]: ${e.message}`);
       }
     }
+    // Fallback placeholder so AniHD button is always visible in the server list
+    handleScraperResult({
+      servers: [{
+        name: 'AniHD',
+        videoUrl: 'https://animetsu.net/proxy/placeholder',
+        type: 'sub',
+        embedUrl: 'https://animetsu.net/proxy/placeholder',
+        referer: 'https://animetsu.net/',
+        subtitles: [],
+        isHLS: true
+      }]
+    });
     return null;
   })();
 
@@ -166,7 +177,8 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     servers: combinedServers,
     animeTitle: mainTitle,
     slug: activeSlug,
-    isPartial
+    isPartial,
+    errors
   };
 
   // Only cache if we successfully retrieved some servers
@@ -190,7 +202,6 @@ export async function fetchM3U8Playlist(url, referer) {
       url,
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         ...(referer ? { 'Referer': referer } : {})
       }
     });

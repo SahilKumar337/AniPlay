@@ -79,3 +79,118 @@ export function scrapeEmbedNative(embedUrl, referer, timeoutMs = 40000) {
     }, timeoutMs);
   });
 }
+
+/**
+ * Loads a domain in the background native WebView to resolve Cloudflare
+ * Turnstile challenges. The WebView is kept alive after solving so that
+ * fetchViaWebViewNative() can reuse the same authenticated session.
+ *
+ * @param {string} domainUrl   - The homepage URL to open (e.g. https://animepahe.com/)
+ * @param {string} referer     - Referer header
+ * @param {number} waitMs      - Max ms to wait for Turnstile to auto-solve
+ * @param {boolean} keepAlive  - Keep the WebView alive after (default: true)
+ */
+export function solveCloudflareNative(domainUrl, referer, waitMs = 12000, keepAlive = true) {
+  if (!isNative || !NativeEmbedScraper) {
+    return Promise.resolve();
+  }
+
+  let cleanDomain = 'Website';
+  try {
+    cleanDomain = new URL(domainUrl).hostname.replace('www.', '');
+  } catch {}
+
+  const sessionId = `cf-solve-${Date.now()}`;
+  return new Promise((resolve) => {
+    console.log(`[EmbedScraper] solveCloudflareNative: Opening ${domainUrl} (keepAlive=${keepAlive})`);
+    
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('show-cf-modal', { 
+        detail: { domain: cleanDomain, visible: true } 
+      }));
+    }
+    
+    setWebViewVisibilityNative(true);
+
+    NativeEmbedScraper.startScrape({ url: domainUrl, referer, sessionId })
+      .catch(err => {
+        console.warn('[EmbedScraper] solveCloudflareNative start failed:', err.message);
+      });
+
+    setTimeout(async () => {
+      await setWebViewVisibilityNative(false);
+      
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('show-cf-modal', { 
+          detail: { domain: cleanDomain, visible: false } 
+        }));
+      }
+
+      // CRITICAL: Only destroy WebView if keepAlive=false.
+      // When keepAlive=true (default), we preserve the WebView session so that
+      // fetchViaWebViewNative() can immediately reuse the cf_clearance cookies.
+      if (!keepAlive) {
+        NativeEmbedScraper.stopScrape({ sessionId }).catch(() => {});
+      }
+      console.log(`[EmbedScraper] solveCloudflareNative: Done waiting for ${domainUrl}`);
+      resolve();
+    }, waitMs);
+  });
+}
+
+/**
+ * Reads the native WebView CookieManager cookies for a given URL.
+ */
+export async function getCookiesForUrlNative(url) {
+  if (!isNative || !NativeEmbedScraper) {
+    return "";
+  }
+  try {
+    const res = await NativeEmbedScraper.getCookiesForUrl({ url });
+    return res?.cookies || "";
+  } catch (e) {
+    console.error('[EmbedScraper] getCookiesForUrlNative failed:', e.message);
+    return "";
+  }
+}
+
+export function setWebViewVisibilityNative(visible) {
+  if (isNative && NativeEmbedScraper && NativeEmbedScraper.setWebViewVisibility) {
+    return NativeEmbedScraper.setWebViewVisibility({ visible }).catch(e => {
+      console.warn('[EmbedScraper] setWebViewVisibility failed:', e.message);
+    });
+  }
+  return Promise.resolve();
+}
+
+/**
+ * Fetches a URL FROM INSIDE the Android WebView's session.
+ * This bypasses Cloudflare cookie binding — the fetch() runs in the same
+ * browser context that solved Turnstile, so cf_clearance is automatically included.
+ *
+ * Returns the response body as a string, or null on failure.
+ */
+export async function fetchViaWebViewNative(url, referer, domainUrl) {
+  if (!isNative || !NativeEmbedScraper || !NativeEmbedScraper.fetchViaWebView) {
+    return null;
+  }
+  try {
+    const res = await NativeEmbedScraper.fetchViaWebView({ url, referer: referer || '', domainUrl: domainUrl || '' });
+    if (res && res.body) {
+      // The body is a JSON string: { status, body } or { error }
+      try {
+        const parsed = JSON.parse(res.body);
+        if (parsed.error) throw new Error(parsed.error);
+        return parsed.body || null;
+      } catch {
+        // Body itself is the raw response
+        return res.body;
+      }
+    }
+    return null;
+  } catch (e) {
+    console.error('[EmbedScraper] fetchViaWebViewNative failed:', e.message);
+    return null;
+  }
+}
+

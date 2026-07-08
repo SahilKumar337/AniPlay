@@ -7,7 +7,10 @@
   "domains": {
     "neko": "https://anineko.to",
     "waves": "https://aniwaves.ru",
-    "animetsu": "https://animetsu.net"
+    "animetsu": "https://animetsu.net",
+    "gogo": "https://anitaku.bz",
+    "fallback_gogo": "https://anitaku.so",
+    "animepahe": "https://animepahe.com"
   },
   "maintenanceMessage": null
 }

@@ -140,6 +140,20 @@ export default function App() {
   const [maintenanceMsg, setMaintenanceMsg] = useState(null);
   const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'ready'
   const [currentVersion, setCurrentVersion] = useState('1.0.0');
+  const [cfModal, setCfModal] = useState({ visible: false, domain: '' });
+
+  useEffect(() => {
+    const handleCfEvent = (e) => {
+      if (e.detail) {
+        setCfModal({
+          visible: e.detail.visible,
+          domain: e.detail.domain || 'Website'
+        });
+      }
+    };
+    window.addEventListener('show-cf-modal', handleCfEvent);
+    return () => window.removeEventListener('show-cf-modal', handleCfEvent);
+  }, []);
 
   useEffect(() => {
     const initDeviceSettings = async () => {
@@ -430,6 +444,101 @@ export default function App() {
                 {typeof updateProgress === 'number' && '⏳ Downloading…'}
                 {updateProgress === null && '🚀 Update Now'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cloudflare Captcha Verification Overlay ──────────────── */}
+      {cfModal.visible && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          zIndex: 999999,
+          pointerEvents: 'none',
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+        }}>
+          <style>{`
+            @keyframes cf-pulse {
+              0% { transform: scale(0.95); opacity: 0.8; }
+              50% { transform: scale(1.05); opacity: 1; }
+              100% { transform: scale(0.95); opacity: 0.8; }
+            }
+            @keyframes cf-spin {
+              to { transform: rotate(360deg); }
+            }
+          `}</style>
+          <div style={{
+            width: '90%',
+            maxWidth: '380px',
+            marginTop: '10vh',
+            padding: '24px',
+            background: 'rgba(24, 24, 24, 0.98)',
+            backdropFilter: 'blur(12px)',
+            borderRadius: '20px',
+            border: '1px solid rgba(255,255,255,0.08)',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
+            textAlign: 'center',
+            pointerEvents: 'auto',
+          }}>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '52px',
+              height: '52px',
+              borderRadius: '50%',
+              background: 'rgba(99, 102, 241, 0.1)',
+              border: '1px solid rgba(99, 102, 241, 0.25)',
+              marginBottom: '16px',
+              animation: 'cf-pulse 2s infinite ease-in-out',
+            }}>
+              <span style={{ fontSize: '26px' }}>🛡️</span>
+            </div>
+            <h3 style={{ 
+              margin: '0 0 8px 0', 
+              color: '#fff', 
+              fontFamily: 'var(--font-brand), sans-serif',
+              fontSize: '18px',
+              fontWeight: 800
+            }}>
+              Verifying Security Clearance
+            </h3>
+            <p style={{ 
+              margin: '0 0 20px 0', 
+              color: 'var(--text-secondary)', 
+              fontSize: '13px',
+              lineHeight: '1.5',
+              fontFamily: 'var(--font-main), sans-serif'
+            }}>
+              Completing verification for <strong>{cfModal.domain}</strong>. If prompted, please check the box in the area below.
+            </p>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '10px',
+              color: 'var(--accent)',
+              fontSize: '12px',
+              fontWeight: 600,
+              fontFamily: 'var(--font-main), sans-serif'
+            }}>
+              <span style={{
+                width: '14px',
+                height: '14px',
+                border: '2px solid currentColor',
+                borderTopColor: 'transparent',
+                borderRadius: '50%',
+                display: 'inline-block',
+                animation: 'cf-spin 1s linear infinite'
+              }}></span>
+              Verifying… will close automatically
             </div>
           </div>
         </div>

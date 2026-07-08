@@ -7,9 +7,11 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.os.Build;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.Window;
+import android.util.Log;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -59,29 +61,44 @@ public class EmbedScraperPlugin extends Plugin {
             destroyWebView();
 
             scrapeWebView = new WebView(getContext());
+            ViewGroup rootView = getActivity().findViewById(android.R.id.content);
+            if (rootView != null) {
+                // Layout WebView as full screen, fully focusable/clickable, and drawn behind the main application WebView (index 0)
+                ViewGroup.LayoutParams lp = new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                );
+                scrapeWebView.setAlpha(1.0f);
+                scrapeWebView.setFocusable(true);
+                scrapeWebView.setClickable(true);
+                rootView.addView(scrapeWebView, 0, lp);
+            }
             WebSettings settings = scrapeWebView.getSettings();
             settings.setJavaScriptEnabled(true);
+            settings.setUserAgentString("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36");
             settings.setDomStorageEnabled(true);
             settings.setDatabaseEnabled(true);
             settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
             settings.setMediaPlaybackRequiresUserGesture(false);
+            android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+            cookieManager.setAcceptCookie(true);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(scrapeWebView, true);
+                cookieManager.setAcceptThirdPartyCookies(scrapeWebView, true);
             }
-            // Use the same UA as the main app for consistency
-            settings.setUserAgentString(
-                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
-            );
 
             scrapeWebView.setWebViewClient(new WebViewClient() {
                 @Override
                 public WebResourceResponse shouldInterceptRequest(
                         WebView view, WebResourceRequest request) {
                     String reqUrl = request.getUrl().toString();
-                    // Capture the first .m3u8 URL we see
-                    if (!captured && reqUrl.contains(".m3u8")) {
+                    // Capture the first media URL (.m3u8, .mp4, .mpd, .m4v, googlevideo) we see
+                    String lowerReq = reqUrl.toLowerCase();
+                    if (!captured && (lowerReq.contains(".m3u8") 
+                        || lowerReq.contains(".mp4") 
+                        || lowerReq.contains(".mpd") 
+                        || lowerReq.contains(".m4v") 
+                        || lowerReq.contains("googlevideo.com/videoplayback"))) {
                         captured = true;
                         final String sid = currentSessionId;
                         getActivity().runOnUiThread(() -> {
@@ -105,8 +122,7 @@ public class EmbedScraperPlugin extends Plugin {
                         || lowerUrl.contains("arnattoprana")
                         || lowerUrl.contains("omg10")
                         || lowerUrl.contains("cpmstar")
-                        || lowerUrl.contains("adsterra")
-                        || (lowerUrl.endsWith(".js") && !lowerUrl.contains("jquery") && !lowerUrl.contains("jwplayer") && !lowerUrl.contains("hls") && !lowerUrl.contains("player") && !lowerUrl.contains("echovideo") && !lowerUrl.contains("bundle"))) {
+                        || lowerUrl.contains("adsterra")) {
                         // Return empty response to block the request
                         return new WebResourceResponse("text/javascript", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
                     }
@@ -198,10 +214,201 @@ public class EmbedScraperPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setWebViewVisibility(final PluginCall call) {
+        final boolean visible = Boolean.TRUE.equals(call.getBoolean("visible", false));
+        getActivity().runOnUiThread(() -> {
+            if (scrapeWebView != null) {
+                if (visible) {
+                    scrapeWebView.setAlpha(1.0f);
+                    scrapeWebView.bringToFront();
+                    scrapeWebView.requestFocus();
+                } else {
+                    scrapeWebView.setAlpha(0.01f);
+                    ViewGroup parent = (ViewGroup) scrapeWebView.getParent();
+                    if (parent != null) {
+                        parent.removeView(scrapeWebView);
+                        parent.addView(scrapeWebView, 0);
+                    }
+                }
+            }
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void stopScrape(final PluginCall call) {
         getActivity().runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                android.webkit.CookieManager.getInstance().flush();
+            }
             destroyWebView();
             call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void getCookiesForUrl(final PluginCall call) {
+        final String url = call.getString("url", "");
+        if (url.isEmpty()) {
+            call.reject("url is required");
+            return;
+        }
+        getActivity().runOnUiThread(() -> {
+            try {
+                android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+                String cookies = cookieManager.getCookie(url);
+                JSObject result = new JSObject();
+                result.put("cookies", cookies != null ? cookies : "");
+                call.resolve(result);
+            } catch (Exception e) {
+                call.reject("Failed to get cookies: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * fetchViaWebView: Executes a fetch() call FROM INSIDE the WebView's Cloudflare-cleared session.
+     *
+     * This is the correct way to make authenticated requests to Cloudflare-protected sites:
+     * - The WebView already has cf_clearance cookies for the domain (solved during startScrape)
+     * - fetch() runs in the same JS context so cookies are sent automatically
+     * - No cookie transfer or User-Agent matching needed
+     *
+     * Parameters:
+     *   url      - The API URL to fetch (e.g. https://animepahe.com/api?m=search&q=One+Piece)
+     *   referer  - Referer header to include
+     *   domainUrl - Domain the WebView should be on (navigate there first if needed)
+     */
+    @PluginMethod
+    public void fetchViaWebView(final PluginCall call) {
+        call.setKeepAlive(true);
+        final String url = call.getString("url", "");
+        final String referer = call.getString("referer", "");
+        final String domainUrl = call.getString("domainUrl", "");
+
+        if (url.isEmpty()) {
+            call.reject("url is required");
+            return;
+        }
+
+        getActivity().runOnUiThread(() -> {
+            // Create a fresh WebView if not available
+            boolean needsSetup = (scrapeWebView == null);
+            if (needsSetup) {
+                scrapeWebView = new WebView(getContext());
+                ViewGroup rootView = getActivity().findViewById(android.R.id.content);
+                if (rootView != null) {
+                    ViewGroup.LayoutParams lp = new ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    );
+                    scrapeWebView.setAlpha(1.0f);
+                    scrapeWebView.setFocusable(true);
+                    scrapeWebView.setClickable(true);
+                    rootView.addView(scrapeWebView, 0, lp);
+                }
+                WebSettings settings = scrapeWebView.getSettings();
+                settings.setJavaScriptEnabled(true);
+                settings.setUserAgentString("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36");
+                settings.setDomStorageEnabled(true);
+                settings.setDatabaseEnabled(true);
+                settings.setLoadWithOverviewMode(true);
+                settings.setUseWideViewPort(true);
+                android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+                cookieManager.setAcceptCookie(true);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cookieManager.setAcceptThirdPartyCookies(scrapeWebView, true);
+                }
+            }
+
+            // Build the JavaScript fetch string to run inside the WebView
+            String escapedUrl = url.replace("\"", "\\\"");
+            String escapedReferer = referer.replace("\"", "\\\"");
+
+            final String fetchJs = "(async function() {" +
+                "  try {" +
+                "    const resp = await fetch(\"" + escapedUrl + "\", {" +
+                "      headers: {" +
+                "        'Accept': 'application/json, text/html, */*'," +
+                "        'Referer': \"" + escapedReferer + "\"" +
+                "      }," +
+                "      credentials: 'include'" +
+                "    });" +
+                "    const text = await resp.text();" +
+                "    return JSON.stringify({ status: resp.status, body: text });" +
+                "  } catch(e) {" +
+                "    return JSON.stringify({ error: e.message });" +
+                "  }" +
+                "})()";
+
+            final Runnable executeScript = () -> {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                    scrapeWebView.evaluateJavascript(fetchJs, resultValue -> {
+                        getActivity().runOnUiThread(() -> {
+                            try {
+                                String raw = resultValue;
+                                if (raw != null && raw.startsWith("\"") && raw.endsWith("\"")) {
+                                    raw = raw.substring(1, raw.length() - 1)
+                                        .replace("\\\"", "\"")
+                                        .replace("\\n", "\n")
+                                        .replace("\\\\", "\\");
+                                }
+                                JSObject result = new JSObject();
+                                result.put("body", raw != null ? raw : "");
+                                call.resolve(result);
+                            } catch (Exception e) {
+                                call.reject("fetchViaWebView parse error: " + e.getMessage());
+                            }
+                        });
+                    });
+                } else {
+                    call.reject("fetchViaWebView requires Android 4.4+");
+                }
+            };
+
+            // Check if we need to navigate the WebView to the target domain origin first to satisfy CORS
+            boolean needsNavigate = false;
+            String currentUrl = scrapeWebView.getUrl();
+            if (currentUrl == null || currentUrl.isEmpty() || currentUrl.equals("about:blank")) {
+                needsNavigate = true;
+            } else if (!domainUrl.isEmpty()) {
+                try {
+                    android.net.Uri currentUri = android.net.Uri.parse(currentUrl);
+                    android.net.Uri targetUri = android.net.Uri.parse(domainUrl);
+                    String currentHost = currentUri.getHost();
+                    String targetHost = targetUri.getHost();
+                    if (currentHost == null || targetHost == null || !currentHost.equals(targetHost)) {
+                        needsNavigate = true;
+                    }
+                } catch (Exception e) {
+                    needsNavigate = true;
+                }
+            }
+
+            if (needsNavigate && !domainUrl.isEmpty()) {
+                Log.d("EmbedScraper", "Navigating WebView to domain URL: " + domainUrl + " for fetch context");
+                scrapeWebView.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public void onPageFinished(WebView view, String url) {
+                        super.onPageFinished(view, url);
+                        executeScript.run();
+                    }
+                    @Override
+                    public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
+                        handler.proceed();
+                    }
+                });
+                if (!referer.isEmpty()) {
+                    Map<String, String> headers = new HashMap<>();
+                    headers.put("Referer", referer);
+                    headers.put("Origin", referer.replaceAll("/$", ""));
+                    scrapeWebView.loadUrl(domainUrl, headers);
+                } else {
+                    scrapeWebView.loadUrl(domainUrl);
+                }
+            } else {
+                executeScript.run();
+            }
         });
     }
 
@@ -210,6 +417,10 @@ public class EmbedScraperPlugin extends Plugin {
         if (scrapeWebView != null) {
             scrapeWebView.stopLoading();
             scrapeWebView.clearHistory();
+            ViewGroup parent = (ViewGroup) scrapeWebView.getParent();
+            if (parent != null) {
+                parent.removeView(scrapeWebView);
+            }
             scrapeWebView.destroy();
             scrapeWebView = null;
         }

@@ -28,8 +28,8 @@ const isDownloadable = (srv) => {
   // Exclude Gogo-Direct
   if (name.includes('gogo-direct')) return false;
 
-  // Allow NekoHD and AniHD
-  const isNeko = name.includes('nekohd') || name.includes('neko');
+  // Allow Neko and AniHD
+  const isNeko = name.includes('neko');
   const isAniHD = name.includes('anihd');
   if (!isNeko && !isAniHD) return false;
 
@@ -48,7 +48,7 @@ const enrichDubSubtitles = (list) => {
   return list.map(s => {
     if (s.type !== 'dub') return s;
 
-    // Match by server family: "NekoHD (DUB)" -> "NekoHD", "AniHD (DUB)" -> "AniHD"
+    // Match by server family: "Neko (DUB)" -> "Neko", "AniHD (DUB)" -> "AniHD"
     const dubBase = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
 
     // Find the matching sub server in the same family
@@ -143,6 +143,7 @@ export default function AnimePage() {
   const [extracting,    setExtracting]   = useState(false);
   const [activeServer,  setActiveServer] = useState(null);
   const [fsActive,      setFsActive]     = useState(false);
+  const [scraperErrors, setScraperErrors] = useState([]);
   const hasAutoSelectedRef = useRef(false);
 
   // Secure Downloads State
@@ -612,6 +613,7 @@ export default function AnimePage() {
     setActiveUrl('');
     setActiveName('');
     setActiveServer(null);
+    setScraperErrors([]);
 
     const handleFound = (currentServers) => {
       const enriched = enrichDubSubtitles(currentServers);
@@ -642,6 +644,9 @@ export default function AnimePage() {
 
     try {
       const result = await getAniNekoServers(anime, epParam, handleFound);
+      if (result?.errors) {
+        setScraperErrors(result.errors);
+      }
       if (!result?.servers?.length) {
         setStreamErr('No streaming servers available for this episode.');
       } else {
@@ -1285,10 +1290,24 @@ export default function AnimePage() {
               <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Resolving stream sources...</p>
             </div>
           ) : streamErr ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20, overflowY: 'auto' }}>
               <AlertCircle size={32} color="#e50914" />
               <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
-              <button className="btn btn-primary" onClick={fetchStream} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12 }}>
+              
+              {scraperErrors && scraperErrors.length > 0 && (
+                <div style={{ width: '100%', maxWidth: 300, background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 10, textAlign: 'left', marginTop: 4 }}>
+                  <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', marginBottom: 6 }}>Scraper Diagnostic Logs:</p>
+                  <div style={{ maxHeight: 100, overflowY: 'auto', fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {scraperErrors.map((err, idx) => (
+                      <div key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 4 }}>
+                        {err}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              <button className="btn btn-primary" onClick={fetchStream} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6 }}>
                 ↺ Retry
               </button>
             </div>
