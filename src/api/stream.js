@@ -5,7 +5,8 @@
  * through a lightweight Cloudflare Worker header proxy if configured.
  */
 
-import { scrapeAniNeko, scrapeAniWaves, scrapeAnimetsu } from './scrapers';
+import { scrapeAniNeko, scrapeAniWaves, scrapeAnimetsu, getScraperEpisodeCount } from './scrapers';
+export { getScraperEpisodeCount };
 
 const clientStreamCache = new Map();
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache life
@@ -62,7 +63,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
         const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
-        const isAllowed = ['AniHD', 'Neko', 'WavesHD'].includes(baseName);
+        const isAllowed = ['AniHD', 'NekoHD', 'WavesHD'].includes(baseName) || baseName.startsWith('Waves-');
         if (!isAllowed) return; // skip all other servers
 
         // Prevent duplicate server items
@@ -78,7 +79,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
         const getPriority = (name) => {
           if (name.includes('Neko')) return 0;
           if (name.includes('AniHD')) return 1;
-          if (name.includes('WavesHD')) return 2;
+          if (name.includes('Waves') || name.includes('WavesHD')) return 2;
           return 3;
         };
         return getPriority(a.name) - getPriority(b.name);
@@ -129,7 +130,6 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   // Define Animetsu (AniHD) execution
   const animetsuPromise = (async () => {
     for (const title of titles) {
-      if (/[\u3000-\u9fff\uff00-\uffef]/.test(title)) continue; // Skip Japanese native
       try {
         console.log(`[ClientEngine] Animetsu trying: "${title}" ep ${episode}`);
         const data = await scrapeAnimetsu(title, episode, isMovie);
@@ -158,9 +158,9 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   })();
 
   const results = await Promise.allSettled([
-    runWithTimeout(nekoPromise, 60000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 60000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(animetsuPromise, 60000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(wavesPromise, 12000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(animetsuPromise, 12000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
   ]);
 
   if (combinedServers.length === 0) {
@@ -301,4 +301,56 @@ export function parseMasterPlaylist(playlistUrl, playlistText) {
   });
   
   return variants;
+}
+
+export async function resolvePlaceholderServer(anime, episode, serverName, serverType) {
+  const titles = [
+    anime.title?.romaji,
+    anime.title?.english,
+    anime.title?.native,
+  ].filter(Boolean).filter((t, i, arr) => arr.indexOf(t) === i);
+
+  if (titles.length === 0) throw new Error('No anime title available');
+  const isMovie = anime.format === 'MOVIE';
+
+  for (const title of titles) {
+    try {
+      let data = null;
+      if (serverName.includes('AniHD')) {
+        console.log(`[ClientEngine] Resolving AniHD placeholder for "${title}"...`);
+        data = await scrapeAnimetsu(title, episode, isMovie);
+      }
+
+      if (data?.servers?.length) {
+        const found = data.servers.find(s => s.name === serverName && s.type === serverType)
+                   || data.servers.find(s => s.type === serverType);
+        if (found) {
+          // Update client cache if present
+          const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}`;
+          if (clientStreamCache.has(cacheKey)) {
+            const cached = clientStreamCache.get(cacheKey);
+            const srvs = cached.data.servers;
+            const idx = srvs.findIndex(s => s.name === serverName && s.type === serverType);
+            if (idx !== -1) {
+              srvs[idx] = { 
+                ...srvs[idx], 
+                videoUrl: found.videoUrl, 
+                embedUrl: found.embedUrl, 
+                isHLS: found.isHLS, 
+                subtitles: found.subtitles 
+              };
+              clientStreamCache.set(cacheKey, { 
+                timestamp: Date.now(), 
+                data: { ...cached.data, servers: srvs } 
+              });
+            }
+          }
+          return found;
+        }
+      }
+    } catch (e) {
+      console.warn(`[ClientEngine] Failed to resolve placeholder for "${title}":`, e.message);
+    }
+  }
+  throw new Error(`Failed to resolve streaming link for ${serverName}`);
 }

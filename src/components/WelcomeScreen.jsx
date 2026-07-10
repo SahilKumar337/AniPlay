@@ -7,7 +7,7 @@ const SLIDES = [
   { tagline: 'Track Your Progress,', sub: 'Build Your Watchlist' },
 ];
 
-export default function WelcomeScreen({ onEnter }) {
+export default function WelcomeScreen({ onEnter, onSignIn }) {
   const [covers, setCovers] = useState([]);
   const [slide,  setSlide]  = useState(0);
 
@@ -27,8 +27,6 @@ export default function WelcomeScreen({ onEnter }) {
   ];
 
   const fallback = 'https://via.placeholder.com/120x160/1e1e1e/666?text=AniLab';
-
-  const [showOfflineModal, setShowOfflineModal] = useState(false);
 
   return (
     <div className="welcome-screen">
@@ -74,7 +72,7 @@ export default function WelcomeScreen({ onEnter }) {
       <div className="welcome-actions">
         <button
           className="btn btn-outline"
-          onClick={() => setShowOfflineModal(true)}
+          onClick={onSignIn}
           id="btn-signin"
         >Sign in</button>
         <button
@@ -83,57 +81,6 @@ export default function WelcomeScreen({ onEnter }) {
           id="btn-watch-now"
         >Watch now</button>
       </div>
-
-      {/* Premium Offline Mode Modal */}
-      {showOfflineModal && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(0,0,0,0.85)',
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-        }} onClick={() => setShowOfflineModal(false)}>
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              width: '100%', maxWidth: 480,
-              background: 'var(--bg-card)',
-              borderRadius: '24px 24px 0 0',
-              padding: '24px 24px 38px',
-              border: '1px solid var(--border)',
-              animation: 'welcomeSlideUp 0.3s cubic-bezier(0.34,1.2,0.64,1)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-              <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.15)' }} />
-            </div>
-            
-            <div style={{ textAlign: 'center', padding: '8px 0' }}>
-              <div style={{
-                width: 54, height: 54, borderRadius: '50%',
-                background: 'rgba(99, 102, 241, 0.1)',
-                color: 'var(--accent)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 24, margin: '0 auto 16px'
-              }}>✓</div>
-              
-              <h2 style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 12, fontFamily: 'var(--font-brand)' }}>
-                Offline Mode Active
-              </h2>
-              
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 24, padding: '0 8px' }}>
-                AniPlay runs fully offline on your device! Your watchlist, favorites, and watch progress are saved securely using Android SharedPreferences. No sign-in or online account is needed to watch.
-              </p>
-              
-              <button
-                className="btn btn-primary"
-                onClick={onEnter}
-                style={{ width: '100%', padding: '12px 0', borderRadius: 12, fontWeight: 700, fontSize: 14 }}
-              >
-                Continue to App
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <style>{`
         @keyframes welcomeFade {

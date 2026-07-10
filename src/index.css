@@ -52,6 +52,19 @@ video::-webkit-media-controls,
   --font-brand:   'Outfit', sans-serif;
 }
 
+body.theme-light {
+  --bg-primary:   #f4f5f8;
+  --bg-secondary: #ffffff;
+  --bg-card:      #ffffff;
+  --bg-hover:     #eaecef;
+  --text-primary:   #121214;
+  --text-secondary: #4a4d55;
+  --text-muted:     #8a8e98;
+  --border:       rgba(0,0,0,0.06);
+  --shadow-card:  0 4px 20px rgba(0,0,0,0.06);
+  --shadow-glow:  0 0 20px rgba(99,102,241,0.15);
+}
+
 html { 
   scroll-behavior: smooth; 
   -webkit-text-size-adjust: 100%;
@@ -739,6 +752,9 @@ ul, ol { list-style: none; }
   cursor: pointer;
   transition: background 0.3s ease, transform 0.3s ease;
   align-items: center;
+  will-change: transform, background;
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
 }
 .search-result-item:hover {
   background: var(--bg-hover);
@@ -1276,5 +1292,36 @@ ul, ol { list-style: none; }
 @keyframes fadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/* ── Compact Cards Scaling Overrides ── */
+body.compact-cards .anime-card,
+body.compact-cards .mylist-card {
+  width: 90px !important;
+  height: 125px !important;
+}
+
+body.compact-cards .h-scroll > div {
+  width: 90px !important;
+}
+
+body.compact-cards .h-scroll p {
+  width: 90px !important;
+}
+
+body.compact-cards .mylist-grid {
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 6px !important;
+  padding: 0 10px !important;
+}
+
+body.compact-cards .mylist-card span,
+body.compact-cards .anime-card span {
+  font-size: 8px !important;
+}
+
+body.compact-cards .mylist-card select {
+  font-size: 8px !important;
+  padding: 0px 2px !important;
 }
 

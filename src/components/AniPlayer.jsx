@@ -207,7 +207,10 @@ export default function AniPlayer({
   onFullscreenChange,
   currentEpisode = 1,
   totalEpisodes = 1,
-  onEpisodeChange
+  onEpisodeChange,
+  autoplay = true,
+  subtitleSettings = null,
+  loading = false,
 }) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
@@ -248,6 +251,19 @@ export default function AniPlayer({
   const [hlsErr,    setHlsErr]    = useState(null);   // fatal stream error
   const [hasStarted, setHasStarted] = useState(false); // first play event occurred
   const [subToast,  setSubToast]  = useState(null);   // subtitle unavailable toast message
+  const [autoplayCountdown, setAutoplayCountdown] = useState(null); // null or number (5..0)
+
+  const [showSkipIntro,    setShowSkipIntro]    = useState(false);
+  const [showSkipOutro,    setShowSkipOutro]    = useState(false);
+  const [skipNotification, setSkipNotification] = useState('');
+
+  const introSkippedRef = useRef(false);
+  const outroSkippedRef = useRef(false);
+
+  // Playback speed
+  const [speed,     setSpeed]     = useState(1);
+  const [showSpeed, setShowSpeed] = useState(false);
+  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   // Debug & Diagnostics
   const [logs,       setLogs]       = useState([]);
@@ -270,6 +286,11 @@ export default function AniPlayer({
     log(`Initializing stream: ${url.slice(0, 100)}...`);
 
     // Reset all state on URL change
+    introSkippedRef.current = false;
+    outroSkippedRef.current = false;
+    setShowSkipIntro(false);
+    setShowSkipOutro(false);
+    setSkipNotification('');
     setNeedsTap(false);
     setHlsErr(null);
     setWaiting(true);
@@ -611,7 +632,9 @@ export default function AniPlayer({
         setNeedsTap(false);
         setHasStarted(true);
       }
-      setCurTime(v.currentTime);
+      const ct = v.currentTime;
+      setCurTime(ct);
+
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
       // Only log non-timeupdate events to avoid flooding re-renders
       if (e.type !== 'timeupdate') {
@@ -625,6 +648,12 @@ export default function AniPlayer({
     const onWait = () => {
       log('Video event: waiting (buffering)');
       setWaiting(true);
+    };
+    const onEnded = () => {
+      log('Video ended');
+      if (autoplay && onEpisodeChange && currentEpisode < totalEpisodes) {
+        setAutoplayCountdown(5);
+      }
     };
     const onPlay = (e) => {
       log(`Video event: playing/canplay (event: ${e.type})`);
@@ -642,6 +671,7 @@ export default function AniPlayer({
     v.addEventListener('waiting',         onWait);
     v.addEventListener('playing',         onPlay);
     v.addEventListener('canplay',         onPlay);
+    v.addEventListener('ended',           onEnded);
     return () => {
       v.removeEventListener('play',           sync);
       v.removeEventListener('pause',          sync);
@@ -650,10 +680,25 @@ export default function AniPlayer({
       v.removeEventListener('waiting',        onWait);
       v.removeEventListener('playing',        onPlay);
       v.removeEventListener('canplay',        onPlay);
+      v.removeEventListener('ended',          onEnded);
     };
   }, [log]);
 
-  // Monitor stuck state (triggers retry state after 30 seconds of loading or buffering)
+  // ── Autoplay countdown when video ends ─────────────────────────
+  useEffect(() => {
+    if (autoplayCountdown === null) return;
+    if (autoplayCountdown <= 0) {
+      setAutoplayCountdown(null);
+      if (onEpisodeChange && currentEpisode < totalEpisodes) {
+        onEpisodeChange(currentEpisode + 1);
+      }
+      return;
+    }
+    const t = setTimeout(() => setAutoplayCountdown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [autoplayCountdown, onEpisodeChange, currentEpisode, totalEpisodes]);
+
+  // Monitor stuck state — show hint after 8s but NEVER throw a fatal error
   useEffect(() => {
     const isLoading = (waiting || !hasStarted) && !hlsErr;
     if (!isLoading) {
@@ -661,18 +706,10 @@ export default function AniPlayer({
       return;
     }
     const interval = setInterval(() => {
-      setStuckCount(c => {
-        const next = c + 1;
-        if (next >= 30) {
-          log('Playback loading timed out after 30 seconds. Displaying retry.');
-          setHlsErr('Playback loading timed out. Please try again.');
-          setWaiting(false);
-        }
-        return next;
-      });
+      setStuckCount(c => c + 1);
     }, 1000);
     return () => clearInterval(interval);
-  }, [waiting, hasStarted, hlsErr, log]);
+  }, [waiting, hasStarted, hlsErr]);
 
   /* ── Fullscreen events ────────────────────────────────────── */
   useEffect(() => {
@@ -806,6 +843,26 @@ export default function AniPlayer({
     // ScreenOrientation + immersive mode is handled by the fs useEffect above
     setFs(prev => !prev);
   }, []);
+
+  // ── Playback Speed ─────────────────────────────────────────
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = speed;
+  }, [speed]);
+
+  // Pause playback when loading/fetching next episode servers
+  useEffect(() => {
+    if (loading && videoRef.current) {
+      videoRef.current.pause();
+    }
+  }, [loading]);
+
+  const applySpeed = useCallback((s) => {
+    setSpeed(s);
+    setShowSpeed(false);
+    showCtrl();
+  }, [showCtrl]);
 
   /* ── Seek ─────────────────────────────────────────────────── */
   const doSeek = useCallback((clientX) => {
@@ -988,14 +1045,27 @@ export default function AniPlayer({
       )}
 
       {/* ── Custom Subtitle Overlay ─────────────────────────── */}
-      {activeCue && cueHtml && (
-        <div className="anip__subtitle-overlay">
-          <span
-            className="anip__subtitle-text"
-            dangerouslySetInnerHTML={{ __html: cueHtml.replace(/\n/g, '<br/>') }}
-          />
-        </div>
-      )}
+      {activeCue && cueHtml && (() => {
+        const subSz = subtitleSettings?.subtitleFontSize || 'medium';
+        const fontSize = { small: 14, medium: 18, large: 22, xlarge: 28 }[subSz] || 18;
+        const color = subtitleSettings?.subtitleColor || '#ffffff';
+        const bgOpacity = subtitleSettings?.subtitleBgOpacity ?? 0.35;
+        const isTop = subtitleSettings?.subtitlePosition === 'top';
+        return (
+          <div
+            className="anip__subtitle-overlay"
+            style={isTop ? { bottom: 'auto', top: '11%' } : {}}
+          >
+            <span
+              className="anip__subtitle-text"
+              style={{ fontSize, color, background: `rgba(0,0,0,${bgOpacity})` }}
+              dangerouslySetInnerHTML={{ __html: cueHtml.replace(/\n/g, '<br/>') }}
+            />
+          </div>
+        );
+      })()}
+
+
 
       {/* ── Subtitle unavailable toast ────────────────────────── */}
       {subToast && (
@@ -1037,9 +1107,51 @@ export default function AniPlayer({
       )}
 
       {/* ── buffering spinner / loading spinner ─────────────── */}
-      {(waiting || !hasStarted || needsTap) && !hlsErr && (
+      {(waiting || !hasStarted || needsTap || loading) && !hlsErr && (
         <div className="anip__spinner">
           <div className="anip__spinner-ring" />
+        </div>
+      )}
+
+      {/* ── Autoplay countdown overlay ────────────────────────── */}
+      {autoplayCountdown !== null && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 28,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)',
+        }}>
+          <div style={{
+            background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)',
+            borderRadius: 16, padding: '24px 32px', textAlign: 'center',
+            backdropFilter: 'blur(8px)',
+          }}>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 6 }}>Up Next</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: '#fff', marginBottom: 16 }}>
+              Episode {currentEpisode + 1}
+            </div>
+            <div style={{
+              width: 64, height: 64, borderRadius: '50%', margin: '0 auto 16px',
+              border: '3px solid rgba(255,255,255,0.2)',
+              borderTopColor: 'var(--accent)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 24, fontWeight: 800, color: '#fff',
+              animation: 'spin 1s linear infinite',
+            }}>
+              {autoplayCountdown}
+            </div>
+            <button
+              onClick={() => setAutoplayCountdown(null)}
+              style={{
+                background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+                color: '#fff', borderRadius: 8, padding: '8px 20px',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
 
@@ -1134,7 +1246,7 @@ export default function AniPlayer({
         <div className="anip__spacer" />
 
         {/* ── Center Controls (Prev, Play/Pause, Next) ──────── */}
-        {!(showQ || showSub || showSync) && (
+        {!(showQ || showSub || showSync || loading) && (
           <div className="anip__center-ctrls" onClick={e => e.stopPropagation()}>
           {onEpisodeChange && (
             <button
@@ -1278,6 +1390,32 @@ export default function AniPlayer({
                 )}
               </div>
 
+              {/* Playback Speed */}
+              <div className="anip__menu-anchor">
+                <button
+                  className="anip__btn"
+                  onClick={e => { e.stopPropagation(); setShowSpeed(x => !x); setShowQ(false); setShowSub(false); setShowSync(false); }}
+                  title="Playback Speed"
+                >
+                  <span className="anip__badge-visible" style={{ fontSize: '10px', fontWeight: 800 }}>
+                    {speed === 1 ? '1×' : `${speed}×`}
+                  </span>
+                </button>
+                {showSpeed && (
+                  <div className="anip__menu" onClick={e => e.stopPropagation()}>
+                    <p className="anip__menu-hd">Speed</p>
+                    {SPEEDS.map(s => (
+                      <button key={s}
+                        className={`anip__menu-item ${speed === s ? 'anip__menu-item--on' : ''}`}
+                        onClick={e => { e.stopPropagation(); applySpeed(s); }}
+                      >
+                        {speed === s && <span className="anip__chk">✓</span>}{s}×
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Aspect Ratio Toggle */}
               <button className="anip__btn"
                 onClick={e => { e.stopPropagation(); toggleFitMode(); }}
@@ -1321,12 +1459,7 @@ export default function AniPlayer({
         </div>
       )}
 
-      {/* Stuck buffering hint overlay */}
-      {waiting && stuckCount >= 8 && !hlsErr && !showDebug && (
-        <div className="anip__stuck-hint" onClick={e => { e.stopPropagation(); setShowDebug(true); }}>
-          <span>Stuck loading? Tap here to open diagnostics</span>
-        </div>
-      )}
+
 
     </div>
   );

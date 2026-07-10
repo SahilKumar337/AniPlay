@@ -2,11 +2,12 @@ import { useNavigate } from 'react-router-dom';
 import { getTitle, getCover, getColor } from '../api/anilist';
 import { Play } from 'lucide-react';
 import { useState } from 'react';
+import { useApp } from '../context/AppContext';
 
 export default function AnimeCard({
   anime,
-  width = 120,
-  height = 165,
+  width = null,   // null = auto from settings
+  height = null,  // null = auto from settings
   rank = null,
   epLabel = null,
   showBadges = true,
@@ -14,6 +15,13 @@ export default function AnimeCard({
 }) {
   const navigate = useNavigate();
   const [imgError, setImgError] = useState(false);
+  const { settings } = useApp();
+
+  // Apply compact card sizing
+  const compact = settings?.compactCards;
+  const cardWidth  = width  ?? (compact ? 90 : 120);
+  const cardHeight = height ?? (compact ? 125 : 165);
+
   const title  = getTitle(anime);
   const cover  = getCover(anime);
   const color  = getColor(anime);
@@ -23,7 +31,7 @@ export default function AnimeCard({
   return (
     <div
       className={`anime-card ${className}`}
-      style={{ width, height }}
+      style={{ width: cardWidth, height: cardHeight }}
       onClick={handleClick}
       id={`anime-card-${anime.id}`}
       role="button"

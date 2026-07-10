@@ -15,17 +15,13 @@ export async function cloudSignUp(email, password, nickname) {
     email,
     password,
     options: {
+      emailRedirectTo: 'aniplay://auth/callback',
       data: {
         nickname: nickname || email.split('@')[0]
       }
     }
   });
   if (error) throw error;
-  
-  // Create user profile row
-  if (data?.user) {
-    await createUserProfile(data.user.id, nickname || email.split('@')[0]);
-  }
   return data;
 }
 
@@ -162,6 +158,7 @@ export async function fetchCloudComments(animeId, episode) {
       id,
       username,
       content,
+      parent_id,
       created_at
     `)
     .eq('anime_id', String(animeId))
@@ -172,13 +169,14 @@ export async function fetchCloudComments(animeId, episode) {
   return data || [];
 }
 
-export async function postCloudComment(animeId, episode, username, content) {
+export async function postCloudComment(animeId, episode, username, content, parentId = null) {
   const user = await getCloudUser();
   const payload = {
     anime_id: String(animeId),
     episode: parseInt(episode, 10),
     username: username || 'Anonymous',
     content,
+    parent_id: parentId,
     user_id: user?.id || null
   };
 
@@ -189,4 +187,24 @@ export async function postCloudComment(animeId, episode, username, content) {
 
   if (error) throw error;
   return data;
+}
+
+export async function updateCloudRecentlyViewed(recentlyViewedArray) {
+  const user = await getCloudUser();
+  if (!user) return;
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ recently_viewed: recentlyViewedArray })
+    .eq('id', user.id);
+  if (error) throw error;
+}
+
+export async function updateCloudSettings(settingsObj) {
+  const user = await getCloudUser();
+  if (!user) return;
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ settings: settingsObj })
+    .eq('id', user.id);
+  if (error) throw error;
 }

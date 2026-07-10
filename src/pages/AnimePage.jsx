@@ -13,7 +13,7 @@ import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 import { fetchCloudComments, postCloudComment, updateUserNickname } from '../api/supabase';
 import AnimeCard from '../components/AnimeCard';
-import { getAniNekoServers, getCachedServers, checkProxy, fetchM3U8Playlist, parseMasterPlaylist } from '../api/stream';
+import { getAniNekoServers, getCachedServers, checkProxy, fetchM3U8Playlist, parseMasterPlaylist, getScraperEpisodeCount, resolvePlaceholderServer } from '../api/stream';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
 import { scrapeEmbedNative } from '../api/embedScraper';
@@ -75,7 +75,7 @@ const buildAllSubtitleTracks = (list) => {
 
   const getSourceLabel = (serverName) => {
     const n = (serverName || '').toLowerCase();
-    if (n.includes('neko')) return 'Neko';
+    if (n.includes('neko')) return 'NekoHD';
     if (n.includes('anihd') || n.includes('ani')) return 'Ani';
     if (n.includes('waves')) return 'Waves';
     return null;
@@ -115,8 +115,11 @@ export default function AnimePage() {
   const {
     watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist, updateWatchlistStatus,
     toggleFavorite, isFavorite, getEpisodeProgress,
-    setEpisodeProgress, addToRecentlyViewed, showToast
+    setEpisodeProgress, addToRecentlyViewed, showToast, settings, user
   } = useApp();
+  // Always-fresh ref — avoids stale closure issues inside fetchStream useCallback
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
   const [anime,    setAnime]    = useState(null);
   const [state,    setState]    = useState('loading');
   const [errMsg,   setErrMsg]   = useState('');
@@ -157,6 +160,7 @@ export default function AnimePage() {
   const [downloadAudioTrack, setDownloadAudioTrack] = useState('sub');
 
   // Comments Section State & Logic
+  const [scraperEps, setScraperEps] = useState(0);
   const [comments, setComments] = useState([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [newComment, setNewComment] = useState('');
@@ -164,6 +168,8 @@ export default function AnimePage() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameInput, setNicknameInput] = useState('');
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [replyCommentText, setReplyCommentText] = useState('');
   const [likedComments, setLikedComments] = useState(() => {
     try {
       const saved = localStorage.getItem('anilab_liked_comments');
@@ -196,8 +202,24 @@ export default function AnimePage() {
   };
 
   const formatRelativeTime = (dateStr) => {
+    if (!dateStr) return 'recently';
     try {
-      const past = new Date(dateStr.replace(' ', 'T') + 'Z'); // parse SQLite format correctly
+      let normalized = dateStr;
+      if (typeof dateStr === 'string') {
+        normalized = dateStr.trim();
+        if (normalized.includes(' ')) {
+          normalized = normalized.replace(' ', 'T');
+        }
+        if (!normalized.endsWith('Z') && !normalized.includes('+') && !normalized.includes('-')) {
+          normalized += 'Z';
+        }
+      }
+      
+      const past = new Date(normalized);
+      if (isNaN(past.getTime())) {
+        return 'recently';
+      }
+      
       const diffMs = Date.now() - past.getTime();
       const diffSecs = Math.floor(diffMs / 1000);
       if (diffSecs < 60) return 'just now';
@@ -210,6 +232,24 @@ export default function AnimePage() {
     } catch {
       return 'recently';
     }
+  };
+
+  const buildCommentTree = (flatComments) => {
+    const parentComments = flatComments.filter(c => !c.parent_id);
+    const replyMap = {};
+    
+    flatComments.forEach(c => {
+      if (c.parent_id) {
+        if (!replyMap[c.parent_id]) replyMap[c.parent_id] = [];
+        replyMap[c.parent_id].push(c);
+      }
+    });
+
+    Object.keys(replyMap).forEach(parentId => {
+      replyMap[parentId].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    });
+
+    return { parentComments, replyMap };
   };
 
   const fetchComments = async () => {
@@ -225,14 +265,20 @@ export default function AnimePage() {
     }
   };
 
-  const handlePostComment = async (e) => {
+  const handlePostComment = async (e, parentId = null) => {
     e.preventDefault();
-    if (!newComment.trim() || submittingComment) return;
+    const commentBody = parentId ? replyCommentText.trim() : newComment.trim();
+    if (!commentBody || submittingComment) return;
     
     setSubmittingComment(true);
     try {
-      await postCloudComment(animeId, episodeNumber, username.trim() || 'Anonymous', newComment.trim());
-      setNewComment('');
+      await postCloudComment(animeId, episodeNumber, username.trim() || 'Anonymous', commentBody, parentId);
+      if (parentId) {
+        setReplyCommentText('');
+        setReplyingTo(null);
+      } else {
+        setNewComment('');
+      }
       await fetchComments();
     } catch (e) {
       alert(e.message || 'Failed to post comment');
@@ -264,17 +310,20 @@ export default function AnimePage() {
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem('user_nickname');
-    if (saved) {
-      setUsername(saved);
-      setNicknameInput(saved);
+    const activeUsername = user
+      ? (user.user_metadata?.nickname || user.email.split("@")[0])
+      : localStorage.getItem("user_nickname");
+
+    if (activeUsername) {
+      setUsername(activeUsername);
+      setNicknameInput(activeUsername);
     } else {
       const randomName = getRandomAnimeName();
       setUsername(randomName);
       setNicknameInput(randomName);
       localStorage.setItem('user_nickname', randomName);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     fetchComments();
@@ -445,6 +494,19 @@ export default function AnimePage() {
 
       let finalUrl = selectedServer.videoUrl;
       let referer = (selectedServer.name.toLowerCase().includes('neko') && selectedServer.embedUrl) ? selectedServer.embedUrl : (selectedServer.referer || '');
+
+      // Resolve placeholder link if needed
+      const isPlaceholder = finalUrl && finalUrl.includes('proxy/placeholder');
+      if (isPlaceholder) {
+        showToast('Resolving direct stream links...');
+        const resolved = await resolvePlaceholderServer(anime, epNum, selectedServer.name, selectedServer.type || 'sub');
+        finalUrl = resolved.videoUrl;
+        selectedServer.videoUrl = resolved.videoUrl;
+        selectedServer.embedUrl = resolved.embedUrl;
+        selectedServer.isHLS = resolved.isHLS;
+        selectedServer.subtitles = resolved.subtitles || [];
+        referer = resolved.referer || '';
+      }
 
       // If it is an embed server, scrape it first to get direct stream url
       const isEmbed = !selectedServer.isHLS && selectedServer.embedUrl;
@@ -629,7 +691,22 @@ export default function AnimePage() {
     }
   }, [id]);
 
-  useEffect(() => { window.scrollTo(0, 0); load(); }, [load]);
+  useEffect(() => { window.scrollTo(0, 0); load(); showToast("AniPlay Engine v3 Active"); }, [load, showToast]);
+
+  useEffect(() => {
+    if (anime) {
+      getScraperEpisodeCount(anime)
+        .then(count => {
+          if (count > 0) {
+            console.log(`[ScraperCheck] Scraper has ${count} episodes available.`);
+            setScraperEps(count);
+          }
+        })
+        .catch(err => console.warn('[ScraperCheck Error]', err));
+    } else {
+      setScraperEps(0);
+    }
+  }, [anime]);
 
   // Robust server selection
   const selectServer = useCallback(async (srv, srvList) => {
@@ -653,6 +730,33 @@ export default function AnimePage() {
         setStreamErr('Unable to load stream. Please tap retry or select another server.');
       }
     };
+
+    // Resolve placeholder link if needed
+    const isPlaceholder = srv.videoUrl && srv.videoUrl.includes('proxy/placeholder');
+    if (isPlaceholder) {
+      setExtracting(true);
+      setActiveName(srv.name);
+      setActiveType(srv.type || 'sub');
+      try {
+        console.log(`[AnimePage] Resolving placeholder for: ${srv.name}`);
+        const resolved = await resolvePlaceholderServer(anime, epParam, srv.name, srv.type || 'sub');
+        setExtracting(false);
+        const updatedList = listToUse.map(s => {
+          if (s.name === srv.name && s.type === srv.type) {
+            return { ...s, ...resolved };
+          }
+          return s;
+        });
+        setServers(updatedList);
+        selectServer({ ...srv, ...resolved }, updatedList);
+        return;
+      } catch (err) {
+        console.error(`[AnimePage] Failed to resolve placeholder:`, err.message);
+        setExtracting(false);
+        handleScrapeError();
+        return;
+      }
+    }
 
     const isEmbedServer = !srv.isHLS && srv.embedUrl;
     if (isEmbedServer) {
@@ -712,10 +816,21 @@ export default function AnimePage() {
       if (matchingServers.length === 0) {
         matchingServers = enriched.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
       }
-      const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
-                     || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
-                     || matchingServers[0]
-                     || enriched[0];
+      // Respect preferredServer setting
+      const preferredSrv = settingsRef.current?.preferredServer || 'auto';
+      let preferred;
+      if (preferredSrv === 'gogoanime' || preferredSrv === 'neko') {
+        preferred = matchingServers.find(s => /neko|gogo/i.test(s.name)) || matchingServers[0] || enriched[0];
+      } else if (preferredSrv === 'animepahe' || preferredSrv === 'anihd') {
+        preferred = matchingServers.find(s => /anihd/i.test(s.name)) || matchingServers[0] || enriched[0];
+      } else if (preferredSrv === 'waveshd' || preferredSrv === 'waves') {
+        preferred = matchingServers.find(s => /waves/i.test(s.name)) || matchingServers[0] || enriched[0];
+      } else {
+        preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                 || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                 || matchingServers[0]
+                 || enriched[0];
+      }
       
       if (preferred) {
         hasAutoSelectedRef.current = true;
@@ -725,7 +840,7 @@ export default function AnimePage() {
       }
 
       const nextEp = epParam + 1;
-      const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+      const maxEps = anime.episodes ? anime.episodes : ((anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 999);
       if (nextEp <= maxEps) {
         getAniNekoServers(anime, nextEp).catch(() => {});
       }
@@ -735,11 +850,16 @@ export default function AnimePage() {
 
     setLoadStream(true);
     setStreamErr(null);
-    setServers([]);
-    setActiveUrl('');
-    setActiveName('');
-    setActiveServer(null);
     setScraperErrors([]);
+
+    // Only clear servers and active player if we don't have one running,
+    // which prevents the player from unmounting and losing fullscreen status.
+    if (!activeUrl) {
+      setServers([]);
+      setActiveUrl('');
+      setActiveName('');
+      setActiveServer(null);
+    }
 
     const handleFound = (currentServers) => {
       const enriched = enrichDubSubtitles(currentServers);
@@ -752,10 +872,21 @@ export default function AnimePage() {
         if (matchingServers.length === 0) {
           matchingServers = enriched.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
         }
-        const preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
-                       || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
-                       || matchingServers[0]
-                       || enriched[0];
+        // Respect preferredServer setting
+        const preferredSrv2 = settingsRef.current?.preferredServer || 'auto';
+        let preferred;
+        if (preferredSrv2 === 'gogoanime' || preferredSrv2 === 'neko') {
+          preferred = matchingServers.find(s => /neko|gogo/i.test(s.name)) || matchingServers[0] || enriched[0];
+        } else if (preferredSrv2 === 'animepahe' || preferredSrv2 === 'anihd') {
+          preferred = matchingServers.find(s => /anihd/i.test(s.name)) || matchingServers[0] || enriched[0];
+        } else if (preferredSrv2 === 'waveshd' || preferredSrv2 === 'waves') {
+          preferred = matchingServers.find(s => /waves/i.test(s.name)) || matchingServers[0] || enriched[0];
+        } else {
+          preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+                   || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
+                   || matchingServers[0]
+                   || enriched[0];
+        }
         
         if (preferred) {
           hasAutoSelectedRef.current = true;
@@ -777,7 +908,7 @@ export default function AnimePage() {
         setStreamErr('No streaming servers available for this episode.');
       } else {
         const nextEp = epParam + 1;
-        const maxEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : (anime.episodes || 999);
+        const maxEps = anime.episodes ? anime.episodes : ((anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 999);
         if (nextEp <= maxEps) {
           getAniNekoServers(anime, nextEp).catch(() => {});
         }
@@ -801,6 +932,38 @@ export default function AnimePage() {
     }
   }, [epParam, playParam, fetchStream]);
 
+  // Re-select preferred server immediately when settings.preferredServer changes
+  // (while servers are already loaded for the current episode)
+  useEffect(() => {
+    if (!servers.length) return;
+    const preferredSrv = settings?.preferredServer || 'auto';
+    const preferredTrack = localStorage.getItem('anilab_preferred_track') || 'sub';
+    let matchingServers = servers.filter(s => s.type === preferredTrack);
+    if (matchingServers.length === 0) {
+      matchingServers = servers.filter(s => s.type === (preferredTrack === 'sub' ? 'dub' : 'sub'));
+    }
+
+    let preferred;
+    if (preferredSrv === 'gogoanime' || preferredSrv === 'neko') {
+      preferred = matchingServers.find(s => /neko|gogo/i.test(s.name));
+    } else if (preferredSrv === 'animepahe' || preferredSrv === 'anihd') {
+      preferred = matchingServers.find(s => /anihd/i.test(s.name));
+    } else if (preferredSrv === 'waveshd' || preferredSrv === 'waves') {
+      preferred = matchingServers.find(s => /waves/i.test(s.name));
+    } else {
+      preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
+               || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name));
+    }
+
+    // Only switch if we found a specific match (not just any fallback)
+    if (preferred) {
+      setActiveType(preferred.type || 'sub');
+      setAudioTrack(preferred.type || 'sub');
+      selectServer(preferred, servers);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.preferredServer]);
+
   // Track episode watch history progress
   useEffect(() => {
     if (anime && epParam) {
@@ -808,9 +971,11 @@ export default function AnimePage() {
       addToRecentlyViewed(anime, epParam);
 
       // If all episodes watched, mark as completed
-      const totalEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
-        ? anime.nextAiringEpisode.episode - 1
-        : (anime.episodes || 0);
+      const totalEps = Math.max(
+        anime.episodes || 0,
+        scraperEps,
+        (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 0
+      );
 
       if (totalEps > 0 && epParam === totalEps) {
         const currentItem = watchlist[anime.id];
@@ -823,7 +988,7 @@ export default function AnimePage() {
         }
       }
     }
-  }, [anime, epParam, watchlist, addToWatchlist, updateWatchlistStatus, setEpisodeProgress, addToRecentlyViewed, showToast]);
+  }, [anime, epParam, watchlist, addToWatchlist, updateWatchlistStatus, setEpisodeProgress, addToRecentlyViewed, showToast, scraperEps]);
 
   const subServers = servers.filter(s => s.type === 'sub');
   const dubServers = servers.filter(s => s.type === 'dub');
@@ -860,9 +1025,11 @@ export default function AnimePage() {
   // ── Fix: isNotReleased was hardcoded false — now checks real status ──
   const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (eps === 0 && !anime.nextAiringEpisode);
 
-  const totalEps = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1)
-    ? anime.nextAiringEpisode.episode - 1 
-    : (eps || 0);
+  const totalEps = Math.max(
+    eps || 0,
+    scraperEps,
+    (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 0
+  );
 
   const allEps = Array.from({ length: totalEps }, (_, i) => i + 1);
 
@@ -1166,7 +1333,22 @@ export default function AnimePage() {
           TABS
       ════════════════════════════════════════ */}
       <div style={{ marginTop: 20, borderBottom: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', padding: '0 16px' }}>
+        <div 
+          className="no-scrollbar"
+          style={{
+            display: 'flex',
+            padding: '0 16px',
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+          }}
+        >
+          <style>{`
+            .no-scrollbar::-webkit-scrollbar {
+              display: none;
+            }
+          `}</style>
           {[
             { k: 'episodes',   l: 'Episodes' },
             { k: 'similar',    l: `More like this` },
@@ -1181,6 +1363,7 @@ export default function AnimePage() {
                 border: 'none', background: 'none', cursor: 'pointer',
                 borderBottom: tab === t.k ? '2px solid var(--accent)' : '2px solid transparent',
                 transition: 'all 0.2s', whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >{t.l}</button>
           ))}
@@ -1387,62 +1570,27 @@ export default function AnimePage() {
         {/* ── COMMENTS ─────────────────────────────────────────── */}
         {tab === 'comments' && (
           <div style={{ animation: 'fade-in 0.25s ease' }}>
-            {/* Nickname / Profile Customizer */}
+            {/* Nickname / Profile Display */}
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
               borderRadius: 16, padding: '12px 16px', marginBottom: 20,
               backdropFilter: 'blur(8px)'
             }}>
-              {editingNickname ? (
-                <div style={{ display: 'flex', gap: 10, width: '100%', alignItems: 'center' }}>
-                  <input
-                    type="text"
-                    value={nicknameInput}
-                    onChange={e => setNicknameInput(e.target.value.slice(0, 25))}
-                    placeholder="Enter nickname..."
-                    style={{
-                      flex: 1, background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)',
-                      borderRadius: 8, padding: '6px 12px', color: '#fff', fontSize: 13, outline: 'none'
-                    }}
-                    onKeyDown={e => { if (e.key === 'Enter') handleSaveNickname(); }}
-                  />
-                  <button onClick={handleSaveNickname} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 12, borderRadius: 8 }}>
-                    Save
-                  </button>
-                  <button onClick={() => { setEditingNickname(false); setNicknameInput(username); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 12, cursor: 'pointer' }}>
-                    Cancel
-                  </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: '50%',
+                  background: getAvatarColor(username), color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 700, fontSize: 13
+                }}>
+                  {username.charAt(0).toUpperCase()}
                 </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{
-                      width: 32, height: 32, borderRadius: '50%',
-                      background: getAvatarColor(username), color: '#fff',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontWeight: 700, fontSize: 13
-                    }}>
-                      {username.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{username}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block' }}>Your Comment Nickname</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => { setEditingNickname(true); setNicknameInput(username); }}
-                    style={{
-                      background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: 8, padding: '4px 10px', fontSize: 11, color: '#fff', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', gap: 4
-                    }}
-                  >
-                    <User size={12} />
-                    Change Nickname
-                  </button>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{username}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block' }}>Your Comment Nickname</span>
                 </div>
-              )}
+              </div>
             </div>
 
             {/* Post Comment Form */}
@@ -1509,56 +1657,174 @@ export default function AnimePage() {
                 <p style={{ margin: 0, fontSize: 12 }}>Be the first to share your thoughts on Episode {episodeNumber}!</p>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 40 }}>
-                {comments.map((c, i) => {
-                  const uniqueId = `${c.username}_${c.created_at}_${i}`;
-                  const isLiked = likedComments.includes(uniqueId);
-                  
-                  return (
-                    <div key={uniqueId} style={{
-                      background: 'var(--bg-card)', border: '1px solid var(--border)',
-                      borderRadius: 16, padding: '12px 14px', display: 'flex', gap: 12,
-                      animation: 'fade-in 0.3s ease'
-                    }}>
-                      {/* Avatar */}
-                      <div style={{
-                        width: 36, height: 36, borderRadius: '50%',
-                        background: getAvatarColor(c.username), color: '#fff',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontWeight: 700, fontSize: 14, flexShrink: 0
-                      }}>
-                        {c.username.charAt(0).toUpperCase()}
-                      </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 40 }}>
+                {(() => {
+                  const { parentComments, replyMap } = buildCommentTree(comments);
+                  return parentComments.map((c, i) => {
+                    const uniqueId = `${c.username}_${c.created_at}_${i}`;
+                    const isLiked = likedComments.includes(uniqueId);
+                    const replies = replyMap[c.id] || [];
+                    const isReplyingThis = replyingTo === c.id;
+                    
+                    return (
+                      <div key={c.id || uniqueId} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {/* Main Parent Comment */}
+                        <div style={{
+                          background: 'var(--bg-card)', border: '1px solid var(--border)',
+                          borderRadius: 16, padding: '12px 14px', display: 'flex', gap: 12,
+                          animation: 'fade-in 0.3s ease'
+                        }}>
+                          {/* Avatar */}
+                          <div style={{
+                            width: 36, height: 36, borderRadius: '50%',
+                            background: getAvatarColor(c.username), color: '#fff',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontWeight: 700, fontSize: 14, flexShrink: 0
+                          }}>
+                            {c.username.charAt(0).toUpperCase()}
+                          </div>
 
-                      {/* Content Box */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', wordBreak: 'break-all' }}>{c.username}</span>
-                          <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>{formatRelativeTime(c.created_at)}</span>
+                          {/* Content Box */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', wordBreak: 'break-all' }}>{c.username}</span>
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>{formatRelativeTime(c.created_at)}</span>
+                            </div>
+                            <p style={{
+                              margin: '0 0 10px 0', fontSize: 13, color: 'rgba(255,255,255,0.9)',
+                              lineHeight: '1.5', whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+                            }}>{c.content}</p>
+                            
+                            {/* Action buttons */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                              <button
+                                onClick={() => toggleLikeComment(uniqueId)}
+                                style={{
+                                  background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 4,
+                                  color: isLiked ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11, cursor: 'pointer',
+                                  padding: 0
+                                }}
+                              >
+                                <ThumbsUp size={11} fill={isLiked ? 'currentColor' : 'none'} />
+                                <span>{isLiked ? 1 : 'Like'}</span>
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  setReplyingTo(isReplyingThis ? null : c.id);
+                                  setReplyCommentText('');
+                                }}
+                                style={{
+                                  background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 4,
+                                  color: isReplyingThis ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11, cursor: 'pointer',
+                                  padding: 0
+                                }}
+                              >
+                                <MessageSquare size={11} />
+                                <span>Reply</span>
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                        <p style={{
-                          margin: '0 0 10px 0', fontSize: 13, color: 'rgba(255,255,255,0.9)',
-                          lineHeight: '1.5', whiteSpace: 'pre-wrap', wordBreak: 'break-word'
-                        }}>{c.content}</p>
-                        
-                        {/* Action buttons */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                          <button
-                            onClick={() => toggleLikeComment(uniqueId)}
-                            style={{
-                              background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 4,
-                              color: isLiked ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11, cursor: 'pointer',
-                              padding: 0
-                            }}
-                          >
-                            <ThumbsUp size={11} fill={isLiked ? 'currentColor' : 'none'} />
-                            <span>{isLiked ? 1 : 'Like'}</span>
-                          </button>
-                        </div>
+
+                        {/* Reply Form */}
+                        {isReplyingThis && (
+                          <form onSubmit={(e) => handlePostComment(e, c.id)} style={{ marginLeft: 28, animation: 'fade-in 0.2s ease' }}>
+                            <div style={{
+                              background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border)',
+                              borderRadius: 12, padding: 10, display: 'flex', flexDirection: 'column', gap: 6
+                            }}>
+                              <textarea
+                                value={replyCommentText}
+                                onChange={e => setReplyCommentText(e.target.value.slice(0, 300))}
+                                placeholder={`Reply to @${c.username}...`}
+                                style={{
+                                  background: 'none', border: 'none', outline: 'none', resize: 'none',
+                                  color: '#fff', fontSize: 12, minHeight: 40, fontFamily: 'inherit',
+                                  lineHeight: '1.4'
+                                }}
+                              />
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: 6 }}>
+                                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                                  {300 - replyCommentText.length} characters left
+                                </span>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <button type="button" onClick={() => setReplyingTo(null)} className="btn btn-outline" style={{ padding: '4px 10px', fontSize: 11, borderRadius: 6, minHeight: 'unset', height: 'unset' }}>
+                                    Cancel
+                                  </button>
+                                  <button type="submit" disabled={!replyCommentText.trim() || submittingComment} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 11, borderRadius: 6, minHeight: 'unset', height: 'unset' }}>
+                                    Submit
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </form>
+                        )}
+
+                        {/* Replies List */}
+                        {replies.length > 0 && (
+                          <div style={{
+                            marginLeft: 28,
+                            borderLeft: '2px solid rgba(255, 255, 255, 0.05)',
+                            paddingLeft: 12,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 10,
+                            marginTop: 4
+                          }}>
+                            {replies.map((r, ri) => {
+                              const rUniqueId = `${r.username}_${r.created_at}_${ri}`;
+                              const rIsLiked = likedComments.includes(rUniqueId);
+                              
+                              return (
+                                <div key={r.id || rUniqueId} style={{
+                                  background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)',
+                                  borderRadius: 12, padding: '10px 12px', display: 'flex', gap: 10,
+                                  animation: 'fade-in 0.2s ease'
+                                }}>
+                                  {/* Reply Avatar */}
+                                  <div style={{
+                                    width: 28, height: 28, borderRadius: '50%',
+                                    background: getAvatarColor(r.username), color: '#fff',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontWeight: 700, fontSize: 12, flexShrink: 0
+                                  }}>
+                                    {r.username.charAt(0).toUpperCase()}
+                                  </div>
+
+                                  {/* Reply Content */}
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+                                      <span style={{ fontSize: 12, fontWeight: 700, color: '#fff', wordBreak: 'break-all' }}>{r.username}</span>
+                                      <span style={{ fontSize: 9, color: 'var(--text-muted)', flexShrink: 0 }}>{formatRelativeTime(r.created_at)}</span>
+                                    </div>
+                                    <p style={{
+                                      margin: '0 0 6px 0', fontSize: 12, color: 'rgba(255,255,255,0.85)',
+                                      lineHeight: '1.4', whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+                                    }}>{r.content}</p>
+                                    
+                                    {/* Reply Actions */}
+                                    <button
+                                      onClick={() => toggleLikeComment(rUniqueId)}
+                                      style={{
+                                        background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 4,
+                                        color: rIsLiked ? 'var(--accent)' : 'var(--text-muted)', fontSize: 10, cursor: 'pointer',
+                                        padding: 0
+                                      }}
+                                    >
+                                      <ThumbsUp size={10} fill={rIsLiked ? 'currentColor' : 'none'} />
+                                      <span>{rIsLiked ? 1 : 'Like'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
               </div>
             )}
           </div>
@@ -1634,6 +1900,9 @@ export default function AnimePage() {
                   setSearchParams({ play: 'true', ep: String(newEp) }, { replace: true });
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
+                autoplay={settings?.autoplay !== false}
+                subtitleSettings={settings || null}
+                loading={loadStream}
               />
             ) : (
               <IframePlayer

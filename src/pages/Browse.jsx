@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, SlidersHorizontal, X, Star, Play, Tag } from 'lucide-react';
+import { Search, SlidersHorizontal, X, Star, Play, Tag, Loader } from 'lucide-react';
 import {
   searchAnime, getTitle, getCover,
   getTrending, getAiring, getSeasonal,
@@ -54,15 +54,21 @@ export default function Browse() {
   const [loading,  setLoading] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
 
+  // Infinite Scroll State
+  const [page,     setPage]    = useState(1);
+  const [hasMore,  setHasMore] = useState(true);
+
   const debounced = useDebounce(query, 400);
 
   const doSearch = useCallback(async () => {
     setLoading(true);
+    setPage(1);
+    setHasMore(true);
     try {
       if (debounced || genre || format || status) {
         // Fetch direct AniList search results
-        const searchResults = await searchAnime(
-          debounced || null, 1, 30,
+        let searchResults = await searchAnime(
+          debounced || null, 1, 24,
           genre, format, status
         );
 
@@ -89,6 +95,9 @@ export default function Browse() {
         }
 
         setResults(finalCandidates);
+        if (finalCandidates.length < 24) {
+          setHasMore(false);
+        }
       } else if (category) {
         // Fetch specific category
         let r = [];
@@ -111,20 +120,99 @@ export default function Browse() {
           r = await getMovies(1, 24);
         }
         setResults(r);
+        if (r.length < 24) {
+          setHasMore(false);
+        }
       } else {
         // Default browse search
         const r = await searchAnime(null, 1, 24);
         setResults(r);
+        if (r.length < 24) {
+          setHasMore(false);
+        }
       }
     } catch (e) {
       console.warn('[Browse] fetch error:', e.message);
       setResults([]);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
   }, [debounced, genre, format, status, category]);
 
+  const loadMore = useCallback(async () => {
+    if (loading || !hasMore) return;
+    const nextPage = page + 1;
+    setLoading(true);
+    try {
+      let newResults = [];
+      if (debounced || genre || format || status) {
+        newResults = await searchAnime(debounced || null, nextPage, 24, genre, format, status);
+      } else if (category) {
+        if (category === 'airing') {
+          newResults = await getAiring(nextPage, 24);
+        } else if (category === 'new-releases') {
+          const list = await getAiring(nextPage, 24);
+          newResults = [...list].reverse();
+        } else if (category === 'trending') {
+          newResults = await getTrending(nextPage, 24);
+        } else if (category === 'seasonal') {
+          const { season, year } = getCurrentSeason();
+          newResults = await getSeasonal(season, year, nextPage, 24);
+        } else if (category === 'popular') {
+          newResults = await getMostPopular(nextPage, 24);
+        } else if (category === 'top-rated') {
+          const list = await getTopRated(nextPage, 24);
+          newResults = list.filter(a => a.format === 'TV');
+        } else if (category === 'movies') {
+          newResults = await getMovies(nextPage, 24);
+        }
+      } else {
+        newResults = await searchAnime(null, nextPage, 24);
+      }
+
+      if (!newResults || newResults.length === 0) {
+        setHasMore(false);
+      } else {
+        setResults(prev => {
+          const combined = [...prev, ...newResults];
+          const seen = new Set();
+          return combined.filter(item => {
+            if (!item || seen.has(item.id)) return false;
+            seen.add(item.id);
+            return true;
+          });
+        });
+        setPage(nextPage);
+        if (newResults.length < 24) {
+          setHasMore(false);
+        }
+      }
+    } catch (e) {
+      console.warn('[Browse] loadMore error:', e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, hasMore, loading, debounced, genre, format, status, category]);
+
   useEffect(() => { doSearch(); }, [doSearch]);
+
+  useEffect(() => {
+    let ticking = false;
+    const handleScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 250) {
+            loadMore();
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [loadMore]);
 
   const categoryTitle = category ? CATEGORY_TITLES[category] : null;
 
@@ -241,7 +329,7 @@ export default function Browse() {
         )}
 
         {/* Results */}
-        {loading ? (
+        {loading && results.length === 0 ? (
           <div style={{ padding: '16px' }}>
             {[1,2,3,4,5,6].map(i => <SkeletonResultItem key={i} />)}
           </div>
@@ -260,6 +348,11 @@ export default function Browse() {
                 onClick={() => navigate(`/anime/${anime.id}`)}
               />
             ))}
+            {loading && page > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
+                <Loader size={24} className="spin" color="var(--accent)" />
+              </div>
+            )}
           </div>
         )}
       </div>

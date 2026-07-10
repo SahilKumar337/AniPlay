@@ -8,6 +8,7 @@ import { CapacitorUpdater } from '@capgo/capacitor-updater';
 const APKUpdater = registerPlugin('APKUpdater');
 import WelcomeScreen from './components/WelcomeScreen';
 import AuthModal from './components/AuthModal';
+import { supabase } from './api/supabase';
 import Home          from './pages/Home';
 import Browse        from './pages/Browse';
 import Schedule      from './pages/Schedule';
@@ -48,6 +49,46 @@ function AppInner({ showWelcome, onEnter }) {
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [showFirstTimeAuth, setShowFirstTimeAuth] = useState(false);
 
+  // ── Deep Link Handler: Supabase email confirmation via aniplay:// ─
+  useEffect(() => {
+    if (!isNative) return;
+    let subscription = null;
+
+    const handleDeepLink = async ({ url }) => {
+      if (!url || !url.startsWith('aniplay://')) return;
+      try {
+        // Supabase sends tokens as hash fragment: #access_token=...&type=signup
+        // Or as query params: ?code=...  depending on PKCE vs implicit flow
+        const urlObj = new URL(url.replace('aniplay://', 'https://aniplay.app/'));
+        const code = urlObj.searchParams.get('code');
+        const access_token = urlObj.searchParams.get('access_token') ||
+          new URLSearchParams(urlObj.hash.slice(1)).get('access_token');
+        const refresh_token = urlObj.searchParams.get('refresh_token') ||
+          new URLSearchParams(urlObj.hash.slice(1)).get('refresh_token');
+
+        if (code) {
+          // PKCE flow
+          await supabase.auth.exchangeCodeForSession(code);
+        } else if (access_token && refresh_token) {
+          // Implicit flow
+          await supabase.auth.setSession({ access_token, refresh_token });
+        }
+      } catch (err) {
+        console.error('[DeepLink] Auth token exchange failed:', err);
+      }
+    };
+
+    const setupListener = async () => {
+      subscription = await CapApp.addListener('appUrlOpen', handleDeepLink);
+    };
+
+    setupListener();
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [isNative]);
+
   useEffect(() => {
     if (!showWelcome && !user) {
       const onboarded = localStorage.getItem('aniplay_onboarded');
@@ -59,6 +100,13 @@ function AppInner({ showWelcome, onEnter }) {
       }
     }
   }, [showWelcome, user]);
+
+  // Dismiss welcome onboarding automatically if user is logged in
+  useEffect(() => {
+    if (user && showWelcome) {
+      onEnter();
+    }
+  }, [user, showWelcome, onEnter]);
 
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
@@ -121,7 +169,7 @@ function AppInner({ showWelcome, onEnter }) {
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>
       {showWelcome ? (
-        <WelcomeScreen onEnter={onEnter} />
+        <WelcomeScreen onEnter={onEnter} onSignIn={() => setShowFirstTimeAuth(true)} />
       ) : (
         <>
           <Routes>

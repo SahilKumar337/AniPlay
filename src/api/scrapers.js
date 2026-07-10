@@ -101,6 +101,13 @@ function norm(s) {
     .trim();
 }
 
+function cleanAnimeTitle(title) {
+  return title
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function extractSeason(t) {
   const s = t.toLowerCase();
   let m;
@@ -208,20 +215,18 @@ function isCloudflareChallenge(text) {
 
 async function clientFetch(url, opts = {}) {
   if (isCapacitorApp) {
-    if (opts.useWebView) {
+    const useWebView = opts.useWebView;
+    if (useWebView) {
       console.log(`[clientFetch] Executing fetch via WebView for: ${url}`);
       try {
         const origin = new URL(url).origin;
         const html = await fetchViaWebViewNative(url, opts.referer, origin);
-        if (!html) throw new Error("fetchViaWebViewNative returned empty/null");
-        
-        if (isCloudflareChallenge(html)) {
-          throw new Error('Cloudflare challenge detected inside WebView fetch');
+        if (html && !isCloudflareChallenge(html)) {
+          return html;
         }
-        return html;
+        console.warn(`[clientFetch] WebView fetch failed or hit Cloudflare for: ${url}`);
       } catch (e) {
-        console.error(`[clientFetch] WebView fetch failed for ${url}:`, e.message);
-        throw e;
+        console.error(`[clientFetch] WebView fetch error for ${url}:`, e.message);
       }
     }
 
@@ -468,9 +473,9 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   if (cached) return { servers: cached, animeTitle, slug };
 
   const rawServers = await awGetServers(animeId, episode, slug);
-  // Only take first sub server (HD-1) and first dub server (HD-1)
-  const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 1);
-  const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 1);
+  // Resolve up to 4 sub mirrors and 4 dub mirrors in parallel to ensure extreme reliability
+  const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 4);
+  const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 4);
   const toResolve = [...subServers, ...dubServers];
 
   const resolved = await Promise.allSettled(
@@ -483,13 +488,15 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   );
 
   const working = resolved.filter(r => r.status === 'fulfilled').map(r => r.value);
+  const workingSub = working.find(s => s.type === 'sub');
+  const workingDub = working.find(s => s.type === 'dub');
+
   const servers = [];
-  for (const s of working) {
-    if (s.type === 'sub') {
-      servers.push({ name: 'WavesHD', videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
-    } else if (s.type === 'dub') {
-      servers.push({ name: 'WavesHD (DUB)', videoUrl: s.videoUrl, type: s.type, embedUrl: s.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
-    }
+  if (workingSub) {
+    servers.push({ name: 'WavesHD', videoUrl: workingSub.videoUrl, type: 'sub', embedUrl: workingSub.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
+  }
+  if (workingDub) {
+    servers.push({ name: 'WavesHD (DUB)', videoUrl: workingDub.videoUrl, type: 'dub', embedUrl: workingDub.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
   }
 
   // Cache the resolved server list for this episode (avoids re-fetching on revisit)
@@ -650,11 +657,11 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
     const subtitleFile = bestSubtitleUrl ? formatSubtitleProxyUrl(bestSubtitleUrl, bestSubServer.videoUrl) : '';
     const subtitles = subtitleFile ? [{ id: 0, label: 'English', file: subtitleFile, referer: ANINEKO + '/' }] : [];
     const proxiedUrl = formatIframeProxyUrl(bestSubServer.videoUrl, ANINEKO);
-    servers.push({ name: 'Neko', videoUrl: proxiedUrl, embedUrl: bestSubServer.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
+    servers.push({ name: 'NekoHD', videoUrl: proxiedUrl, embedUrl: bestSubServer.videoUrl, referer: ANINEKO + '/', type: 'sub', subtitles, isHLS: false });
   }
   if (bestDubServer) {
     const proxiedUrl = formatIframeProxyUrl(bestDubServer.videoUrl, ANINEKO);
-    servers.push({ name: 'Neko (DUB)', videoUrl: proxiedUrl, embedUrl: bestDubServer.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles: [], isHLS: false });
+    servers.push({ name: 'NekoHD (DUB)', videoUrl: proxiedUrl, embedUrl: bestDubServer.videoUrl, referer: ANINEKO + '/', type: 'dub', subtitles: [], isHLS: false });
   }
 
   // Cache the resolved servers for this episode
@@ -807,5 +814,138 @@ export async function scrapeAnimetsu(title, episode, isMovie = false) {
   if (!servers.length) throw new Error(`No sources available from Animetsu for episode ${episode}`);
 
   return { servers, animeTitle: best.title, slug: best.id };
+}
+
+export async function getScraperEpisodeCount(anime) {
+  if (!anime) return 0;
+  const titles = [
+    anime.title?.english,
+    anime.title?.romaji,
+  ].filter(Boolean);
+
+  if (!titles.length) return 0;
+
+  const title = titles[0];
+  let clean = cleanAnimeTitle(title);
+
+  const fetchCount = async (domain) => {
+    const queries = [clean, clean.replace(/:\s*/g, ' '), title];
+    let results = [];
+    for (const query of queries) {
+      try {
+        const searchUrl = `${domain}/v2/api/anime/search/?query=${encodeURIComponent(query)}`;
+        const searchHtml = await clientFetch(searchUrl, { referer: `${domain}/watch/`, timeout: 6000 });
+        const data = JSON.parse(searchHtml);
+        if (data && data.length) {
+          results = data;
+          break;
+        }
+      } catch {}
+    }
+    if (!results.length) return 0;
+    
+    let best = results[0];
+    let maxScore = -1;
+    for (const r of results) {
+      const score = titleScore(r.title, title, anime.format === 'MOVIE');
+      if (score > maxScore) { maxScore = score; best = r; }
+    }
+    if (!best || maxScore < 0.75) return 0;
+
+    const epsUrl = `${domain}/v2/api/anime/eps/${best.id}`;
+    const epsHtml = await clientFetch(epsUrl, { referer: `${domain}/watch/${best.id}`, timeout: 6000 });
+    const epsData = JSON.parse(epsHtml);
+    if (epsData && epsData.length) {
+      const nums = epsData.map(x => Number(x.ep_num)).filter(n => !isNaN(n));
+      return nums.length ? Math.max(...nums) : 0;
+    }
+    return 0;
+  };
+
+  const fetchAnikotoCount = async (domain) => {
+    const queries = [clean, clean.replace(/:\s*/g, ' '), title];
+    const searchPromises = queries.map(async (query) => {
+      try {
+        const searchUrl = `${domain}/ajax/anime/search?keyword=${encodeURIComponent(query)}`;
+        const searchHtml = await clientFetch(searchUrl, {
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
+          referer: domain,
+          timeout: 4000
+        });
+        const parsed = JSON.parse(searchHtml);
+        if (parsed.status === 200 && parsed.result?.html) {
+          const html = parsed.result.html;
+          const itemRe = /href="([^"]*\/watch\/([^"\/]+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
+          let m;
+          const localResults = [];
+          while ((m = itemRe.exec(html)) !== null) {
+            localResults.push({ slug: m[2], title: m[3].trim(), fullUrl: m[1] });
+          }
+          if (localResults.length > 0) return localResults;
+        }
+      } catch {}
+      throw new Error('No results');
+    });
+
+    let results = [];
+    try {
+      results = await Promise.any(searchPromises);
+    } catch {}
+    if (!results.length) return 0;
+    
+    let best = results[0];
+    let maxScore = -1;
+    for (const r of results) {
+      const score = titleScore(r.title, title, anime.format === 'MOVIE');
+      if (score > maxScore) { maxScore = score; best = r; }
+    }
+    if (!best || maxScore < 0.70) return 0;
+
+    try {
+      const watchPageUrl = best.fullUrl.startsWith('http') ? best.fullUrl : `${domain}/watch/${best.slug}`;
+      const pageHtml = await clientFetch(watchPageUrl, { referer: domain, timeout: 6000 });
+      let animeId = '';
+      const idMatch = pageHtml.match(/data-id="(\d+)"/i) || pageHtml.match(/const mangaId = (\d+);/i);
+      if (idMatch) {
+        animeId = idMatch[1];
+      } else {
+        const getInfoM = pageHtml.match(/\/getinfo\/(\d+)/i);
+        if (getInfoM) animeId = getInfoM[1];
+      }
+      if (!animeId) return 0;
+
+      const epsUrl = `${domain}/ajax/episode/list/${animeId}`;
+      const epsHtmlResponse = await clientFetch(epsUrl, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
+        referer: watchPageUrl,
+        timeout: 6000
+      });
+      const parsed = JSON.parse(epsHtmlResponse);
+      if (parsed.status === 200 && parsed.result) {
+        const epHtml = parsed.result;
+        const epRe = /data-num="(\d+)"/g;
+        let m;
+        const nums = [];
+        while ((m = epRe.exec(epHtml)) !== null) {
+          nums.push(Number(m[1]));
+        }
+        return nums.length ? Math.max(...nums) : 0;
+      }
+    } catch {}
+    return 0;
+  };
+
+  try {
+    const counts = await Promise.allSettled([
+      fetchAnikotoCount('https://anikototv.to'),
+      fetchCount(ANIMETSU)
+    ]);
+    const values = counts
+      .filter(c => c.status === 'fulfilled')
+      .map(c => c.value);
+    return values.length ? Math.max(...values) : 0;
+  } catch {
+    return 0;
+  }
 }
 
