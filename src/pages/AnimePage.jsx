@@ -1866,18 +1866,7 @@ export default function AnimePage() {
               <AlertCircle size={32} color="#e50914" />
               <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
               
-              {scraperErrors && scraperErrors.length > 0 && (
-                <div style={{ width: '100%', maxWidth: 300, background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 10, textAlign: 'left', marginTop: 4 }}>
-                  <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', marginBottom: 6 }}>Scraper Diagnostic Logs:</p>
-                  <div style={{ maxHeight: 100, overflowY: 'auto', fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {scraperErrors.map((err, idx) => (
-                      <div key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 4 }}>
-                        {err}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+
               
               <button className="btn btn-primary" onClick={fetchStream} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6 }}>
                 ↺ Retry

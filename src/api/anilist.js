@@ -19,7 +19,7 @@ async function gql(query, variables = {}) {
   const cached = fromCache(key);
   if (cached) return cached;
 
-  let lastErr;
+  let lastErr = new Error('Request failed after 3 attempts');
   for (let i = 0; i < 3; i++) {
     try {
       const ctrl = new AbortController();
@@ -33,13 +33,14 @@ async function gql(query, variables = {}) {
       clearTimeout(tid);
 
       if (res.status === 429) {
+        lastErr = new Error('Rate limit exceeded (429). Please try again in a few seconds.');
         await new Promise(r => setTimeout(r, (i + 1) * 2000));
         continue;
       }
 
       const json = await res.json();
       if (json.data) { toCache(key, json.data); return json.data; }
-      throw new Error((json.errors || []).map(e => e.message).join('; ') || 'Unknown error');
+      throw new Error((json.errors || []).map(e => e?.message || 'Unknown error').join('; ') || 'Unknown error');
     } catch (err) {
       if (err.name === 'AbortError') throw new Error('Request timed out — check your internet.');
       lastErr = err;

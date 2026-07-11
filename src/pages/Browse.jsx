@@ -132,7 +132,7 @@ export default function Browse() {
         }
       }
     } catch (e) {
-      console.warn('[Browse] fetch error:', e.message);
+      console.warn('[Browse] fetch error:', e?.message || String(e));
       setResults([]);
       setHasMore(false);
     } finally {
@@ -189,7 +189,7 @@ export default function Browse() {
         }
       }
     } catch (e) {
-      console.warn('[Browse] loadMore error:', e.message);
+      console.warn('[Browse] loadMore error:', e?.message || String(e));
     } finally {
       setLoading(false);
     }
