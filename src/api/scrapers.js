@@ -88,7 +88,7 @@ const nekoSearchCache = new Map();
 const animetsuSearchCache = new Map();
 const animetsuEpsCache = new Map(); // Cache episode list per anime ID to skip re-fetch
 
-// ── Helper Matching Functions ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Helper Matching Functions Ã¢â€â‚¬Ã¢â€â‚¬
 
 function norm(s) {
   return s.toLowerCase()
@@ -140,10 +140,17 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   const qSeason = extractSeason(qn);
   if (rSeason !== qSeason) return 0;
 
-  // Gate spin-offs, summaries, recaps, previews, side-stories
-  const resultHasRecap = /\b(recap|summary|preview|side\s*story|special|specials)\b/i.test(resultTitle);
-  const queryHasRecap = /\b(recap|summary|preview|side\s*story|special|specials)\b/i.test(queryTitle);
-  if (resultHasRecap && !queryHasRecap) return 0;
+  // Gate spin-offs, summaries, recaps, previews, side-stories (Strict two-way gate)
+  const recapKeywords = /\b(recap|summary|preview|side\s*story|special|specials)\b/i;
+  const resultHasRecap = recapKeywords.test(resultTitle) || recapKeywords.test(rn);
+  const queryHasRecap = recapKeywords.test(queryTitle) || recapKeywords.test(qn);
+  if (resultHasRecap !== queryHasRecap) return 0;
+
+  // Gate mini-episodes, shorts, chibi, spinoffs, and break time specials (Strict two-way gate)
+  const miniKeywords = /\b(mini|short|shorts|chibi|break\s*time|breaktime|petit|petite|spin\s*off|spinoff)\b/i;
+  const resultHasMini = miniKeywords.test(resultTitle) || miniKeywords.test(rn);
+  const queryHasMini = miniKeywords.test(queryTitle) || miniKeywords.test(qn);
+  if (resultHasMini !== queryHasMini) return 0;
 
   // Check if result or query title mentions "movie" or "film"
   const resultHasMovie = /\b(movie|film)\b/i.test(resultTitle) || /\b(movie|film)\b/i.test(rn);
@@ -161,7 +168,7 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   const strip = t => t
     .replace(/\b(season|part|s)\s*\d+\b/gi, '')
     .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
-    .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio|recap|summary|preview|side\s*story)\b/gi, '')
+    .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio|recap|summary|preview|side\s*story|mini|short|shorts|chibi|break\s*time|breaktime|petit|petite|spin\s*off|spinoff)\b/gi, '')
     .trim();
 
   const qWords = strip(qn).split(/\s+/).filter(w => w.length > 1);
@@ -191,7 +198,7 @@ function getLongestWord(title) {
   return words.reduce((a, b) => a.length > b.length ? a : b);
 }
 
-// ── Helper matching and validation ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Helper matching and validation Ã¢â€â‚¬Ã¢â€â‚¬
 
 function isCloudflareChallenge(text) {
   const lower = text.toLowerCase();
@@ -211,7 +218,7 @@ function isCloudflareChallenge(text) {
   return isCfBlock || isDdosGuard;
 }
 
-// ── Generic Fetch Helper with Headers ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Generic Fetch Helper with Headers Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function clientFetch(url, opts = {}) {
   if (isCapacitorApp) {
@@ -300,8 +307,6 @@ async function clientFetch(url, opts = {}) {
   return fText;
 }
 
-// ── AniWaves Scraper ──
-
 async function awSearch(title, isMovie = false) {
   const cleaned = title.replace(/\b(season|part|s)\s*\d+\b/gi, '').trim();
   const engWords = cleaned.split(/[^a-zA-Z0-9]/).filter(w =>
@@ -312,62 +317,72 @@ async function awSearch(title, isMovie = false) {
   const firstThree = cleaned.split(' ').slice(0, 3).join(' ');
 
   const strategies = [cleaned, firstThree, firstTwo, longestWord].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
-  let results = [];
 
-  const promises = strategies.map(async (keyword) => {
-    try {
-      const rawText = await clientFetch(`${AW}/ajax/anime/search?keyword=${encodeURIComponent(keyword)}`, {
-        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
-        referer: AW,
-        timeout: 6000,
+  // Helper: fetch and parse one search keyword
+  async function tryKeyword(keyword) {
+    const rawText = await clientFetch(`${AW}/ajax/anime/search?keyword=${encodeURIComponent(keyword)}`, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
+      referer: AW,
+      timeout: 5000,
+    });
+    const parsed = JSON.parse(rawText);
+    if (parsed.status === 404 || !parsed.result?.html) return [];
+    const html = parsed.result.html;
+    const itemRe = /href="\/watch\/([\w%-]+-(\d+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
+    let m;
+    const localResults = [];
+    while ((m = itemRe.exec(html)) !== null) {
+      localResults.push({ slug: m[1], animeId: m[2], animeTitle: m[3].trim() });
+    }
+    if (localResults.length === 0) {
+      const slugRe = /href="\/watch\/([\w-]+-(\d+))"/g;
+      while ((m = slugRe.exec(html)) !== null) {
+        localResults.push({ slug: m[1], animeId: m[2], animeTitle: m[1].replace(/-\d+$/, '').replace(/-/g, ' ') });
+      }
+    }
+    return localResults;
+  }
+
+  // SPEED: fire all strategies simultaneously â€” resolve as soon as the first one returns results.
+  // This is a true parallel race: if the full-title keyword responds in 800ms we don't wait
+  // 4+ more seconds for the remaining strategies to finish.
+  const results = await new Promise((resolve) => {
+    let done = false;
+    let pending = strategies.length;
+    for (const kw of strategies) {
+      tryKeyword(kw).then(r => {
+        pending--;
+        if (!done && r.length > 0) { done = true; resolve(r); }
+        else if (pending === 0 && !done) resolve([]); // all failed
+      }).catch(() => {
+        pending--;
+        if (pending === 0 && !done) resolve([]);
       });
-      const parsed = JSON.parse(rawText);
-      if (parsed.status === 404 || !parsed.result?.html) return [];
-
-      const html = parsed.result.html;
-      const itemRe = /href="\/watch\/([\w%-]+-(\d+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
-      let m;
-      const localResults = [];
-      while ((m = itemRe.exec(html)) !== null) {
-        localResults.push({ slug: m[1], animeId: m[2], animeTitle: m[3].trim() });
-      }
-      if (localResults.length === 0) {
-        const slugRe = /href="\/watch\/([\w-]+-(\d+))"/g;
-        while ((m = slugRe.exec(html)) !== null) {
-          localResults.push({ slug: m[1], animeId: m[2], animeTitle: m[1].replace(/-\d+$/, '').replace(/-/g, ' ') });
-        }
-      }
-      return localResults;
-    } catch {
-      return [];
     }
   });
 
-  const settled = await Promise.allSettled(promises);
-  for (const res of settled) {
-    if (res.status === 'fulfilled' && res.value?.length > 0) {
-      results.push(...res.value);
-    }
-  }
-
   if (results.length === 0) throw new Error(`Anime "${title}" not found on AniWaves`);
 
+  // ACCURACY: score every candidate; exact normalized match always wins
   let best = results[0], maxScore = -1;
   for (const r of results) {
+    // Exact match short-circuit Ã¢â‚¬â€ guaranteed winner
+    if (norm(r.animeTitle) === norm(title)) return r;
+
     let score = titleScore(r.animeTitle, title, isMovie);
     const slugText = r.slug.replace(/-\d+$/, '').replace(/-/g, ' ');
     score = Math.max(score, titleScore(slugText, title, isMovie));
     if (score > maxScore) { maxScore = score; best = r; }
   }
 
-  if (!best || maxScore < 0.5) { // Strict score threshold
-    throw new Error(`No match on AniWaves for "${title}"`);
+  if (!best || maxScore < 0.55) { // Slightly stricter threshold to avoid near-miss wrong anime
+    throw new Error(`No confident match on AniWaves for "${title}" (best score: ${maxScore.toFixed(2)})`);
   }
   return best;
 }
 
 // Session cache for Waves server lists: animeId/episode -> { servers, expires }
-// TTL = 25 minutes (matching Animetsu cache — embed URLs typically expire in ~30 min)
+// TTL = 25 minutes (matching Animetsu cache Ã¢â‚¬â€ embed URLs typically expire in ~30 min)
 const WAVES_CACHE_TTL_MS = 25 * 60 * 1000;
 
 function getWavesServersCache(animeId, episode) {
@@ -377,7 +392,7 @@ function getWavesServersCache(animeId, episode) {
     if (!raw) return null;
     const { data, expires } = JSON.parse(raw);
     if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
-    console.log(`[AniWaves] Cache HIT for servers ep${episode} — instant play`);
+    console.log(`[AniWaves] Cache HIT for servers ep${episode} Ã¢â‚¬â€ instant play`);
     return data;
   } catch { return null; }
 }
@@ -407,9 +422,55 @@ function setWavesEmbedCache(linkId, url) {
   } catch {}
 }
 
-async function awGetServers(animeId, episode, slug) {
-  const url = `${AW}/ajax/server/list?servers=${animeId}&eps=${episode}`;
+// Fetch episode list for an anime and map episode number Ã¢â€ â€™ internal episode ID
+// AniWaves (aniwatch-based) uses internal episode IDs in its server API, not episode numbers.
+async function awGetEpisodeId(animeId, episodeNumber, slug) {
+  const cacheKey = `waves_epid_${animeId}_${episodeNumber}`;
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) return cached;
+  } catch {}
+
   const referer = slug ? `${AW}/watch/${slug}` : AW;
+  const text = await clientFetch(`${AW}/ajax/anime/episode-list?id=${animeId}`, {
+    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': referer },
+    timeout: 6000,
+  });
+  const parsed = JSON.parse(text);
+  if (!parsed.status || !parsed.result) throw new Error('No episode list');
+
+  const html = parsed.result;
+  // Episodes are rendered as <a data-id="123" data-number="5" ...> or <li data-id="123" data-number="5">
+  const epRe = /data-id="([^"]+)"[^>]*data-number="(\d+)"|data-number="(\d+)"[^>]*data-id="([^"]+)"/g;
+  let m, foundId = null;
+  while ((m = epRe.exec(html)) !== null) {
+    const id  = m[1] || m[4];
+    const num = parseInt(m[2] || m[3]);
+    if (!isNaN(num) && id) {
+      try { sessionStorage.setItem(`waves_epid_${animeId}_${num}`, id); } catch {}
+      if (num === episodeNumber) foundId = id;
+    }
+  }
+  if (!foundId) throw new Error(`Episode ${episodeNumber} ID not found in list`);
+  return foundId;
+}
+
+async function awGetServers(animeId, episode, slug) {
+  const referer = slug ? `${AW}/watch/${slug}` : AW;
+
+  // ACCURACY FIX: Resolve the real internal episode ID so we always get the correct episode.
+  // AniWaves uses internal DB IDs in its server API Ã¢â‚¬â€ passing raw episode number causes
+  // wrong episodes when the site's numbering differs from AniList (e.g. due to specials/OVAs).
+  let epsParam = episode; // fallback: raw episode number
+  try {
+    const episodeId = await awGetEpisodeId(animeId, episode, slug);
+    epsParam = episodeId;
+    console.log(`[AniWaves] Resolved ep${episode} Ã¢â€ â€™ internal ID: ${episodeId}`);
+  } catch (e) {
+    console.warn(`[AniWaves] Episode ID lookup failed, using raw number: ${e.message}`);
+  }
+
+  const url = `${AW}/ajax/server/list?servers=${animeId}&eps=${epsParam}`;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': referer },
     timeout: 8000,
@@ -441,7 +502,7 @@ async function awGetServers(animeId, episode, slug) {
 }
 
 async function awGetEmbedUrl(linkId, watchPageSlug) {
-  // Check embed cache first — same linkId always resolves to same URL within session
+  // Check embed cache first Ã¢â‚¬â€ same linkId always resolves to same URL within session
   const cached = getWavesEmbedCache(linkId);
   if (cached) {
     console.log(`[AniWaves] Embed cache HIT for linkId ${linkId}`);
@@ -468,36 +529,45 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   }
   const { slug, animeId, animeTitle } = searchResult;
 
-  // Check session cache — skip all API calls if same episode was already fetched
+  // Check session cache Ã¢â‚¬â€ skip all API calls if same episode was already fetched
   const cached = getWavesServersCache(animeId, episode);
   if (cached) return { servers: cached, animeTitle, slug };
 
   const rawServers = await awGetServers(animeId, episode, slug);
-  // Resolve up to 4 sub mirrors and 4 dub mirrors in parallel to ensure extreme reliability
-  const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 4);
-  const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 4);
-  const toResolve = [...subServers, ...dubServers];
-
-  const resolved = await Promise.allSettled(
-    toResolve.map(async s => {
-      const embedUrl = await awGetEmbedUrl(s.linkId, slug);
-      // Allow any embed provider through — IframePlayer HLS interceptor handles extraction
-      const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
-      return { videoUrl, type: s.type, embedUrl, serverName: s.serverName };
-    })
-  );
-
-  const working = resolved.filter(r => r.status === 'fulfilled').map(r => r.value);
-  const workingSub = working.find(s => s.type === 'sub');
-  const workingDub = working.find(s => s.type === 'dub');
-
   const servers = [];
-  if (workingSub) {
-    servers.push({ name: 'WavesHD', videoUrl: workingSub.videoUrl, type: 'sub', embedUrl: workingSub.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
-  }
-  if (workingDub) {
-    servers.push({ name: 'WavesHD (DUB)', videoUrl: workingDub.videoUrl, type: 'dub', embedUrl: workingDub.embedUrl, referer: `${AW}/watch/${slug}`, isHLS: false });
-  }
+
+  // Parallelize sub and dub server resolution to halve latency
+  const [subRes, dubRes] = await Promise.all([
+    (async () => {
+      const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 2);
+      for (const s of subServers) {
+        try {
+          const embedUrl = await awGetEmbedUrl(s.linkId, slug);
+          const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
+          return { name: 'WavesHD', videoUrl, type: 'sub', embedUrl, serverName: s.serverName, referer: `${AW}/watch/${slug}`, isHLS: false };
+        } catch (e) {
+          console.warn(`[AniWaves] Sub server ${s.serverName} resolution failed:`, e.message);
+        }
+      }
+      return null;
+    })(),
+    (async () => {
+      const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 2);
+      for (const s of dubServers) {
+        try {
+          const embedUrl = await awGetEmbedUrl(s.linkId, slug);
+          const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
+          return { name: 'WavesHD (DUB)', videoUrl, type: 'dub', embedUrl, serverName: s.serverName, referer: `${AW}/watch/${slug}`, isHLS: false };
+        } catch (e) {
+          console.warn(`[AniWaves] Dub server ${s.serverName} resolution failed:`, e.message);
+        }
+      }
+      return null;
+    })()
+  ]);
+
+  if (subRes) servers.push(subRes);
+  if (dubRes) servers.push(dubRes);
 
   // Cache the resolved server list for this episode (avoids re-fetching on revisit)
   if (servers.length > 0) setWavesServersCache(animeId, episode, servers);
@@ -505,7 +575,7 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   return { servers, animeTitle, slug };
 }
 
-// ── AniNeko Scraper ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ AniNeko Scraper Ã¢â€â‚¬Ã¢â€â‚¬
 
 // Session cache for Neko episode servers: slug+episode -> { servers, expires }
 const NEKO_CACHE_TTL_MS = 25 * 60 * 1000;
@@ -517,7 +587,7 @@ function getNekoEpisodeCache(slug, episode) {
     if (!raw) return null;
     const { data, expires } = JSON.parse(raw);
     if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
-    console.log(`[AniNeko] Cache HIT for ${slug} ep${episode} — instant play`);
+    console.log(`[AniNeko] Cache HIT for ${slug} ep${episode} Ã¢â‚¬â€ instant play`);
     return data;
   } catch { return null; }
 }
@@ -670,9 +740,9 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
   return { servers, animeTitle: best.title, slug: best.slug };
 }
 
-// ── Animetsu Scraper ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Animetsu Scraper Ã¢â€â‚¬Ã¢â€â‚¬
 
-// Stream URL session cache: animeId/episode/type → { data, expires }
+// Stream URL session cache: animeId/episode/type Ã¢â€ â€™ { data, expires }
 // TTL = 25 minutes (stream URLs typically expire in ~30 min)
 const STREAM_CACHE_TTL_MS = 25 * 60 * 1000;
 
@@ -683,7 +753,7 @@ function getStreamCache(animeId, episode, sourceType) {
     if (!raw) return null;
     const { data, expires } = JSON.parse(raw);
     if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
-    console.log(`[Animetsu] Cache HIT for ${sourceType} ep${episode} — instant play`);
+    console.log(`[Animetsu] Cache HIT for ${sourceType} ep${episode} Ã¢â‚¬â€ instant play`);
     return data;
   } catch { return null; }
 }
@@ -695,9 +765,9 @@ function setStreamCache(animeId, episode, sourceType, data) {
   } catch {}
 }
 
-// Fetches a stream URL from Animetsu — all servers race in PARALLEL, fastest wins.
+// Fetches a stream URL from Animetsu Ã¢â‚¬â€ all servers race in PARALLEL, fastest wins.
 async function fetchAnimetsuStream(animeId, episode, sourceType) {
-  // Check session cache first — avoids re-fetching same episode within 25 min
+  // Check session cache first Ã¢â‚¬â€ avoids re-fetching same episode within 25 min
   const cached = getStreamCache(animeId, episode, sourceType);
   if (cached) return cached;
 
@@ -716,7 +786,7 @@ async function fetchAnimetsuStream(animeId, episode, sourceType) {
   });
 
   try {
-    // Promise.any returns the FIRST fulfilled promise — fastest server wins
+    // Promise.any returns the FIRST fulfilled promise Ã¢â‚¬â€ fastest server wins
     const result = await Promise.any(attempts);
     // Cache the result for repeat plays
     setStreamCache(animeId, episode, sourceType, result);
@@ -937,7 +1007,7 @@ export async function getScraperEpisodeCount(anime) {
 
   try {
     const counts = await Promise.allSettled([
-      fetchAnikotoCount('https://anikototv.to'),
+      fetchAnikotoCount(AW),
       fetchCount(ANIMETSU)
     ]);
     const values = counts

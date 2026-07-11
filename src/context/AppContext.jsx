@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
   subtitlePosition: 'bottom',    // 'bottom' | 'top'
   // Data
   autoBackup: true,
+  downloadLocation: 'AniPlay',
   updatedAt: 0,
 };
 

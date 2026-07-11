@@ -123,6 +123,23 @@ public class OfflineDownloader extends Plugin {
         Log.d(TAG, "OfflineDownloader v2.0 loaded (OkHttp + JS pre-fetch)");
     }
 
+    public String getDownloadFolder() {
+        try {
+            android.content.SharedPreferences prefs = getContext().getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE);
+            String settingsJsonStr = prefs.getString("aniplay_settings", null);
+            if (settingsJsonStr != null) {
+                org.json.JSONObject json = new org.json.JSONObject(settingsJsonStr);
+                if (json.has("downloadLocation")) {
+                    String loc = json.getString("downloadLocation");
+                    if (loc != null && !loc.trim().isEmpty()) {
+                        return loc.trim();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return "AniPlay";
+    }
+
     // ── PLUGIN METHODS ────────────────────────────────────────────────────────
 
     // Path B: Java-native download (full HLS + fallback for non-JS)
@@ -232,10 +249,192 @@ public class OfflineDownloader extends Plugin {
         });
     }
 
-    @PluginMethod public void getDownloadsList(PluginCall call) {
-        call.resolve(new JSObject().put("downloads", new JSArray()));
-    }
     @PluginMethod public void deleteDownload(PluginCall call) { call.resolve(); }
+
+    @PluginMethod
+    public void openDownloadFolder(PluginCall call) {
+        String folderName = call.getString("folder", "AniPlay");
+        try {
+            android.content.Context context = getContext();
+            File downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+            File dir = new File(downloadsDir, folderName);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+
+            android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+            
+            // Try modern content provider directory URI for file managers
+            Uri uri = Uri.parse("content://com.android.externalstorage.documents/document/primary:Download%2F" + folderName);
+            intent.setDataAndType(uri, "vnd.android.document/directory");
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+            try {
+                context.startActivity(intent);
+                call.resolve();
+            } catch (Exception e) {
+                // Fallback 1: Try general Downloads view
+                try {
+                    android.content.Intent fallback = new android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS);
+                    fallback.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(fallback);
+                    call.resolve();
+                } catch (Exception ex) {
+                    // Fallback 2: Open generic Documents provider root
+                    try {
+                        android.content.Intent docIntent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+                        docIntent.setDataAndType(Uri.parse("content://com.android.externalstorage.documents/root/primary"), "vnd.android.document/root");
+                        docIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                        context.startActivity(docIntent);
+                        call.resolve();
+                    } catch (Exception ex2) {
+                        call.reject("Could not open file manager: " + ex2.getMessage());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            call.reject("Error: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void exportBackup(PluginCall call) {
+        String data = call.getString("data");
+        if (data == null) {
+            call.reject("Data is required");
+            return;
+        }
+        try {
+            File cacheDir = getContext().getCacheDir();
+            String fileName = "aniplay-backup-" + new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date()) + ".json";
+            File backupFile = new File(cacheDir, fileName);
+            
+            java.io.FileWriter writer = new java.io.FileWriter(backupFile);
+            writer.write(data);
+            writer.flush();
+            writer.close();
+
+            Uri contentUri = androidx.core.content.FileProvider.getUriForFile(
+                getContext(),
+                getContext().getPackageName() + ".fileprovider",
+                backupFile
+            );
+
+            android.content.Intent shareIntent = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            shareIntent.setType("application/json");
+            shareIntent.putExtra(android.content.Intent.EXTRA_STREAM, contentUri);
+            shareIntent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            
+            android.content.Intent chooser = android.content.Intent.createChooser(shareIntent, "Export Backup");
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(chooser);
+            
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Failed to export backup: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void importBackup(PluginCall call) {
+        saveCall(call);
+        android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        startActivityForResult(call, intent, "pickBackupFile");
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void pickBackupFile(PluginCall call, androidx.activity.result.ActivityResult result) {
+        if (result.getResultCode() == android.app.Activity.RESULT_OK && result.getData() != null) {
+            Uri uri = result.getData().getData();
+            if (uri != null) {
+                try {
+                    java.io.InputStream inputStream = getContext().getContentResolver().openInputStream(uri);
+                    java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(inputStream));
+                    StringBuilder stringBuilder = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stringBuilder.append(line);
+                    }
+                    inputStream.close();
+                    
+                    JSObject ret = new JSObject();
+                    ret.put("data", stringBuilder.toString());
+                    call.resolve(ret);
+                } catch (Exception e) {
+                    call.reject("Failed to read file: " + e.getMessage());
+                }
+            } else {
+                call.reject("No data returned");
+            }
+        } else {
+            call.reject("User cancelled file selection");
+        }
+    }
+
+    @PluginMethod
+    public void selectDownloadLocation(PluginCall call) {
+        saveCall(call);
+        android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE);
+        startActivityForResult(call, intent, "pickDirectory");
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void pickDirectory(PluginCall call, androidx.activity.result.ActivityResult result) {
+        if (result.getResultCode() == android.app.Activity.RESULT_OK && result.getData() != null) {
+            Uri treeUri = result.getData().getData();
+            if (treeUri != null) {
+                try {
+                    int takeFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                    getContext().getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+                } catch (Exception ignored) {}
+
+                String docId = null;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri);
+                }
+                
+                String relativePath = "";
+                if (docId != null) {
+                    String[] parts = docId.split(":");
+                    if (parts.length > 1) {
+                        relativePath = parts[1];
+                        if (relativePath.startsWith("Download/")) {
+                            relativePath = relativePath.substring("Download/".length());
+                        } else if (relativePath.equalsIgnoreCase("Download")) {
+                            relativePath = "";
+                        }
+                    }
+                }
+                
+                if (relativePath.isEmpty()) {
+                    String lastSegment = treeUri.getLastPathSegment();
+                    if (lastSegment != null) {
+                        String[] parts = lastSegment.split(":");
+                        relativePath = parts[parts.length - 1];
+                    }
+                }
+
+                if (relativePath.contains("/")) {
+                    relativePath = relativePath.substring(relativePath.lastIndexOf("/") + 1);
+                }
+
+                if (relativePath.isEmpty()) {
+                    relativePath = "AniPlay";
+                }
+
+                JSObject ret = new JSObject();
+                ret.put("folderName", relativePath);
+                call.resolve(ret);
+            } else {
+                call.reject("No directory selected");
+            }
+        } else {
+            call.reject("Cancelled");
+        }
+    }
 
     @PluginMethod
     public void openExternalDownloader(PluginCall call) {
@@ -413,11 +612,12 @@ public class OfflineDownloader extends Plugin {
     }
 
     void saveToGallery(File src, String name) throws Exception {
+        String folder = getDownloadFolder();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContentValues cv = new ContentValues();
             cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
             cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
-            cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/" + folder);
             Uri uri = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             if (uri == null) throw new Exception("MediaStore insert null");
             try (InputStream in  = new BufferedInputStream(new FileInputStream(src));
@@ -428,7 +628,7 @@ public class OfflineDownloader extends Plugin {
                 out.flush();
             }
         } else {
-            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AniPlay");
+            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folder);
             dir.mkdirs();
             File dest = new File(dir, name);
             try (InputStream in = new FileInputStream(src); OutputStream out = new FileOutputStream(dest)) {
@@ -477,6 +677,7 @@ public class OfflineDownloader extends Plugin {
         }
 
         private String getUniqueFileName(String baseName, String extension) {
+            String folder = plugin.getDownloadFolder();
             String candidate = baseName + extension;
             Uri contentUri = extension.endsWith(".mp4") ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI : MediaStore.Files.getContentUri("external");
             String pathColumn = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ? MediaStore.MediaColumns.RELATIVE_PATH : MediaStore.MediaColumns.DATA;
@@ -486,7 +687,7 @@ public class OfflineDownloader extends Plugin {
                 contentUri,
                 new String[]{ MediaStore.MediaColumns.DISPLAY_NAME },
                 MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + pathColumn + " LIKE ?",
-                new String[]{ candidate, "%Download/AniPlay%" },
+                new String[]{ candidate, "%Download/" + folder + "%" },
                 null
             )) {
                 if (cursor != null) exists = cursor.getCount() > 0;
@@ -502,7 +703,7 @@ public class OfflineDownloader extends Plugin {
                     contentUri,
                     new String[]{ MediaStore.MediaColumns.DISPLAY_NAME },
                     MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + pathColumn + " LIKE ?",
-                    new String[]{ candidate, "%Download/AniPlay%" },
+                    new String[]{ candidate, "%Download/" + folder + "%" },
                     null
                 )) {
                     if (cursor != null) exists = cursor.getCount() > 0;
@@ -652,7 +853,7 @@ public class OfflineDownloader extends Plugin {
             AtomicReference<Exception> failEx = new AtomicReference<>();
             final boolean enc = isEnc; final byte[] fKey = curKey; final List<byte[]> fIVs = segIVs;
 
-            ExecutorService pool = Executors.newFixedThreadPool(2);
+            ExecutorService pool = Executors.newFixedThreadPool(6);
             List<Future<?>> futures = new ArrayList<>();
             for (int i = 0; i < total; i++) {
                 final int idx = i;
@@ -749,6 +950,7 @@ public class OfflineDownloader extends Plugin {
 
         private void downloadMP4Direct(String fileName) throws Exception {
             Request req = buildRequest(srvUrl);
+            String folder = plugin.getDownloadFolder();
             try (Response resp = http.newCall(req).execute()) {
                 if (!resp.isSuccessful() || resp.body() == null) throw new IOException("HTTP " + resp.code());
                 InputStream is = resp.body().byteStream();
@@ -757,7 +959,7 @@ public class OfflineDownloader extends Plugin {
                     ContentValues cv = new ContentValues();
                     cv.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
                     cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
-                    cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+                    cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/" + folder);
                     Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                     if (uri == null) throw new Exception("MediaStore insert null");
                     try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
@@ -765,7 +967,7 @@ public class OfflineDownloader extends Plugin {
                         pipe(is, os, length);
                     }
                 } else {
-                    File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AniPlay");
+                    File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folder);
                     dir.mkdirs();
                     File out = new File(dir, fileName);
                     try (OutputStream os = new FileOutputStream(out)) { pipe(is, os, length); }
@@ -955,26 +1157,27 @@ public class OfflineDownloader extends Plugin {
                 }
 
                 String subName = baseName + ".vtt";
+                String folder = plugin.getDownloadFolder();
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     try {
                         ContentValues cv = new ContentValues();
                         cv.put(MediaStore.MediaColumns.DISPLAY_NAME, subName);
                         cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
-                        cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AniPlay");
+                        cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/" + folder);
                         Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                         if (uri != null) {
                             try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
                                 if (os != null) { os.write(data); os.flush(); }
                             }
                         } else {
-                            writeSubtitleFallback(subName, data);
+                            writeSubtitleFallback(subName, data, folder);
                         }
                     } catch (Exception ex) {
                         Log.w(TAG, "MediaStore subtitle write failed, trying fallback: " + ex.getMessage());
-                        writeSubtitleFallback(subName, data);
+                        writeSubtitleFallback(subName, data, folder);
                     }
                 } else {
-                    writeSubtitleFallback(subName, data);
+                    writeSubtitleFallback(subName, data, folder);
                 }
             } catch (Exception e) { 
                 Log.e(TAG, "Subtitle download failed", e);
@@ -986,8 +1189,8 @@ public class OfflineDownloader extends Plugin {
             }
         }
 
-        private void writeSubtitleFallback(String subName, byte[] data) throws Exception {
-            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "AniPlay");
+        private void writeSubtitleFallback(String subName, byte[] data, String folder) throws Exception {
+            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folder);
             dir.mkdirs();
             File out = new File(dir, subName);
             try (FileOutputStream fos = new FileOutputStream(out)) { 

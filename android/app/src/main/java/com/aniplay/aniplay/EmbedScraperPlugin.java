@@ -72,6 +72,26 @@ public class EmbedScraperPlugin extends Plugin {
                 scrapeWebView.setFocusable(true);
                 scrapeWebView.setClickable(true);
                 rootView.addView(scrapeWebView, 0, lp);
+                // Re-enforce navigation bar color and fullscreen flags after WebView is added.
+                // Adding a new View to the hierarchy can cause Android to briefly reset
+                // system bar colors and visibility — this prevents the nav bar from turning white.
+                android.view.Window window = getActivity().getWindow();
+                window.setNavigationBarColor(android.graphics.Color.BLACK);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    window.setNavigationBarContrastEnforced(false);
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.view.WindowInsetsController wic = window.getInsetsController();
+                    if (wic != null) {
+                        wic.hide(
+                            android.view.WindowInsets.Type.statusBars() |
+                            android.view.WindowInsets.Type.navigationBars()
+                        );
+                        wic.setSystemBarsBehavior(
+                            android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                        );
+                    }
+                }
             }
             WebSettings settings = scrapeWebView.getSettings();
             settings.setJavaScriptEnabled(true);
@@ -81,6 +101,8 @@ public class EmbedScraperPlugin extends Plugin {
             settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
             settings.setMediaPlaybackRequiresUserGesture(false);
+            settings.setLoadsImagesAutomatically(false);
+            settings.setBlockNetworkImage(true);
             android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
             cookieManager.setAcceptCookie(true);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -109,9 +131,20 @@ public class EmbedScraperPlugin extends Plugin {
                         });
                     }
 
-                    // Block known tracking, analytics, and redirect ad domains to load pages 10x faster
+                    // Block stylesheets, fonts, images, and tracking/analytics to load pages up to 10x faster
                     String lowerUrl = reqUrl.toLowerCase();
-                    if (lowerUrl.contains("google-analytics.com") 
+                    if (lowerUrl.contains(".css") 
+                        || lowerUrl.contains(".png")
+                        || lowerUrl.contains(".jpg")
+                        || lowerUrl.contains(".jpeg")
+                        || lowerUrl.contains(".gif")
+                        || lowerUrl.contains(".svg")
+                        || lowerUrl.contains(".webp")
+                        || lowerUrl.contains(".ico")
+                        || lowerUrl.contains(".woff")
+                        || lowerUrl.contains(".ttf")
+                        || lowerUrl.contains(".otf")
+                        || lowerUrl.contains("google-analytics.com") 
                         || lowerUrl.contains("doubleclick.net")
                         || lowerUrl.contains("adnxs.com")
                         || lowerUrl.contains("adsystem")
@@ -122,9 +155,13 @@ public class EmbedScraperPlugin extends Plugin {
                         || lowerUrl.contains("arnattoprana")
                         || lowerUrl.contains("omg10")
                         || lowerUrl.contains("cpmstar")
-                        || lowerUrl.contains("adsterra")) {
+                        || lowerUrl.contains("adsterra")
+                        || lowerUrl.contains("histats")
+                        || lowerUrl.contains("statcounter")
+                        || lowerUrl.contains("fonts.googleapis")
+                        || lowerUrl.contains("fonts.gstatic")) {
                         // Return empty response to block the request
-                        return new WebResourceResponse("text/javascript", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
+                        return new WebResourceResponse("text/plain", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
                     }
 
                     return super.shouldInterceptRequest(view, request);
@@ -173,41 +210,26 @@ public class EmbedScraperPlugin extends Plugin {
 
     @PluginMethod
     public void setImmersiveMode(final PluginCall call) {
-        final boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", true));
         getActivity().runOnUiThread(() -> {
             Window window = getActivity().getWindow();
             View decorView = window.getDecorView();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                // API 30+ — WindowInsetsController (modern, no deprecation)
                 WindowInsetsController controller = window.getInsetsController();
                 if (controller != null) {
-                    if (enabled) {
-                        controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                        controller.setSystemBarsBehavior(
-                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                        );
-                    } else {
-                        controller.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                    }
+                    controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                    controller.setSystemBarsBehavior(
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    );
                 }
             } else {
-                // API < 30 — legacy flags
-                if (enabled) {
-                    decorView.setSystemUiVisibility(
-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN
-                    );
-                } else {
-                    decorView.setSystemUiVisibility(
-                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    );
-                }
+                decorView.setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN
+                );
             }
             call.resolve();
         });

@@ -40,7 +40,7 @@ export default function DownloadPage() {
 
   return (
     <div className="page fade-in-up">
-      <div style={{ padding: '16px 16px 8px' }}>
+      <div style={{ padding: '16px 16px 8px', paddingTop: 'max(32px, env(safe-area-inset-top))' }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--font-brand)', marginBottom: 4 }}>Download Center</h1>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Track active downloads. Videos are saved directly to your Gallery.</p>
       </div>

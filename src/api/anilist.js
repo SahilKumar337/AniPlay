@@ -61,6 +61,7 @@ const MEDIA_FIELDS = `
   genres averageScore episodes status format
   startDate { year }
   nextAiringEpisode { episode airingAt }
+  tags { name isMediaSpoiler rank }
 `;
 
 /* ── Lightweight fields for card-only queries (no description) ─── */
@@ -71,6 +72,7 @@ const CARD_FIELDS = `
   genres averageScore episodes status format
   startDate { year }
   nextAiringEpisode { episode airingAt }
+  tags { name isMediaSpoiler rank }
 `;
 
 /* ── Trending ─────────────────────────────────────────────────── */
@@ -154,20 +156,101 @@ export async function getPopularThisSeason(page = 1, perPage = 15) {
 }
 
 /* ── Search ───────────────────────────────────────────────────── */
-export async function searchAnime(search, page = 1, perPage = 20, genre = null, format = null, status = null) {
-  const q = `query($s:String,$p:Int,$n:Int,$g:String,$f:MediaFormat,$st:MediaStatus){
+export async function searchAnime(search, page = 1, perPage = 20, genres = null, format = null, status = null, sort = 'POPULARITY_DESC') {
+  const vars = { p: page, n: perPage };
+  const queryParams = ['$p:Int', '$n:Int'];
+  const mediaParams = ['type:ANIME', 'isAdult:false', `sort:${sort}`];
+
+  if (search) {
+    queryParams.push('$s:String');
+    mediaParams.push('search:$s');
+    vars.s = search;
+  }
+  if (format) {
+    queryParams.push('$f:MediaFormat');
+    mediaParams.push('format:$f');
+    vars.f = format;
+  }
+  if (status) {
+    queryParams.push('$st:MediaStatus');
+    mediaParams.push('status:$st');
+    vars.st = status;
+  }
+
+  const selectedGenres = Array.isArray(genres) ? genres : (genres ? [genres] : []);
+
+  // Official AniList genres (these go in genre_in)
+  const ANILIST_GENRES = new Set([
+    'Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy',
+    'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery',
+    'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life',
+    'Sports', 'Supernatural', 'Thriller'
+  ]);
+
+  // Map display labels → exact AniList tag names for everything NOT a genre
+  const TAG_NAME_MAP = {
+    'Cars':         'Racing',
+    'Dementia':     'Psychological',
+    'Demons':       'Demons',
+    'Game':         'Video Games',
+    'Harem':        'Harem',
+    'Haram':        'Harem',
+    'haram':        'Harem',
+    'Female Harem': 'Female Harem',
+    'Historical':   'Historical',
+    'Isekai':       'Isekai',
+    'Josei':        'Josei',
+    'Kids':         'Kids',
+    'Magic':        'Magic',
+    'Martial Arts': 'Martial Arts',
+    'Military':     'Military',
+    'Parody':       'Parody',
+    'Police':       'Police',
+    'Samurai':      'Samurai',
+    'School':       'School',
+    'Seinen':       'Seinen',
+    'Shoujo':       'Shoujo',
+    'Shoujo Ai':    'Shoujo Ai',
+    'Shounen':      'Shounen',
+    'Shounen Ai':   'Shounen Ai',
+    'Space':        'Space',
+    'Super Power':  'Super Power',
+    'Vampire':      'Vampire',
+  };
+
+  const gList = selectedGenres.filter(g => ANILIST_GENRES.has(g));
+  const tList = [];
+  for (const g of selectedGenres) {
+    if (ANILIST_GENRES.has(g)) continue;
+    const mapped = TAG_NAME_MAP[g] || g;
+    if (mapped === 'Harem') {
+      tList.push('Female Harem', 'Male Harem');
+    } else {
+      tList.push(mapped);
+    }
+  }
+
+  if (gList.length) {
+    queryParams.push('$g:[String]');
+    mediaParams.push('genre_in:$g');
+    vars.g = gList;
+  }
+  if (tList.length) {
+    queryParams.push('$t:[String]');
+    mediaParams.push('tag_in:$t');
+    vars.t = tList;
+  }
+
+  const q = `query(${queryParams.join(',')}){
     Page(page:$p,perPage:$n){
-      media(search:$s,type:ANIME,genre:$g,format:$f,status:$st,isAdult:false,sort:POPULARITY_DESC){${MEDIA_FIELDS}}
+      media(${mediaParams.join(',')}){${MEDIA_FIELDS}}
     }
   }`;
-  const vars = { p: page, n: perPage };
-  if (search) vars.s  = search;
-  if (genre)  vars.g  = genre;
-  if (format) vars.f  = format;
-  if (status) vars.st = status;
+
   const d = await gql(q, vars);
   return d?.Page?.media || [];
 }
+
 
 /* ── Anime Detail ─────────────────────────────────────────────── */
 export async function getAnimeDetail(id) {
@@ -228,6 +311,48 @@ export function getCurrentSeason() {
   const season = m <= 3 ? 'WINTER' : m <= 6 ? 'SPRING' : m <= 9 ? 'SUMMER' : 'FALL';
   return { season, year };
 }
-export const getTitle = a => a?.title?.english || a?.title?.romaji || 'Unknown';
+export const getTitle = a => {
+  if (!a) return 'Unknown';
+  const mainTitle = a.title?.english || a.title?.romaji || 'Unknown';
+  if (a.format && !['TV', 'MOVIE'].includes(a.format)) {
+    const cleanFormat = a.format.replace('_', ' ').toUpperCase();
+    return `${mainTitle} (${cleanFormat})`;
+  }
+  return mainTitle;
+};
 export const getCover = a => a?.coverImage?.extraLarge || a?.coverImage?.large || '';
 export const getColor = a => a?.coverImage?.color || '#e50914';
+
+export const getDisplayGenresOrTags = a => {
+  if (!a) return [];
+  const genres = [...(a.genres || [])];
+  
+  // Extract and normalize tags
+  let tags = (a.tags || [])
+    .filter(t => !t.isMediaSpoiler && t.rank >= 60)
+    .map(t => {
+      const name = t.name;
+      if (name === 'Female Harem' || name === 'Male Harem') {
+        return 'Harem';
+      }
+      return name;
+    });
+
+  // Filter out low-value/redundant descriptive tags to keep badges clean
+  const blocklist = new Set(['Nudity', 'Heterosexual', 'Male Protagonist', 'Primarily Female Cast', 'Kuudere', 'Tsundere']);
+  tags = tags.filter(t => !blocklist.has(t));
+
+  // Combine genres and tags
+  const combined = [...genres, ...tags];
+  const unique = combined.filter((item, index) => combined.indexOf(item) === index);
+  
+  // Prioritize showing 'Harem' near the front so it doesn't get sliced off
+  if (unique.includes('Harem')) {
+    const withoutHarem = unique.filter(x => x !== 'Harem');
+    const insertIdx = Math.min(genres.length, 3);
+    withoutHarem.splice(insertIdx, 0, 'Harem');
+    return withoutHarem.slice(0, 6);
+  }
+
+  return unique.slice(0, 6);
+};

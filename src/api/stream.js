@@ -5,7 +5,7 @@
  * through a lightweight Cloudflare Worker header proxy if configured.
  */
 
-import { scrapeAniNeko, scrapeAniWaves, scrapeAnimetsu, getScraperEpisodeCount } from './scrapers';
+import { scrapeAniNeko, scrapeAniWaves, getScraperEpisodeCount } from './scrapers';
 export { getScraperEpisodeCount };
 
 const clientStreamCache = new Map();
@@ -63,7 +63,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
         const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
-        const isAllowed = ['AniHD', 'NekoHD', 'WavesHD'].includes(baseName) || baseName.startsWith('Waves-');
+        const isAllowed = ['NekoHD', 'WavesHD'].includes(baseName) || baseName.startsWith('Waves-');
         if (!isAllowed) return; // skip all other servers
 
         // Prevent duplicate server items
@@ -74,13 +74,12 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // Deduplicate and prioritize servers list: Neko → AniHD → WavesHD
+      // Deduplicate and prioritize servers list: Neko → WavesHD
       combinedServers.sort((a, b) => {
         const getPriority = (name) => {
           if (name.includes('Neko')) return 0;
-          if (name.includes('AniHD')) return 1;
-          if (name.includes('Waves') || name.includes('WavesHD')) return 2;
-          return 3;
+          if (name.includes('Waves') || name.includes('WavesHD')) return 1;
+          return 2;
         };
         return getPriority(a.name) - getPriority(b.name);
       });
@@ -127,40 +126,9 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     return null;
   })();
 
-  // Define Animetsu (AniHD) execution
-  const animetsuPromise = (async () => {
-    for (const title of titles) {
-      try {
-        console.log(`[ClientEngine] Animetsu trying: "${title}" ep ${episode}`);
-        const data = await scrapeAnimetsu(title, episode, isMovie);
-        if (data?.servers?.length) {
-          handleScraperResult(data);
-          return data;
-        }
-      } catch (e) {
-        console.warn(`[ClientEngine] Animetsu failed for "${title}": ${e.message}`);
-        errors.push(`Animetsu[${title.slice(0, 30)}]: ${e.message}`);
-      }
-    }
-    // Fallback placeholder so AniHD button is always visible in the server list
-    handleScraperResult({
-      servers: [{
-        name: 'AniHD',
-        videoUrl: 'https://animetsu.net/proxy/placeholder',
-        type: 'sub',
-        embedUrl: 'https://animetsu.net/proxy/placeholder',
-        referer: 'https://animetsu.net/',
-        subtitles: [],
-        isHLS: true
-      }]
-    });
-    return null;
-  })();
-
   const results = await Promise.allSettled([
     runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 12000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(animetsuPromise, 12000, 'Animetsu').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(wavesPromise, 12000, 'AniWaves').catch(e => { console.warn(e.message); return null; })
   ]);
 
   if (combinedServers.length === 0) {
@@ -169,8 +137,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
 
   const nekoSuccess = results[0].status === 'fulfilled' && results[0].value;
   const wavesSuccess = results[1].status === 'fulfilled' && results[1].value;
-  const animetsuSuccess = results[2].status === 'fulfilled' && results[2].value;
-  const isPartial = !nekoSuccess || !wavesSuccess || !animetsuSuccess;
+  const isPartial = !nekoSuccess || !wavesSuccess;
 
   const resultData = {
     ok: true,
@@ -316,10 +283,7 @@ export async function resolvePlaceholderServer(anime, episode, serverName, serve
   for (const title of titles) {
     try {
       let data = null;
-      if (serverName.includes('AniHD')) {
-        console.log(`[ClientEngine] Resolving AniHD placeholder for "${title}"...`);
-        data = await scrapeAnimetsu(title, episode, isMovie);
-      }
+      // No placeholder servers — this branch is unused after AniHD removal
 
       if (data?.servers?.length) {
         const found = data.servers.find(s => s.name === serverName && s.type === serverType)

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
-import { StatusBar, Style } from '@capacitor/status-bar';
+import { StatusBar } from '@capacitor/status-bar';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
@@ -223,9 +223,8 @@ export default function App() {
     const initDeviceSettings = async () => {
       if (Capacitor.isNativePlatform()) {
         try {
-          await StatusBar.setOverlaysWebView({ overlay: false });
-          await StatusBar.setBackgroundColor({ color: '#000000' });
-          await StatusBar.setStyle({ style: Style.Light });
+          // Hide the status bar completely (time, battery, signal)
+          await StatusBar.hide();
         } catch (e) {
           console.warn('[Capacitor] StatusBar settings error:', e);
         }
@@ -233,6 +232,7 @@ export default function App() {
     };
     initDeviceSettings();
   }, []);
+
 
   // ── Remote Update & Configuration Checker ──────────────────────
   useEffect(() => {

@@ -24,6 +24,7 @@ const ALIASES = {
   'narto': ['naruto', 'naruto shippuden'],
   'titan': ['attack on titan', 'shingeki no kyojin'],
   'slime isekai': ['that time i got reincarnated as a slime', 'tensei shitara slime datta ken'],
+  'haram': ['harem'],
 };
 
 // ── Layer 2 Helpers: Sørensen-Dice Trigrams ──────────────────────

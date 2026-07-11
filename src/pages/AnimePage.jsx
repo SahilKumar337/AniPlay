@@ -9,7 +9,7 @@ import {
   Clock, CheckCircle, Tv, Wifi, WifiOff, Loader, Heart,
   MessageSquare, Send, User, ThumbsUp
 } from 'lucide-react';
-import { getAnimeDetail, getTitle, getCover } from '../api/anilist';
+import { getAnimeDetail, getTitle, getCover, getDisplayGenresOrTags } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 import { fetchCloudComments, postCloudComment, updateUserNickname } from '../api/supabase';
 import AnimeCard from '../components/AnimeCard';
@@ -22,18 +22,10 @@ import { downloadManager } from '../utils/DownloadManager';
 const isDownloadable = (srv) => {
   if (!srv) return false;
   const name = (srv.name || '').toLowerCase();
-  const url = (srv.embedUrl || srv.videoUrl || '').toLowerCase();
   
-  // Exclude WavesHD
-  if (name.includes('waveshd') || name.includes('waves')) return false;
-  
-  // Exclude Gogo-Direct
-  if (name.includes('gogo-direct')) return false;
-
-  // Allow Neko and AniHD
+  // Only allow NekoHD servers for download
   const isNeko = name.includes('neko');
-  const isAniHD = name.includes('anihd');
-  if (!isNeko && !isAniHD) return false;
+  if (!isNeko) return false;
 
   // For SUB, it must have English subtitles
   if (srv.type === 'sub') {
@@ -76,7 +68,6 @@ const buildAllSubtitleTracks = (list) => {
   const getSourceLabel = (serverName) => {
     const n = (serverName || '').toLowerCase();
     if (n.includes('neko')) return 'NekoHD';
-    if (n.includes('anihd') || n.includes('ani')) return 'Ani';
     if (n.includes('waves')) return 'Waves';
     return null;
   };
@@ -375,14 +366,9 @@ export default function AnimePage() {
 
   const parseM3U8Qualities = async (masterUrl, referer) => {
     try {
-      const res = await fetch(masterUrl, { 
-        headers: { 
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36', 
-          'Referer': referer 
-        } 
-      });
-      if (!res.ok) return [];
-      const text = await res.text();
+      // Use fetchM3U8Playlist which uses CapacitorHttp on Android (bypasses CORS)
+      // and falls back to browser fetch on desktop
+      const text = await fetchM3U8Playlist(masterUrl, referer);
       if (!text.includes('#EXT-X-STREAM-INF')) return [];
       
       const lines = text.split('\n');
@@ -435,7 +421,8 @@ export default function AnimePage() {
           if (isDownloadable(srv)) {
             try {
               let finalUrl = srv.videoUrl;
-              let referer = (srv.name.toLowerCase().includes('neko') && srv.embedUrl) ? srv.embedUrl : (srv.referer || '');
+              // Always use srv.referer (e.g. https://anineko.to/) NOT the embedUrl as referer
+              let referer = srv.referer || '';
               const isEmbed = !srv.isHLS && srv.embedUrl;
               if (isEmbed) {
                 if (Capacitor.isNativePlatform()) {
@@ -493,7 +480,8 @@ export default function AnimePage() {
       setDownloadProgress(prev => ({ ...prev, [taskId]: 0 }));
 
       let finalUrl = selectedServer.videoUrl;
-      let referer = (selectedServer.name.toLowerCase().includes('neko') && selectedServer.embedUrl) ? selectedServer.embedUrl : (selectedServer.referer || '');
+      // Always use server's own referer (e.g. https://anineko.to/) as the http Referer header
+      let referer = selectedServer.referer || '';
 
       // Resolve placeholder link if needed
       const isPlaceholder = finalUrl && finalUrl.includes('proxy/placeholder');
@@ -821,15 +809,10 @@ export default function AnimePage() {
       let preferred;
       if (preferredSrv === 'gogoanime' || preferredSrv === 'neko') {
         preferred = matchingServers.find(s => /neko|gogo/i.test(s.name)) || matchingServers[0] || enriched[0];
-      } else if (preferredSrv === 'animepahe' || preferredSrv === 'anihd') {
-        preferred = matchingServers.find(s => /anihd/i.test(s.name)) || matchingServers[0] || enriched[0];
       } else if (preferredSrv === 'waveshd' || preferredSrv === 'waves') {
         preferred = matchingServers.find(s => /waves/i.test(s.name)) || matchingServers[0] || enriched[0];
       } else {
-        preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
-                 || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
-                 || matchingServers[0]
-                 || enriched[0];
+        preferred = matchingServers[0] || enriched[0];
       }
       
       if (preferred) {
@@ -840,7 +823,9 @@ export default function AnimePage() {
       }
 
       const nextEp = epParam + 1;
-      const maxEps = anime.episodes ? anime.episodes : ((anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 999);
+      const isAiring = anime.status === 'RELEASING';
+      const airedCount = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 0;
+      const maxEps = isAiring ? Math.max(1, scraperEps, airedCount) : Math.max(anime.episodes || 0, scraperEps, 1);
       if (nextEp <= maxEps) {
         getAniNekoServers(anime, nextEp).catch(() => {});
       }
@@ -877,15 +862,10 @@ export default function AnimePage() {
         let preferred;
         if (preferredSrv2 === 'gogoanime' || preferredSrv2 === 'neko') {
           preferred = matchingServers.find(s => /neko|gogo/i.test(s.name)) || matchingServers[0] || enriched[0];
-        } else if (preferredSrv2 === 'animepahe' || preferredSrv2 === 'anihd') {
-          preferred = matchingServers.find(s => /anihd/i.test(s.name)) || matchingServers[0] || enriched[0];
         } else if (preferredSrv2 === 'waveshd' || preferredSrv2 === 'waves') {
           preferred = matchingServers.find(s => /waves/i.test(s.name)) || matchingServers[0] || enriched[0];
         } else {
-          preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
-                   || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name))
-                   || matchingServers[0]
-                   || enriched[0];
+          preferred = matchingServers[0] || enriched[0];
         }
         
         if (preferred) {
@@ -908,7 +888,9 @@ export default function AnimePage() {
         setStreamErr('No streaming servers available for this episode.');
       } else {
         const nextEp = epParam + 1;
-        const maxEps = anime.episodes ? anime.episodes : ((anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 999);
+        const isAiring = anime.status === 'RELEASING';
+        const airedCount = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 0;
+        const maxEps = isAiring ? Math.max(1, scraperEps, airedCount) : Math.max(anime.episodes || 0, scraperEps, 1);
         if (nextEp <= maxEps) {
           getAniNekoServers(anime, nextEp).catch(() => {});
         }
@@ -923,7 +905,7 @@ export default function AnimePage() {
     } finally {
       setLoadStream(false);
     }
-  }, [anime, epParam, selectServer]);
+  }, [anime, epParam, selectServer, scraperEps]);
 
   // Load stream when epParam changes
   useEffect(() => {
@@ -946,8 +928,6 @@ export default function AnimePage() {
     let preferred;
     if (preferredSrv === 'gogoanime' || preferredSrv === 'neko') {
       preferred = matchingServers.find(s => /neko|gogo/i.test(s.name));
-    } else if (preferredSrv === 'animepahe' || preferredSrv === 'anihd') {
-      preferred = matchingServers.find(s => /anihd/i.test(s.name));
     } else if (preferredSrv === 'waveshd' || preferredSrv === 'waves') {
       preferred = matchingServers.find(s => /waves/i.test(s.name));
     } else {
@@ -1025,11 +1005,14 @@ export default function AnimePage() {
   // ── Fix: isNotReleased was hardcoded false — now checks real status ──
   const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (eps === 0 && !anime.nextAiringEpisode);
 
-  const totalEps = Math.max(
-    eps || 0,
-    scraperEps,
-    (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) ? anime.nextAiringEpisode.episode - 1 : 0
-  );
+  const isAiring = anime.status === 'RELEASING';
+  const airedCount = (anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1) 
+    ? anime.nextAiringEpisode.episode - 1 
+    : 0;
+
+  const totalEps = isAiring 
+    ? Math.max(1, scraperEps, airedCount) 
+    : Math.max(eps || 0, scraperEps, 1);
 
   const allEps = Array.from({ length: totalEps }, (_, i) => i + 1);
 
@@ -1049,7 +1032,8 @@ export default function AnimePage() {
         transform: 'translateX(-50%)',
         zIndex: 90,
         width: '100%', maxWidth: 480,
-        padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px',
+        padding: '12px 16px 12px',
+        paddingTop: 'max(32px, env(safe-area-inset-top))',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         background: scrolled ? 'rgba(15, 15, 15, 0.75)' : 'rgba(15, 15, 15, 0)',
         backdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
@@ -1294,7 +1278,7 @@ export default function AnimePage() {
           {/* Genre */}
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.6 }}>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Genre:</span>{' '}
-            {anime.genres?.slice(0, 6).join(', ')}
+            {getDisplayGenresOrTags(anime).join(', ')}
             {studios ? ` · Studio: ${studios}` : ''}
           </p>
 
@@ -1845,8 +1829,8 @@ export default function AnimePage() {
         <div style={{
           position: 'relative',
           width: '100%',
-          height: fsActive ? '100%' : 'auto',
-          aspectRatio: fsActive ? 'unset' : '16/9',
+          height: fsActive ? '100%' : 'calc(100vw * 9 / 16)',
+          minHeight: fsActive ? 'unset' : '250px',
           flex: fsActive ? 1 : 'unset',
           background: '#000',
           overflow: fsActive ? 'visible' : 'hidden'

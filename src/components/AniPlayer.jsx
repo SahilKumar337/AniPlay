@@ -67,12 +67,24 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
             'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
           };
 
-          if (refererUrl) {
-            reqHeaders['Origin'] = refererUrl.replace(/\/$/, '');
-            reqHeaders['Referer'] = refererUrl;
+          let targetReferer = refererUrl;
+          if (embedUrl) {
+            try {
+              const parsedEmbed = new URL(embedUrl);
+              targetReferer = parsedEmbed.origin + '/';
+            } catch (e) {}
+          }
+
+          if (targetReferer) {
+            try {
+              reqHeaders['Origin'] = new URL(targetReferer).origin;
+            } catch (e) {
+              reqHeaders['Origin'] = targetReferer.replace(/\/$/, '');
+            }
+            reqHeaders['Referer'] = targetReferer;
           } else {
-            reqHeaders['Origin'] = 'https://animetsu.net';
-            reqHeaders['Referer'] = 'https://animetsu.net/';
+            reqHeaders['Origin'] = 'https://animepahe.pw';
+            reqHeaders['Referer'] = 'https://animepahe.pw/';
           }
 
           if (embedUrl && isNative) {
@@ -682,7 +694,7 @@ export default function AniPlayer({
       v.removeEventListener('canplay',        onPlay);
       v.removeEventListener('ended',          onEnded);
     };
-  }, [log]);
+  }, [log, autoplay, onEpisodeChange, currentEpisode, totalEpisodes]);
 
   // ── Autoplay countdown when video ends ─────────────────────────
   useEffect(() => {

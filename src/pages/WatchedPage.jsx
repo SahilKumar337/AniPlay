@@ -12,7 +12,7 @@ export default function WatchedPage() {
   return (
     <div className="page fade-in-up">
       {/* Header */}
-      <div className="sticky-header" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px' }}>
+      <div className="sticky-header" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px 12px', paddingTop: 'max(32px, env(safe-area-inset-top))' }}>
         <button
           onClick={() => navigate(-1)}
           className="floating-btn"

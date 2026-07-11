@@ -204,13 +204,21 @@ function PillSelector({ value, options, onChange }) {
 }
 
 /* ── Setting Row ─────────────────────────────────────────────────────────── */
-function SettingRow({ icon: Icon, label, sub, children, iconColor = "var(--accent)", last }) {
+function SettingRow({ icon: Icon, label, sub, children, iconColor = "var(--accent)", last, onClick }) {
   return (
-    <div className="srow" style={{
-      display: "flex", alignItems: "center", gap: 14, padding: "13px 4px",
-      borderBottom: last ? "none" : "1px solid var(--border)",
-      borderRadius: 10, transition: "background 0.15s",
-    }}>
+    <div 
+      className="srow" 
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 14, padding: "13px 8px",
+        borderBottom: last ? "none" : "1px solid var(--border)",
+        borderRadius: 10, transition: "background 0.15s, transform 0.1s",
+        cursor: onClick ? "pointer" : "default",
+        WebkitTapHighlightColor: "transparent",
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = "var(--bg-hover)"; }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = "transparent"; }}
+    >
       <div style={{
         width: 38, height: 38, borderRadius: 11, flexShrink: 0,
         background: `${iconColor}18`,
@@ -266,27 +274,94 @@ function SettingsPanel({ onBack }) {
     { value: "#6366f1", label: "Indigo" }, { value: "#14b8a6", label: "Teal" },
   ];
 
-  const exportData = () => {
+  const exportData = async () => {
     const data = { version: 1, exportedAt: new Date().toISOString(), watchlist, favorites, progress, settings };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `aniplay-backup-${new Date().toISOString().split("T")[0]}.json`; a.click();
-    URL.revokeObjectURL(url);
+    const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
+    if (isNative) {
+      try {
+        const { registerPlugin } = await import('@capacitor/core');
+        const OfflineDownloader = registerPlugin('OfflineDownloader');
+        await OfflineDownloader.exportBackup({ data: JSON.stringify(data) });
+      } catch (e) {
+        alert("Failed to export backup: " + (e.message || String(e)));
+      }
+    } else {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `aniplay-backup-${new Date().toISOString().split("T")[0]}.json`; a.click();
+      URL.revokeObjectURL(url);
+    }
   };
 
   const importData = () => {
-    const input = document.createElement("input"); input.type = "file"; input.accept = ".json";
-    input.onchange = async e => {
-      const file = e.target.files?.[0]; if (!file) return;
+    const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
+    if (isNative) {
+      (async () => {
+        try {
+          const { registerPlugin } = await import('@capacitor/core');
+          const OfflineDownloader = registerPlugin('OfflineDownloader');
+          const res = await OfflineDownloader.importBackup();
+          if (res && res.data) {
+            const data = JSON.parse(res.data);
+            if (data.version !== 1) { alert("Unsupported format"); return; }
+            
+            const { Preferences } = await import('@capacitor/preferences');
+            if (data.watchlist) await Preferences.set({ key: 'aniplay_watchlist', value: JSON.stringify(data.watchlist) });
+            if (data.favorites) await Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify(data.favorites) });
+            if (data.progress) await Preferences.set({ key: 'aniplay_progress', value: JSON.stringify(data.progress) });
+            if (data.recentlyViewed) await Preferences.set({ key: 'aniplay_recently_viewed', value: JSON.stringify(data.recentlyViewed) });
+            if (data.settings) await Preferences.set({ key: 'aniplay_settings', value: JSON.stringify(data.settings) });
+
+            alert("Import successful! The app will now reload to apply the data.");
+            window.location.reload();
+          }
+        } catch (e) {
+          alert("Import failed: " + (e.message || String(e)));
+        }
+      })();
+    } else {
+      const input = document.createElement("input"); input.type = "file"; input.accept = ".json";
+      input.onchange = async e => {
+        const file = e.target.files?.[0]; if (!file) return;
+        try {
+          const text = await file.text(); const data = JSON.parse(text);
+          if (data.version !== 1) { alert("Unsupported format"); return; }
+          
+          const { Preferences } = await import('@capacitor/preferences');
+          if (data.watchlist) await Preferences.set({ key: 'aniplay_watchlist', value: JSON.stringify(data.watchlist) });
+          if (data.favorites) await Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify(data.favorites) });
+          if (data.progress) await Preferences.set({ key: 'aniplay_progress', value: JSON.stringify(data.progress) });
+          if (data.recentlyViewed) await Preferences.set({ key: 'aniplay_recently_viewed', value: JSON.stringify(data.recentlyViewed) });
+          if (data.settings) await Preferences.set({ key: 'aniplay_settings', value: JSON.stringify(data.settings) });
+
+          alert("Import successful! The app will now reload to apply the data.");
+          window.location.reload();
+        } catch { alert("Failed to read file."); }
+      };
+      input.click();
+    }
+  };
+
+  const handleOpenDirectoryPicker = async () => {
+    const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
+    if (isNative) {
       try {
-        const text = await file.text(); const data = JSON.parse(text);
-        if (data.version !== 1) { alert("Unsupported format"); return; }
-        if (data.settings) updateSettings(data.settings);
-        alert("Imported! Reload to see full data.");
-      } catch { alert("Failed to read file."); }
-    };
-    input.click();
+        const { registerPlugin } = await import('@capacitor/core');
+        const OfflineDownloader = registerPlugin('OfflineDownloader');
+        const res = await OfflineDownloader.selectDownloadLocation();
+        if (res && res.folderName) {
+          updateSettings({ downloadLocation: res.folderName });
+        }
+      } catch (e) {
+        console.warn('Directory selection failed:', e);
+      }
+    } else {
+      const name = prompt("Enter subfolder name:", settings.downloadLocation || 'AniPlay');
+      if (name !== null) {
+        updateSettings({ downloadLocation: name.replace(/[^a-zA-Z0-9_\-]/g, '') });
+      }
+    }
   };
 
   const subColor = settings.subtitleColor || "#ffffff";
@@ -301,7 +376,8 @@ function SettingsPanel({ onBack }) {
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 12,
-        padding: "20px 16px 16px",
+        padding: "16px 16px 16px",
+        paddingTop: "max(32px, env(safe-area-inset-top))",
         background: "linear-gradient(to bottom, rgba(0,0,0,0.3), transparent)",
         borderBottom: "1px solid rgba(255,255,255,0.05)",
         marginBottom: 4,
@@ -337,7 +413,6 @@ function SettingsPanel({ onBack }) {
               options={[
                 { value: "auto", label: "Auto (Best)" },
                 { value: "neko", label: "NikoHD" },
-                { value: "anihd", label: "AniHD" },
                 { value: "waveshd", label: "WavesHD" }
               ]} />
           </SettingRow>
@@ -456,11 +531,48 @@ function SettingsPanel({ onBack }) {
               <Download size={13} /> Export
             </button>
           </SettingRow>
-          <SettingRow icon={Upload} label="Import Backup" sub="Restore your data from a JSON file" iconColor="#f59e0b" last>
+          <SettingRow icon={Upload} label="Import Backup" sub="Restore your data from a JSON file" iconColor="#f59e0b">
             <button className="prem-btn" onClick={importData}
               style={{ background: "rgba(245,158,11,0.12)", borderColor: "rgba(245,158,11,0.3)", color: "#f59e0b" }}>
               <Upload size={13} /> Import
             </button>
+          </SettingRow>
+          <SettingRow 
+            icon={Download} 
+            label="Download Folder" 
+            sub="Subfolder inside your Downloads directory" 
+            iconColor="#a855f7" 
+            last
+          >
+             <div
+               onClick={handleOpenDirectoryPicker}
+               style={{
+                 background: 'var(--bg-hover)',
+                 border: '1.5px solid var(--border)',
+                 borderRadius: 8,
+                 padding: '6px 14px',
+                 color: '#fff',
+                 minWidth: 90,
+                 textAlign: 'right',
+                 fontSize: 13,
+                 fontWeight: 600,
+                 cursor: 'pointer',
+                 WebkitTapHighlightColor: 'transparent',
+                 userSelect: 'none',
+                 display: 'inline-block',
+                 transition: 'all 0.15s',
+               }}
+               onMouseEnter={e => {
+                 e.currentTarget.style.borderColor = 'rgba(255,255,255,0.3)';
+                 e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+               }}
+               onMouseLeave={e => {
+                 e.currentTarget.style.borderColor = 'var(--border)';
+                 e.currentTarget.style.background = 'var(--bg-hover)';
+               }}
+             >
+               {settings.downloadLocation || 'AniPlay'}
+             </div>
           </SettingRow>
         </SettingsCard>
       </div>
