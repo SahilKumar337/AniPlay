@@ -90,6 +90,30 @@ const nekoSearchCache = new Map();
 const animetsuSearchCache = new Map();
 const animetsuEpsCache = new Map(); // Cache episode list per anime ID to skip re-fetch
 
+// ── localStorage-backed persistent cache helpers ──
+// Persist search results across app restarts (6-hour TTL)
+const LS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
+
+function lsGet(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { data, expires } = JSON.parse(raw);
+    if (Date.now() > expires) { localStorage.removeItem(key); return null; }
+    return data;
+  } catch { return null; }
+}
+
+function lsSet(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, expires: Date.now() + LS_CACHE_TTL }));
+  } catch {}
+}
+
+function lsSearchKey(scraper, title) {
+  return `anisearch_${scraper}_${title.toLowerCase().replace(/\s+/g, '_').slice(0, 60)}`;
+}
+
 // Ã¢â€â‚¬Ã¢â€â‚¬ Helper Matching Functions Ã¢â€â‚¬Ã¢â€â‚¬
 
 function norm(s) {
@@ -554,8 +578,17 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
 export async function scrapeAniWaves(title, episode, isMovie = false) {
   let searchResult = wavesSearchCache.get(title);
   if (!searchResult) {
-    searchResult = await awSearch(title, isMovie);
-    wavesSearchCache.set(title, searchResult);
+    // Check localStorage before hitting the network
+    const lsCached = lsGet(lsSearchKey('waves', title));
+    if (lsCached) {
+      console.log(`[AniWaves] localStorage cache HIT for "${title}" — instant`);
+      searchResult = lsCached;
+      wavesSearchCache.set(title, searchResult);
+    } else {
+      searchResult = await awSearch(title, isMovie);
+      wavesSearchCache.set(title, searchResult);
+      lsSet(lsSearchKey('waves', title), searchResult);
+    }
   }
   const { slug, animeId, animeTitle } = searchResult;
 
@@ -776,78 +809,179 @@ const kotoSearchCache = new Map();  // title → { slug, animeId, animeTitle, wa
 const kotoEpListCache = new Map();  // animeId → epsHtml (full episode list HTML)
 const kotoEpCache = new Map();      // slug-episode → { servers, animeTitle, slug }
 
+/**
+ * Extract animeId from a slug string.
+ * AniKoto slugs always end with a trailing numeric ID: "one-piece-100" → "100"
+ * This eliminates the need to fetch the entire /watch/ page just to get the ID.
+ */
+function extractKotoAnimeId(slug) {
+  const m = slug.match(/-(\d+)$/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Fast lightweight JSON search on AniKoto (same pattern as AniWaves).
+ * Returns a results array or throws on failure.
+ */
+async function kotoJsonSearch(domain, keyword) {
+  const url = `${domain}/ajax/anime/search?keyword=${encodeURIComponent(keyword)}`;
+  const rawText = await clientFetch(url, {
+    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
+    referer: domain,
+    timeout: 5000,
+  });
+  const parsed = JSON.parse(rawText);
+  if (parsed.status === 404 || !parsed.result?.html) return [];
+  const html = parsed.result.html;
+  // Parse search results from HTML fragment
+  const itemRe = /href="\/watch\/([\w%-]+-?(\d+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
+  let m;
+  const results = [];
+  while ((m = itemRe.exec(html)) !== null) {
+    results.push({ slug: m[1], animeTitle: m[3].trim() });
+  }
+  return results;
+}
+
+/**
+ * Filter-page HTML search (heavier, but more complete result set).
+ * Fetches /filter?keyword= and parses the full page HTML.
+ */
+async function kotoFilterSearch(domain, keyword) {
+  const filterUrl = `${domain}/filter?keyword=${encodeURIComponent(keyword)}`;
+  const searchHtml = await clientFetch(filterUrl, { referer: domain, timeout: 10000 });
+  const itemRe = /<a\s+class="name d-title"\s+href="([^"]*?\/watch\/([^"\/]+)(?:\/ep-\d+)?)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  const results = [];
+  while ((m = itemRe.exec(searchHtml)) !== null) {
+    results.push({ fullUrl: m[1], slug: m[2], animeTitle: m[3].replace(/<[^>]*>/g, '').trim() });
+  }
+  return results;
+}
+
 export async function scrapeAniKoto(title, episode, isMovie = false) {
   const domain = ANIKOTO;
-  
+
+  // ── Step 1: Search cache (memory first, then localStorage) ──
   let searchResult = kotoSearchCache.get(title);
   if (!searchResult) {
+    const lsCached = lsGet(lsSearchKey('koto', title));
+    if (lsCached) {
+      console.log(`[AniKoto] localStorage cache HIT for "${title}" — instant`);
+      searchResult = lsCached;
+      kotoSearchCache.set(title, searchResult);
+    }
+  }
+
+  // ── Step 2: Network search (parallel JSON race + filter page fallback) ──
+  if (!searchResult) {
     const cleanTitle = cleanAnimeTitle(title);
-    const filterUrl = `${domain}/filter?keyword=${encodeURIComponent(cleanTitle)}`;
-    console.log(`[AniKoto] Searching via filter page: ${filterUrl}`);
-    
-    let searchHtml;
-    try {
-      searchHtml = await clientFetch(filterUrl, {
-        referer: domain,
-        timeout: 10000
-      });
-    } catch (e) {
-      console.error('[AniKoto] Search failed:', e.message);
-    }
-    
-    if (!searchHtml) {
-      throw new Error(`Search failed on AniKoto`);
-    }
 
-    const itemRe = /<a\s+class="name d-title"\s+href="([^"]*?\/watch\/([^"\/]+)(?:\/ep-\d+)?)"[^>]*>([\s\S]*?)<\/a>/gi;
-    let m;
-    const results = [];
-    while ((m = itemRe.exec(searchHtml)) !== null) {
-      results.push({ fullUrl: m[1], slug: m[2], animeTitle: m[3].replace(/<[^>]*>/g, '').trim() });
-    }
+    // Build keyword strategies (same as AniWaves awSearch)
+    const engWords = cleanTitle.split(/[^a-zA-Z0-9]/).filter(w => w.length > 3);
+    const longestWord = engWords.length ? engWords.reduce((a, b) => a.length >= b.length ? a : b) : null;
+    const firstTwo = cleanTitle.split(' ').slice(0, 2).join(' ');
+    const firstThree = cleanTitle.split(' ').slice(0, 3).join(' ');
+    const strategies = [cleanTitle, firstThree, firstTwo, longestWord].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
 
-    if (results.length === 0) {
-      throw new Error(`Anime not found on AniKoto`);
-    }
+    console.log(`[AniKoto] Racing JSON search + filter page for "${title}"...`);
 
-    // Score and get best match
-    let best = null, maxScore = -1;
+    // Race: fire JSON search strategies + filter page in parallel
+    // The first one to return a confident match wins — others are cancelled by settled flag
+    let best = null;
+    let maxScore = -1;
+    let settled = false;
 
-    // Fast-path: exact normalized title match
-    const normQuery = norm(title);
-    const exactMatch = results.find(r => norm(r.animeTitle) === normQuery);
-    if (exactMatch) {
-      best = exactMatch;
-      maxScore = 1.0;
-    } else {
+    const scoreResults = (results) => {
+      const normQuery = norm(title);
+      const exactMatch = results.find(r => norm(r.animeTitle) === normQuery);
+      if (exactMatch) return { best: exactMatch, score: 1.0 };
+      let localBest = null, localMax = -1;
       for (const r of results) {
-        const score = titleScore(r.animeTitle, title, isMovie);
-        if (score > maxScore) {
-          maxScore = score;
-          best = r;
-        }
+        const s = titleScore(r.animeTitle, title, isMovie);
+        if (s > localMax) { localMax = s; localBest = r; }
       }
+      return { best: localBest, score: localMax };
+    };
+
+    // Promise that resolves as soon as any strategy finds a confident match
+    const raceResult = await new Promise((resolve) => {
+      let pending = strategies.length + 1; // +1 for filter page
+      const tryResolve = (results) => {
+        if (settled) return;
+        const { best: b, score: s } = scoreResults(results);
+        if (b && s >= 0.65) {
+          settled = true;
+          resolve({ best: b, score: s, source: 'fast' });
+        } else {
+          pending--;
+          if (pending <= 0) resolve(null); // all failed
+        }
+      };
+
+      // Fire all JSON keyword strategies in parallel
+      for (const kw of strategies) {
+        kotoJsonSearch(domain, kw).then(tryResolve).catch(() => {
+          pending--;
+          if (pending <= 0 && !settled) resolve(null);
+        });
+      }
+
+      // Also fire the filter page search concurrently
+      kotoFilterSearch(domain, cleanTitle).then(results => {
+        if (settled) return;
+        const { best: b, score: s } = scoreResults(results);
+        if (b && s >= 0.65) {
+          settled = true;
+          console.log(`[AniKoto] Filter page search resolved "${b.animeTitle}" (score: ${s.toFixed(2)})`);
+          resolve({ best: b, score: s, source: 'filter' });
+        } else {
+          pending--;
+          if (pending <= 0 && !settled) resolve(null);
+        }
+      }).catch(() => {
+        pending--;
+        if (pending <= 0 && !settled) resolve(null);
+      });
+    });
+
+    if (!raceResult) {
+      throw new Error(`No confident match on AniKoto for "${title}"`);
     }
 
-    if (!best || maxScore < 0.65) {
-      throw new Error(`No confident match on AniKoto for "${title}" (score: ${maxScore.toFixed(2)})`);
-    }
-    console.log(`[AniKoto] Best match: "${best.animeTitle}" (score: ${maxScore.toFixed(2)})`);
+    best = raceResult.best;
+    maxScore = raceResult.score;
+    console.log(`[AniKoto] Best match [${raceResult.source}]: "${best.animeTitle}" (score: ${maxScore.toFixed(2)})`);
 
-    // Resolve animeId from watch page
-    const watchUrl = best.fullUrl.startsWith('http') ? best.fullUrl : `${domain}/watch/${best.slug}`;
-    console.log(`[AniKoto] Fetching watch page to resolve ID: ${watchUrl}`);
-    const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 10000 });
-    const idMatch = watchHtml.match(/data-id="(\d+)"/i) || watchHtml.match(/const mangaId = (\d+);/i) || watchHtml.match(/\/getinfo\/(\d+)/i);
-    if (!idMatch) throw new Error('Could not resolve anime ID on AniKoto');
-    const animeId = idMatch[1];
-    
+    // ── Fix 2: Extract animeId directly from slug — no watch page fetch needed ──
+    // AniKoto slug format: "one-piece-100" → animeId = "100"
+    const watchUrl = (best.fullUrl && best.fullUrl.startsWith('http'))
+      ? best.fullUrl
+      : `${domain}/watch/${best.slug}`;
+
+    let animeId = extractKotoAnimeId(best.slug);
+
+    if (!animeId) {
+      // Fallback: fetch watch page only if slug doesn't contain a trailing numeric ID
+      console.warn(`[AniKoto] Slug "${best.slug}" has no trailing ID — fetching watch page as fallback`);
+      const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 10000 });
+      const idMatch = watchHtml.match(/data-id="(\d+)"/i)
+        || watchHtml.match(/const mangaId = (\d+);/i)
+        || watchHtml.match(/\/getinfo\/(\d+)/i);
+      if (!idMatch) throw new Error('Could not resolve anime ID on AniKoto');
+      animeId = idMatch[1];
+    } else {
+      console.log(`[AniKoto] Extracted animeId from slug: ${animeId} (no watch page fetch needed)`);
+    }
+
     searchResult = { slug: best.slug, animeId, animeTitle: best.animeTitle, watchUrl };
     kotoSearchCache.set(title, searchResult);
+    // ── Fix 4: Persist to localStorage for next app launch ──
+    lsSet(lsSearchKey('koto', title), searchResult);
   }
 
   const { slug, animeId, animeTitle, watchUrl } = searchResult;
-  
+
   // Per-episode result cache
   const cacheKey = `${slug}-${episode}`;
   if (kotoEpCache.has(cacheKey)) {
@@ -922,9 +1056,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
     const typeMatch = sec.match(/data-type="(sub|dub|hsub|raw)"/i);
     if (!typeMatch) continue;
     const type = typeMatch[1];
-    
     if (type !== 'sub' && type !== 'dub') continue;
-
     const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([\s\S]+?)<\/li>/g;
     let liMatch;
     while ((liMatch = liRe.exec(sec)) !== null) {
@@ -939,13 +1071,11 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
   }
 
   // Only resolve AniHD (HD-1 → megaplay s-5) and AniVid (VidPlay-1 → vidtube)
-  // Both are embed pages — scrapeEmbedNative extracts the real m3u8 from inside them
   const ALLOWED_SERVERS = [
-    { key: 'HD-1',      label: 'AniHD', isHLS: false },  // megaplay.buzz embed → scrapeEmbedNative → HLS
-    { key: 'VidPlay-1', label: 'AniVid', isHLS: false }, // vidtube.site embed
+    { key: 'HD-1',      label: 'AniHD', isHLS: false },
+    { key: 'VidPlay-1', label: 'AniVid', isHLS: false },
   ];
 
-  // Filter rawServers to only allowed ones, in priority order
   const filteredServers = [];
   for (const allowed of ALLOWED_SERVERS) {
     for (const s of rawServers) {
@@ -970,12 +1100,9 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
       const parsed = JSON.parse(resp);
       const embedUrl = parsed.result?.url || '';
       if (!embedUrl) return null;
-
-      // Both AniHD and AniVid are embed pages — wrap through iframe proxy for browser,
-      // scrapeEmbedNative handles extraction on native (Capacitor) platform
       const videoUrl = formatIframeProxyUrl(embedUrl, domain);
       return {
-        name: s.label,   // → 'AniHD' or 'AniVid'
+        name: s.label,
         videoUrl,
         embedUrl,
         referer: domain + '/',

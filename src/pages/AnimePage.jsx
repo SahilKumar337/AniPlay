@@ -13,7 +13,7 @@ import { getAnimeDetail, getTitle, getCover, getDisplayGenresOrTags } from '../a
 import { useApp } from '../context/AppContext';
 import { fetchCloudComments, postCloudComment, updateUserNickname } from '../api/supabase';
 import AnimeCard from '../components/AnimeCard';
-import { getAniNekoServers, getCachedServers, checkProxy, fetchM3U8Playlist, parseMasterPlaylist, getScraperEpisodeCount, resolvePlaceholderServer } from '../api/stream';
+import { getAniNekoServers, getCachedServers, checkProxy, fetchM3U8Playlist, parseMasterPlaylist, getScraperEpisodeCount, resolvePlaceholderServer, invalidateStreamCache } from '../api/stream';
 import AniPlayer   from '../components/AniPlayer';
 import IframePlayer from '../components/IframePlayer';
 import { scrapeEmbedNative } from '../api/embedScraper';
@@ -1932,6 +1932,12 @@ export default function AnimePage() {
                 autoplay={settings?.autoplay !== false}
                 subtitleSettings={settings || null}
                 loading={loadStream}
+                onStreamExpired={() => {
+                  // CDN token expired mid-play — bust stale cache and re-select same server
+                  console.log('[AnimePage] Stream expired — invalidating cache and re-selecting server...');
+                  if (anime && epParam) invalidateStreamCache(anime, epParam);
+                  if (activeServer) selectServer(activeServer, servers);
+                }}
               />
             ) : (
               <IframePlayer

@@ -217,11 +217,6 @@ export function getFusedScore(query, anime) {
 
   const totalScore = (s1 * 0.35) + (s2 * 0.25) + (s3 * 0.20) + (s4 * 0.20);
   
-  // High score debug log helper
-  if (totalScore > 0.15) {
-    console.log(`[FusedSearch] "${anime.title?.english || anime.title?.romaji}" scores: L1(Alias)=${s1.toFixed(2)}, L2(Trigram)=${s2.toFixed(2)}, L3(Lev)=${s3.toFixed(2)}, L4(TFIDF)=${s4.toFixed(2)} -> Total=${totalScore.toFixed(3)}`);
-  }
-
   return totalScore;
 }
 

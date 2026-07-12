@@ -1,56 +1,118 @@
 /**
  * AniList GraphQL API
- * Free, no API key, returns rich anime data including MAL IDs
+ * ─────────────────────────────────────────────────────────────────
+ * Production-grade client with:
+ *  • Two-tier cache: L1 in-memory (instant) + L2 sessionStorage (survives navigation)
+ *  • Per-endpoint TTL (stable data like top-rated cached 30 min, live data 5 min)
+ *  • Correct cache keys using full query hash (no collision)
+ *  • Request deduplication: identical in-flight requests share one Promise
+ *  • Rate-limit aware with exponential backoff
  */
+
 const ENDPOINT = 'https://graphql.anilist.co';
+const SESSION_PREFIX = 'anilist_cache_';
 
-// ── In-memory cache (5 min TTL) ──────────────────────────────────
-const _cache = new Map();
-function fromCache(key) {
-  const hit = _cache.get(key);
-  if (!hit) return null;
-  if (Date.now() - hit.ts > 5 * 60_000) { _cache.delete(key); return null; }
-  return hit.data;
+// ── TTL constants (ms) ────────────────────────────────────────────
+const TTL = {
+  LIVE:   5  * 60_000,   // trending, airing, schedule: 5 min
+  NORMAL: 15 * 60_000,   // search, seasonal, movies: 15 min
+  STABLE: 30 * 60_000,   // top-rated, most popular: 30 min
+};
+
+// ── L1: In-memory cache ───────────────────────────────────────────
+const _mem = new Map();
+
+// ── L2: sessionStorage cache ──────────────────────────────────────
+function ssGet(key) {
+  try {
+    const raw = sessionStorage.getItem(SESSION_PREFIX + key);
+    if (!raw) return null;
+    const { data, ts, ttl } = JSON.parse(raw);
+    if (Date.now() - ts > ttl) { sessionStorage.removeItem(SESSION_PREFIX + key); return null; }
+    return data;
+  } catch { return null; }
 }
-function toCache(key, data) { _cache.set(key, { data, ts: Date.now() }); }
+function ssSet(key, data, ttl) {
+  try { sessionStorage.setItem(SESSION_PREFIX + key, JSON.stringify({ data, ts: Date.now(), ttl })); }
+  catch { /* storage full — silently skip */ }
+}
 
-async function gql(query, variables = {}) {
-  const key = query.slice(0, 60) + JSON.stringify(variables);
-  const cached = fromCache(key);
-  if (cached) return cached;
-
-  let lastErr = new Error('Request failed after 3 attempts');
-  for (let i = 0; i < 3; i++) {
-    try {
-      const ctrl = new AbortController();
-      const tid  = setTimeout(() => ctrl.abort(), 12000);
-      const res  = await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ query, variables }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(tid);
-
-      if (res.status === 429) {
-        lastErr = new Error('Rate limit exceeded (429). Please try again in a few seconds.');
-        await new Promise(r => setTimeout(r, (i + 1) * 2000));
-        continue;
-      }
-
-      const json = await res.json();
-      if (json.data) { toCache(key, json.data); return json.data; }
-      throw new Error((json.errors || []).map(e => e?.message || 'Unknown error').join('; ') || 'Unknown error');
-    } catch (err) {
-      if (err.name === 'AbortError') throw new Error('Request timed out — check your internet.');
-      lastErr = err;
-      if (i < 2) await new Promise(r => setTimeout(r, (i + 1) * 1000));
-    }
+// ── Simple hash for full query string (avoids 60-char slice collision) ──
+function hashKey(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
   }
-  throw lastErr;
+  return (h >>> 0).toString(36);
 }
 
-/* ── Shared media fields ──────────────────────────────────────── */
+// ── In-flight deduplication: same query → share one fetch ─────────
+const _inflight = new Map();
+
+// ── Core GraphQL executor ─────────────────────────────────────────
+async function gql(query, variables = {}, ttl = TTL.NORMAL) {
+  const cacheKey = hashKey(query + JSON.stringify(variables));
+
+  // L1 memory hit (zero overhead)
+  const memHit = _mem.get(cacheKey);
+  if (memHit && Date.now() - memHit.ts < memHit.ttl) return memHit.data;
+
+  // L2 sessionStorage hit (survives page navigation)
+  const ssHit = ssGet(cacheKey);
+  if (ssHit) {
+    _mem.set(cacheKey, { data: ssHit, ts: Date.now(), ttl }); // promote to L1
+    return ssHit;
+  }
+
+  // Deduplication: if same request is already in-flight, wait for it
+  if (_inflight.has(cacheKey)) return _inflight.get(cacheKey);
+
+  const fetchPromise = (async () => {
+    let lastErr = new Error('Request failed after 3 attempts');
+    for (let i = 0; i < 3; i++) {
+      try {
+        const ctrl = new AbortController();
+        const tid  = setTimeout(() => ctrl.abort(), 12000);
+        const res  = await fetch(ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ query, variables }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(tid);
+
+        if (res.status === 429) {
+          lastErr = new Error('Rate limit exceeded (429). Please try again in a few seconds.');
+          await new Promise(r => setTimeout(r, (i + 1) * 2000));
+          continue;
+        }
+
+        const json = await res.json();
+        if (json.data) {
+          // Write to both cache tiers
+          _mem.set(cacheKey, { data: json.data, ts: Date.now(), ttl });
+          ssSet(cacheKey, json.data, ttl);
+          return json.data;
+        }
+        throw new Error((json.errors || []).map(e => e?.message || 'Unknown error').join('; ') || 'Unknown error');
+      } catch (err) {
+        if (err.name === 'AbortError') throw new Error('Request timed out — check your internet.');
+        lastErr = err;
+        if (i < 2) await new Promise(r => setTimeout(r, (i + 1) * 1000));
+      }
+    }
+    throw lastErr;
+  })();
+
+  _inflight.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    _inflight.delete(cacheKey);
+  }
+}
+
+/* ── Shared media fields ──────────────────────────────────────────── */
 const MEDIA_FIELDS = `
   id idMal
   title { romaji english native }
@@ -64,7 +126,7 @@ const MEDIA_FIELDS = `
   tags { name isMediaSpoiler rank }
 `;
 
-/* ── Lightweight fields for card-only queries (no description) ─── */
+/* ── Lightweight fields for card-only queries (no description) ────── */
 const CARD_FIELDS = `
   id idMal
   title { romaji english native }
@@ -75,42 +137,42 @@ const CARD_FIELDS = `
   tags { name isMediaSpoiler rank }
 `;
 
-/* ── Trending ─────────────────────────────────────────────────── */
+/* ── Trending ──────────────────────────────────────────────────────── */
 export async function getTrending(page = 1, perPage = 15) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(sort:TRENDING_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { p: page, n: perPage });
+  const d = await gql(q, { p: page, n: perPage }, TTL.LIVE);
   return d?.Page?.media || [];
 }
 
-/* ── Seasonal ─────────────────────────────────────────────────── */
+/* ── Seasonal ──────────────────────────────────────────────────────── */
 export async function getSeasonal(season, year, page = 1, perPage = 12) {
   const q = `query($s:MediaSeason,$y:Int,$p:Int,$n:Int){Page(page:$p,perPage:$n){media(season:$s,seasonYear:$y,sort:POPULARITY_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { s: season, y: year, p: page, n: perPage });
+  const d = await gql(q, { s: season, y: year, p: page, n: perPage }, TTL.NORMAL);
   return d?.Page?.media || [];
 }
 
-/* ── Top Rated ────────────────────────────────────────────────── */
+/* ── Top Rated ─────────────────────────────────────────────────────── */
 export async function getTopRated(page = 1, perPage = 12) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(sort:SCORE_DESC,type:ANIME,status:FINISHED,isAdult:false){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { p: page, n: perPage });
+  const d = await gql(q, { p: page, n: perPage }, TTL.STABLE);
   return d?.Page?.media || [];
 }
 
-/* ── Movies ───────────────────────────────────────────────────── */
+/* ── Movies ────────────────────────────────────────────────────────── */
 export async function getMovies(page = 1, perPage = 10) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(sort:POPULARITY_DESC,type:ANIME,format:MOVIE,isAdult:false){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { p: page, n: perPage });
+  const d = await gql(q, { p: page, n: perPage }, TTL.STABLE);
   return d?.Page?.media || [];
 }
 
-/* ── Top Airing (currently releasing, sorted by trending score) ── */
+/* ── Top Airing ────────────────────────────────────────────────────── */
 export async function getAiring(page = 1, perPage = 15) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(status:RELEASING,sort:TRENDING_DESC,type:ANIME,isAdult:false,format_in:[TV,TV_SHORT,ONA]){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { p: page, n: perPage });
+  const d = await gql(q, { p: page, n: perPage }, TTL.LIVE);
   return (d?.Page?.media || []).filter(a => getCover(a));
 }
 
-/* ── New Episode Releases (aired in the past 2 weeks, NOT future) ── */
+/* ── New Episode Releases ──────────────────────────────────────────── */
 export async function getNewReleases(page = 1, perPage = 20) {
   const now      = Math.floor(Date.now() / 1000);
   const twoWeeks = now - 14 * 86400;
@@ -122,13 +184,13 @@ export async function getNewReleases(page = 1, perPage = 20) {
       }
     }
   }`;
-  const d = await gql(q, { p: page, n: perPage, from: twoWeeks, to: now });
+  const d = await gql(q, { p: page, n: perPage, from: twoWeeks, to: now }, TTL.LIVE);
   const schedules = (d?.Page?.airingSchedules || [])
     .filter(s =>
       !s.media?.isAdult &&
       getCover(s.media) &&
       s.media?.status !== 'NOT_YET_RELEASED' &&
-      s.airingAt <= now  // ← only past airings, never future
+      s.airingAt <= now
     );
   const seen = new Set();
   const unique = [];
@@ -140,22 +202,22 @@ export async function getNewReleases(page = 1, perPage = 20) {
   return unique;
 }
 
-/* ── Most Popular ─────────────────────────────────────────────── */
+/* ── Most Popular ──────────────────────────────────────────────────── */
 export async function getMostPopular(page = 1, perPage = 12) {
   const q = `query($p:Int,$n:Int){Page(page:$p,perPage:$n){media(sort:POPULARITY_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { p: page, n: perPage });
+  const d = await gql(q, { p: page, n: perPage }, TTL.STABLE);
   return d?.Page?.media || [];
 }
 
-/* ── Popular This Season (current season, sorted by trending) ──── */
+/* ── Popular This Season ───────────────────────────────────────────── */
 export async function getPopularThisSeason(page = 1, perPage = 15) {
   const { season, year } = getCurrentSeason();
   const q = `query($s:MediaSeason,$y:Int,$p:Int,$n:Int){Page(page:$p,perPage:$n){media(season:$s,seasonYear:$y,sort:TRENDING_DESC,type:ANIME,isAdult:false){${MEDIA_FIELDS}}}}`;
-  const d = await gql(q, { s: season, y: year, p: page, n: perPage });
+  const d = await gql(q, { s: season, y: year, p: page, n: perPage }, TTL.LIVE);
   return (d?.Page?.media || []).filter(a => getCover(a));
 }
 
-/* ── Search ───────────────────────────────────────────────────── */
+/* ── Search ────────────────────────────────────────────────────────── */
 export async function searchAnime(search, page = 1, perPage = 20, genres = null, format = null, status = null, sort = 'POPULARITY_DESC') {
   const vars = { p: page, n: perPage };
   const queryParams = ['$p:Int', '$n:Int'];
@@ -179,7 +241,6 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
 
   const selectedGenres = Array.isArray(genres) ? genres : (genres ? [genres] : []);
 
-  // Official AniList genres (these go in genre_in)
   const ANILIST_GENRES = new Set([
     'Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy',
     'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery',
@@ -187,7 +248,6 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
     'Sports', 'Supernatural', 'Thriller'
   ]);
 
-  // Map display labels → exact AniList tag names for everything NOT a genre
   const TAG_NAME_MAP = {
     'Cars':         'Racing',
     'Dementia':     'Psychological',
@@ -247,12 +307,13 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
     }
   }`;
 
-  const d = await gql(q, vars);
+  // Use LIVE TTL for text searches (user expects fresh results), NORMAL for filters-only
+  const ttl = search ? TTL.NORMAL : TTL.STABLE;
+  const d = await gql(q, vars, ttl);
   return d?.Page?.media || [];
 }
 
-
-/* ── Anime Detail ─────────────────────────────────────────────── */
+/* ── Anime Detail ──────────────────────────────────────────────────── */
 export async function getAnimeDetail(id) {
   const q = `query($id:Int){
     Media(id:$id,type:ANIME){
@@ -283,12 +344,12 @@ export async function getAnimeDetail(id) {
       }
     }
   }`;
-  const d = await gql(q, { id });
+  const d = await gql(q, { id }, TTL.STABLE);
   if (!d?.Media) throw new Error('Anime not found');
   return d.Media;
 }
 
-/* ── Schedule ─────────────────────────────────────────────────── */
+/* ── Schedule ──────────────────────────────────────────────────────── */
 export async function getSchedule(page = 1, perPage = 50) {
   const now  = Math.floor(Date.now() / 1000);
   const week = now + 7 * 86400;
@@ -300,11 +361,13 @@ export async function getSchedule(page = 1, perPage = 50) {
       }
     }
   }`;
-  const d = await gql(q, { p: page, n: perPage, from: now - 86400, to: week });
+  // Round 'now' to nearest 5 minutes so schedule queries can be cached properly
+  const roundedNow = Math.floor(now / 300) * 300;
+  const d = await gql(q, { p: page, n: perPage, from: roundedNow - 86400, to: week }, TTL.LIVE);
   return (d?.Page?.airingSchedules || []).filter(s => !s.media?.isAdult);
 }
 
-/* ── Helpers ──────────────────────────────────────────────────── */
+/* ── Helpers ───────────────────────────────────────────────────────── */
 export function getCurrentSeason() {
   const m    = new Date().getMonth() + 1;
   const year = new Date().getFullYear();
@@ -323,36 +386,46 @@ export const getTitle = a => {
 export const getCover = a => a?.coverImage?.extraLarge || a?.coverImage?.large || '';
 export const getColor = a => a?.coverImage?.color || '#e50914';
 
-export const getDisplayGenresOrTags = a => {
+// pinnedTags: array of tag/genre names that MUST appear in the result
+// regardless of rank (used when user has filtered by those tags)
+export const getDisplayGenresOrTags = (a, pinnedTags = []) => {
   if (!a) return [];
   const genres = [...(a.genres || [])];
   
-  // Extract and normalize tags
   let tags = (a.tags || [])
     .filter(t => !t.isMediaSpoiler && t.rank >= 60)
     .map(t => {
       const name = t.name;
-      if (name === 'Female Harem' || name === 'Male Harem') {
-        return 'Harem';
-      }
+      if (name === 'Female Harem' || name === 'Male Harem') return 'Harem';
       return name;
     });
 
-  // Filter out low-value/redundant descriptive tags to keep badges clean
   const blocklist = new Set(['Nudity', 'Heterosexual', 'Male Protagonist', 'Primarily Female Cast', 'Kuudere', 'Tsundere']);
   tags = tags.filter(t => !blocklist.has(t));
 
-  // Combine genres and tags
+  // Ensure pinned filter tags always appear even if rank < 60 or not in genres
+  const pinnedNormalized = (pinnedTags || []).map(p =>
+    (p === 'Female Harem' || p === 'Male Harem') ? 'Harem' : p
+  );
+  for (const p of pinnedNormalized) {
+    if (!genres.includes(p) && !tags.includes(p)) {
+      // Check if the anime actually has the tag at any rank
+      const hasTag = (a.tags || []).some(t =>
+        t.name === p || (p === 'Harem' && (t.name === 'Female Harem' || t.name === 'Male Harem'))
+      );
+      if (hasTag) tags.unshift(p); // Pin to front of tag list
+    }
+  }
+
   const combined = [...genres, ...tags];
   const unique = combined.filter((item, index) => combined.indexOf(item) === index);
   
-  // Prioritize showing 'Harem' near the front so it doesn't get sliced off
   if (unique.includes('Harem')) {
     const withoutHarem = unique.filter(x => x !== 'Harem');
     const insertIdx = Math.min(genres.length, 3);
     withoutHarem.splice(insertIdx, 0, 'Harem');
-    return withoutHarem.slice(0, 6);
+    return withoutHarem.slice(0, 7);
   }
 
-  return unique.slice(0, 6);
+  return unique.slice(0, 7);
 };

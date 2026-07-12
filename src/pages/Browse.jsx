@@ -90,15 +90,23 @@ export default function Browse() {
   const [page,           setPage]          = useState(1);
   const [hasMore,        setHasMore]       = useState(true);
 
-  const filterSheetRef = useRef(null);
-  const debounced = useDebounce(query, 400);
+  const filterSheetRef  = useRef(null);
+  const sentinelRef     = useRef(null);    // IntersectionObserver sentinel
+  const generationRef   = useRef(0);       // Fresh search ID — stale results self-discard
+  const loadingRef      = useRef(false);   // Sync flag: prevents double-fire
+  const pageRef         = useRef(1);       // Sync page — safe inside observer closure
+  const hasMoreRef      = useRef(true);    // Sync hasMore — safe inside observer closure
+  const loadMoreRef     = useRef(null);    // Always-current loadMore fn for observer
+  const lastScrollY     = useRef(0);
 
-  // Infinite scroll sentinel & YouTube-style header scroll-to-show state
   const [showHeader, setShowHeader] = useState(true);
-  const lastScrollY = useRef(0);
-  // Use a ref for loading state so IntersectionObserver closure always sees current value
-  // without needing to recreate the observer every time loading changes (prevents jitter)
-  const loadingRef = useRef(false);
+
+  // Keep refs in sync with state
+  useEffect(() => { pageRef.current   = page;    }, [page]);
+  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
+
+  // 450ms debounce — feels instant, avoids API call on every keystroke
+  const debounced = useDebounce(query, 450);
 
   // ─── Close filter sheet on outside tap ──────────────────────────
   useEffect(() => {
@@ -126,138 +134,136 @@ export default function Browse() {
 
   const activeFilterCount = selectedGenres.length + (format ? 1 : 0) + (status ? 1 : 0);
 
-  // ─── Search / Fetch ─────────────────────────────────────────────
+  // ─── Resolve sort / filter overrides for category context ────────
+  const resolveQueryParams = useCallback((overrideFormat = format, overrideStatus = status) => {
+    let sortVal   = 'POPULARITY_DESC';
+    let formatVal = overrideFormat;
+    let statusVal = overrideStatus;
+    if (category === 'trending') {
+      sortVal = 'TRENDING_DESC';
+    } else if (category === 'top-rated') {
+      sortVal = 'SCORE_DESC';
+      if (!statusVal) statusVal = 'FINISHED';
+    } else if (category === 'movies') {
+      if (!formatVal) formatVal = 'MOVIE';
+    } else if (category === 'airing' || category === 'new-releases') {
+      sortVal = 'TRENDING_DESC';
+      if (!statusVal) statusVal = 'RELEASING';
+    }
+    return { sortVal, formatVal, statusVal };
+  }, [category, format, status]);
+
+  // ─── Fetch a single page of results ────────────────────────────────
+  // Returns { rows, rawCount } so callers can distinguish:
+  //   rawCount = how many AniList returned (gate hasMore)
+  //   rows     = potentially re-ranked/filtered subset (what we display)
+  const fetchPage = useCallback(async (pg) => {
+    const PER_PAGE = 24;
+    let rows = [];
+    let rawCount = 0;
+
+    if (debounced || selectedGenres.length || format || status) {
+      const { sortVal, formatVal, statusVal } = resolveQueryParams();
+      rows = await searchAnime(
+        debounced || null, pg, PER_PAGE,
+        selectedGenres, formatVal, statusVal, sortVal
+      );
+      rawCount = rows.length; // store BEFORE local re-ranking
+      // Re-rank only on page 1 with text search — pages 2+ stay in AniList order
+      if (debounced && pg === 1 && rows.length > 0) {
+        rows = searchAndRankAnime(debounced, rows);
+      }
+    } else if (category) {
+      const { season, year } = getCurrentSeason();
+      if      (category === 'airing')       rows = await getAiring(pg, PER_PAGE);
+      else if (category === 'new-releases') rows = [...(await getAiring(pg, PER_PAGE))].reverse();
+      else if (category === 'trending')     rows = await getTrending(pg, PER_PAGE);
+      else if (category === 'seasonal')     rows = await getSeasonal(season, year, pg, PER_PAGE);
+      else if (category === 'popular')      rows = await getMostPopular(pg, PER_PAGE);
+      else if (category === 'top-rated')    rows = (await getTopRated(pg, PER_PAGE)).filter(a => a.format === 'TV');
+      else if (category === 'movies')       rows = await getMovies(pg, PER_PAGE);
+      rawCount = rows.length;
+    } else {
+      rows = await searchAnime(null, pg, PER_PAGE);
+      rawCount = rows.length;
+    }
+
+    return { rows, rawCount };
+  }, [debounced, selectedGenres, format, status, category, resolveQueryParams]);
+
+  // ─── Initial / fresh search ──────────────────────────────────────
   const doSearch = useCallback(async () => {
+    const gen = ++generationRef.current; // Stale-discard via generation counter
+
     loadingRef.current = true;
     setLoading(true);
     setPage(1);
+    pageRef.current  = 1;
     setHasMore(true);
+    hasMoreRef.current = true;
+    setResults([]);
+
     try {
-      if (debounced || selectedGenres.length || format || status) {
-        // Resolve sort and filters based on active category
-        let sortVal = 'POPULARITY_DESC';
-        let formatVal = format;
-        let statusVal = status;
-        
-        if (category === 'trending') {
-          sortVal = 'TRENDING_DESC';
-        } else if (category === 'top-rated') {
-          sortVal = 'SCORE_DESC';
-          if (!statusVal) statusVal = 'FINISHED';
-        } else if (category === 'movies') {
-          if (!formatVal) formatVal = 'MOVIE';
-        } else if (category === 'airing' || category === 'new-releases') {
-          sortVal = 'TRENDING_DESC';
-          if (!statusVal) statusVal = 'RELEASING';
-        }
-
-        const searchLimit = debounced ? 48 : 24;
-        let searchResults = await searchAnime(
-          debounced || null, 1, searchLimit,
-          selectedGenres, formatVal, statusVal, sortVal
-        );
-        let finalCandidates = searchResults;
-
-        if (debounced) {
-          const [trending, popular] = await Promise.all([
-            getTrending(1, 40).catch(() => []),
-            getMostPopular(1, 40).catch(() => []),
-          ]);
-          const combined = [...searchResults, ...trending, ...popular];
-          const seen = new Set();
-          finalCandidates = combined.filter(item => {
-            if (!item || seen.has(item.id)) return false;
-            seen.add(item.id);
-            return true;
-          });
-          finalCandidates = searchAndRankAnime(debounced, finalCandidates);
-        }
-
-        setResults(finalCandidates);
-        if (finalCandidates.length < searchLimit) setHasMore(false);
-      } else if (category) {
-        let r = [];
-        if      (category === 'airing')       r = await getAiring(1, 24);
-        else if (category === 'new-releases')  r = [...(await getAiring(1, 24))].reverse();
-        else if (category === 'trending')      r = await getTrending(1, 24);
-        else if (category === 'seasonal')      { const { season, year } = getCurrentSeason(); r = await getSeasonal(season, year, 1, 24); }
-        else if (category === 'popular')       r = await getMostPopular(1, 24);
-        else if (category === 'top-rated')     r = (await getTopRated(1, 24)).filter(a => a.format === 'TV');
-        else if (category === 'movies')        r = await getMovies(1, 24);
-        setResults(r);
-        if (r.length < 24) setHasMore(false);
-      } else {
-        const r = await searchAnime(null, 1, 24);
-        setResults(r);
-        if (r.length < 24) setHasMore(false);
-      }
+      const result = await fetchPage(1);
+      if (gen !== generationRef.current) return; // Stale — a newer search started
+      const { rows, rawCount } = result;
+      setResults(rows);
+      // Use rawCount (pre-ranking) to gate hasMore so local re-ranking
+      // never prematurely kills pagination.
+      const done = rawCount < 24;
+      setHasMore(!done);
+      hasMoreRef.current = !done;
     } catch (e) {
+      if (gen !== generationRef.current) return;
       console.warn('[Browse] fetch error:', e?.message || String(e));
       setResults([]);
       setHasMore(false);
+      hasMoreRef.current = false;
     } finally {
-      loadingRef.current = false;
-      setLoading(false);
+      if (gen === generationRef.current) {
+        loadingRef.current = false;
+        setLoading(false);
+        // ══ Post-search viewport check ══════════════════════════════════
+        // IntersectionObserver only fires on STATUS CHANGE (not≥0→1). If results
+        // are fewer than one screenful, the sentinel is ALREADY in view when
+        // the observer attached, so it fires immediately — but loadingRef was
+        // still true and blocked it. After we clear loadingRef above we must
+        // manually check and kick off loadMore if needed.
+        requestAnimationFrame(() => {
+          if (hasMoreRef.current && !loadingRef.current && sentinelRef.current) {
+            const { top } = sentinelRef.current.getBoundingClientRect();
+            if (top <= window.innerHeight + 400) {
+              loadMoreRef.current?.();
+            }
+          }
+        });
+      }
     }
-  }, [debounced, selectedGenres, format, status, category]);
+  }, [fetchPage]);
 
+  // ─── Load next page (infinite scroll) ───────────────────────────
   const loadMore = useCallback(async () => {
-    if (loadingRef.current || !hasMore) return;
+    if (loadingRef.current || !hasMoreRef.current) return;
     loadingRef.current = true;
-    const nextPage = page + 1;
+    const nextPage = pageRef.current + 1;
     setLoading(true);
     try {
-      let newResults = [];
-      if (debounced || selectedGenres.length || format || status) {
-        // Resolve sort and filters based on active category
-        let sortVal = 'POPULARITY_DESC';
-        let formatVal = format;
-        let statusVal = status;
-        
-        if (category === 'trending') {
-          sortVal = 'TRENDING_DESC';
-        } else if (category === 'top-rated') {
-          sortVal = 'SCORE_DESC';
-          if (!statusVal) statusVal = 'FINISHED';
-        } else if (category === 'movies') {
-          if (!formatVal) formatVal = 'MOVIE';
-        } else if (category === 'airing' || category === 'new-releases') {
-          sortVal = 'TRENDING_DESC';
-          if (!statusVal) statusVal = 'RELEASING';
-        }
-
-        const searchLimit = debounced ? 48 : 24;
-        newResults = await searchAnime(
-          debounced || null, nextPage, searchLimit,
-          selectedGenres, formatVal, statusVal, sortVal
-        );
-      } else if (category) {
-        if      (category === 'airing')      newResults = await getAiring(nextPage, 24);
-        else if (category === 'new-releases') newResults = [...(await getAiring(nextPage, 24))].reverse();
-        else if (category === 'trending')    newResults = await getTrending(nextPage, 24);
-        else if (category === 'seasonal')    { const { season, year } = getCurrentSeason(); newResults = await getSeasonal(season, year, nextPage, 24); }
-        else if (category === 'popular')     newResults = await getMostPopular(nextPage, 24);
-        else if (category === 'top-rated')   newResults = (await getTopRated(nextPage, 24)).filter(a => a.format === 'TV');
-        else if (category === 'movies')      newResults = await getMovies(nextPage, 24);
-      } else {
-        newResults = await searchAnime(null, nextPage, 24);
-      }
-
-      if (!newResults || newResults.length === 0) {
+      const result = await fetchPage(nextPage);
+      const { rows, rawCount } = result;
+      if (!rows || rawCount === 0) {
         setHasMore(false);
+        hasMoreRef.current = false;
       } else {
-        const searchLimit = debounced ? 48 : 24;
         setResults(prev => {
-          const combined = [...prev, ...newResults];
-          const seen = new Set();
-          return combined.filter(item => {
-            if (!item || seen.has(item.id)) return false;
-            seen.add(item.id);
-            return true;
-          });
+          const seen = new Set(prev.map(a => a.id));
+          return [...prev, ...rows.filter(a => a && !seen.has(a.id))];
         });
         setPage(nextPage);
-        if (newResults.length < searchLimit) setHasMore(false);
+        pageRef.current = nextPage;
+        if (rawCount < 24) {
+          setHasMore(false);
+          hasMoreRef.current = false;
+        }
       }
     } catch (e) {
       console.warn('[Browse] loadMore error:', e?.message || String(e));
@@ -265,57 +271,47 @@ export default function Browse() {
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [page, hasMore, debounced, selectedGenres, format, status, category]);
+  }, [fetchPage]);
 
+  // Keep loadMoreRef current so the IntersectionObserver closure always
+  // calls the latest version without needing to reconnect the observer.
+  useEffect(() => { loadMoreRef.current = loadMore; }, [loadMore]);
+
+  // Trigger fresh search when filters / query change
   useEffect(() => { doSearch(); }, [doSearch]);
 
-  // Show search bar instantly when user scrolls up, hide after scrolling down 60px
+  // ─── Scroll direction: show/hide sticky header ───────────────────
   useEffect(() => {
     const handleScroll = () => {
-      const currentScrollY = window.scrollY;
-      
-      // Always show at the very top
-      if (currentScrollY < 10) {
-        setShowHeader(true);
-      } else if (currentScrollY < lastScrollY.current) {
-        // Any upward movement → show header immediately
-        setShowHeader(true);
-      } else if (currentScrollY > lastScrollY.current + 5) {
-        // Only hide after scrolling down at least 5px (prevents flicker on tiny scrolls)
-        setShowHeader(false);
-      }
-      
-      lastScrollY.current = currentScrollY;
+      const y = window.scrollY;
+      if (y < 10) setShowHeader(true);
+      else if (y < lastScrollY.current) setShowHeader(true);
+      else if (y > lastScrollY.current + 5) setShowHeader(false);
+      lastScrollY.current = y;
     };
-
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Window Scroll Listener with requestAnimationFrame for butter-smooth infinite scrolling
+  // ─── IntersectionObserver: jitter-free infinite scroll ──────────
+  // Attached ONCE on mount. Uses loadMoreRef so it always calls the
+  // latest loadMore without needing to disconnect/reconnect the observer
+  // every time fetchPage identity changes (which was causing the gap
+  // where the sentinel was in view but the observer wasn't yet attached).
   useEffect(() => {
-    let ticking = false;
-    const handleScroll = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          const threshold = 350; // pixels from bottom to trigger next load
-          const position = window.innerHeight + window.scrollY;
-          const height = document.documentElement.scrollHeight;
-          
-          if (position >= height - threshold) {
-            if (!loadingRef.current && hasMore) {
-              loadMore();
-            }
-          }
-          ticking = false;
-        });
-        ticking = true;
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [loadMore, hasMore]);
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loadingRef.current && hasMoreRef.current) {
+          loadMoreRef.current?.();
+        }
+      },
+      { rootMargin: '400px 0px' } // trigger 400px before sentinel is visible
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []); // ← empty deps: attach once, use refs to stay current
 
   const categoryTitle = category ? CATEGORY_TITLES[category] : null;
   const personalizedResults = debounced ? results : rankAnimeByKnn(results, recentlyViewed);
@@ -467,7 +463,7 @@ export default function Browse() {
           <div style={{ padding: '8px 0' }}>
             {[1, 2, 3, 4, 5, 6].map(i => <SkeletonResultItem key={i} />)}
           </div>
-        ) : personalizedResults.length === 0 ? (
+        ) : personalizedResults.length === 0 && !loading ? (
           <div style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center',
             justifyContent: 'center', padding: '60px 24px', gap: 12,
@@ -482,16 +478,24 @@ export default function Browse() {
               <SearchResultItem
                 key={anime.id}
                 anime={anime}
+                activeGenres={selectedGenres}
                 onClick={() => navigate(`/anime/${anime.id}`)}
               />
             ))}
-            {loading && page > 1 && (
+            {loading && results.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
                 <Loader size={22} className="spin" color="var(--accent)" />
               </div>
             )}
           </>
         )}
+        {/*
+          Sentinel is ALWAYS in the DOM (outside conditionals) so the
+          IntersectionObserver can attach to it immediately on mount.
+          Placing it inside a conditional means sentinelRef.current is null
+          when the effect runs, breaking infinite scroll entirely.
+        */}
+        <div ref={sentinelRef} style={{ height: 1 }} aria-hidden="true" />
       </div>
 
       {/* ─── Bottom Sheet Filter Panel ─── */}
@@ -702,12 +706,17 @@ function FilterChip({ label, active, onClick }) {
 }
 
 // ─── Search Result Item ──────────────────────────────────────────
-function SearchResultItem({ anime, onClick }) {
+function SearchResultItem({ anime, onClick, activeGenres = [] }) {
   const title  = getTitle(anime);
   const cover  = getCover(anime);
   const score  = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
   const status = anime.status;
-  const allGenres = getDisplayGenresOrTags(anime);
+  // Pass activeGenres so filtered tags are always shown & highlighted
+  const allGenres = getDisplayGenresOrTags(anime, activeGenres);
+  // Normalize active filter names for highlight matching (Harem variants)
+  const activeSet = new Set(activeGenres.map(g =>
+    (g === 'Female Harem' || g === 'Male Harem') ? 'Harem' : g
+  ));
 
   return (
     <div
@@ -789,21 +798,24 @@ function SearchResultItem({ anime, onClick }) {
           )}
         </div>
 
-        {/* All Genre tags */}
+        {/* Genre/Tag badges */}
         {allGenres.length > 0 && (
           <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-            {allGenres.map(g => (
-              <span key={g} style={{
-                padding: '3px 8px', borderRadius: 20,
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                fontSize: 10, fontWeight: 500,
-                color: 'var(--text-muted)',
-                whiteSpace: 'nowrap',
-              }}>
-                {g}
-              </span>
-            ))}
+            {allGenres.map(g => {
+              const isActive = activeSet.has(g);
+              return (
+                <span key={g} style={{
+                  padding: '3px 8px', borderRadius: 20,
+                  background: isActive ? 'rgba(229,9,20,0.18)' : 'rgba(255,255,255,0.06)',
+                  border: `1px solid ${isActive ? 'rgba(229,9,20,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                  fontSize: 10, fontWeight: isActive ? 700 : 500,
+                  color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {g}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>

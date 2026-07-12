@@ -29,6 +29,15 @@ export function getCachedServers(anime, episode) {
   return null;
 }
 
+/** Invalidates the in-memory stream cache for the given anime + episode.
+ *  Call this when a CDN token expires mid-play so the next getAniNekoServers()
+ *  call re-scrapes fresh embed/HLS URLs instead of serving the stale cached ones. */
+export function invalidateStreamCache(anime, episode) {
+  const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
+  clientStreamCache.delete(cacheKey);
+  console.log(`[ClientEngine] Invalidated stream cache for: ${cacheKey}`);
+}
+
 export async function getAniNekoServers(anime, episode, onServersFound) {
   const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}`;
   

@@ -74,20 +74,15 @@ export default function Home() {
       // Always mark ready so the page renders (even if empty or errored)
       if (live) setReady(true);
 
-      // Wave 1: most important rows (stagger to avoid AniList 429s)
+      // Load ALL sections simultaneously — sessionStorage cache handles AniList
+      // rate limits so the 500ms pause is no longer needed. Each setter is
+      // independent so any section that finishes first renders immediately.
       await Promise.allSettled([
         load(getAiring,            setAiring,        1, 20),
         load(getNewReleases,       setNewReleases,   1, 20),
         load(getPopularThisSeason, setPopularSeason, 1, 15),
-      ]);
-
-      // Small pause between waves so AniList rate-limit window resets
-      await new Promise(r => setTimeout(r, 500));
-
-      // Wave 2: supplementary rows
-      await Promise.allSettled([
-        load(getTopRated, setTopRated, 1, 15),
-        load(getMovies,   setMovies,   1, 12),
+        load(getTopRated,          setTopRated,      1, 15),
+        load(getMovies,            setMovies,        1, 12),
         load(async () => {
           const sched = await getSchedule(1, 30);
           return sched

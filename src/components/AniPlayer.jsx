@@ -223,6 +223,7 @@ export default function AniPlayer({
   autoplay = true,
   subtitleSettings = null,
   loading = false,
+  onStreamExpired = null,  // Called when CDN token expires mid-play — parent should refresh stream URL
 }) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
@@ -365,11 +366,20 @@ export default function AniPlayer({
       hls.on(Hls.Events.ERROR, (_, data) => {
         log(`HLS Error: type=${data.type}, details=${data.details}, fatal=${data.fatal}`);
         if (!data.fatal) return;
-        
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkErrRetries < 3) {
+
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkErrRetries < 1) {
+          // First network error: try a simple startLoad (handles transient blips)
           networkErrRetries++;
-          log(`Fatal network error (retry ${networkErrRetries}/3), calling startLoad...`);
+          log(`Fatal network error (retry ${networkErrRetries}/1), calling startLoad...`);
           hls.startLoad();
+        } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR && onStreamExpired) {
+          // Second network error: CDN token has expired. Silently request a fresh URL.
+          log('Fatal network error after retry — CDN token likely expired. Requesting fresh stream URL...');
+          setWaiting(true);
+          setHlsErr(null);
+          hls.destroy();
+          hlsRef.current = null;
+          onStreamExpired();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 2) {
           mediaErrRetries++;
           log(`Fatal media error, retrying recoverMediaError (${mediaErrRetries}/2)...`);
