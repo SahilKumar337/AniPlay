@@ -803,21 +803,12 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
   return { servers, animeTitle: best.title, slug: best.slug };
 }
 
+
 // ── AniKoto Scraper ──
 
 const kotoSearchCache = new Map();  // title → { slug, animeId, animeTitle, watchUrl }
 const kotoEpListCache = new Map();  // animeId → epsHtml (full episode list HTML)
 const kotoEpCache = new Map();      // slug-episode → { servers, animeTitle, slug }
-
-/**
- * Extract animeId from a slug string.
- * AniKoto slugs always end with a trailing numeric ID: "one-piece-100" → "100"
- * This eliminates the need to fetch the entire /watch/ page just to get the ID.
- */
-function extractKotoAnimeId(slug) {
-  const m = slug.match(/-(\d+)$/);
-  return m ? m[1] : null;
-}
 
 /**
  * Fast lightweight JSON search on AniKoto (same pattern as AniWaves).
@@ -953,26 +944,19 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
     maxScore = raceResult.score;
     console.log(`[AniKoto] Best match [${raceResult.source}]: "${best.animeTitle}" (score: ${maxScore.toFixed(2)})`);
 
-    // ── Fix 2: Extract animeId directly from slug — no watch page fetch needed ──
-    // AniKoto slug format: "one-piece-100" → animeId = "100"
+    // ── Resolve animeId from watch page ──
     const watchUrl = (best.fullUrl && best.fullUrl.startsWith('http'))
       ? best.fullUrl
       : `${domain}/watch/${best.slug}`;
 
-    let animeId = extractKotoAnimeId(best.slug);
-
-    if (!animeId) {
-      // Fallback: fetch watch page only if slug doesn't contain a trailing numeric ID
-      console.warn(`[AniKoto] Slug "${best.slug}" has no trailing ID — fetching watch page as fallback`);
-      const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 10000 });
-      const idMatch = watchHtml.match(/data-id="(\d+)"/i)
-        || watchHtml.match(/const mangaId = (\d+);/i)
-        || watchHtml.match(/\/getinfo\/(\d+)/i);
-      if (!idMatch) throw new Error('Could not resolve anime ID on AniKoto');
-      animeId = idMatch[1];
-    } else {
-      console.log(`[AniKoto] Extracted animeId from slug: ${animeId} (no watch page fetch needed)`);
-    }
+    console.log(`[AniKoto] Fetching watch page to resolve real ID: ${watchUrl}`);
+    const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 10000 });
+    const idMatch = watchHtml.match(/data-id="(\d+)"/i)
+      || watchHtml.match(/const mangaId = (\d+);/i)
+      || watchHtml.match(/\/getinfo\/(\d+)/i);
+    if (!idMatch) throw new Error('Could not resolve anime ID on AniKoto');
+    const animeId = idMatch[1];
+    console.log(`[AniKoto] Extracted real animeId: ${animeId}`);
 
     searchResult = { slug: best.slug, animeId, animeTitle: best.animeTitle, watchUrl };
     kotoSearchCache.set(title, searchResult);
