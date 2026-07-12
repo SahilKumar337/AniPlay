@@ -1,3 +1,33 @@
+# AniPlay v1.5.1 Patch Release: Servers & Matching Update 🚀
+
+We are proud to present **AniPlay version 1.5.1**, which fixes title-matching, extends server coverage, and improves playback recovery.
+
+---
+
+## 🎮 1. IMMERSIVE NATIVE PLAYING & HLS ENGINE
+* **Smart CDN Token Recovery**: Tapping "Retry" now fully re-instantiates the video stream player, resolving expired CDN tokens to fix mid-playback freeze crashes.
+* **Standardized Servers**: Labeling standardized to AniHD and AniVid servers for stream slots.
+* **Custom HLS integration**: Custom cookie and referrer loader to fetch and play protected media streams.
+* **Subtitle track options**: Built-in English subtitle file parser with adjustable sub-sync controls.
+* **Playback controls**: Full gesture support, speed adjustment settings, and automatic orientation lock.
+
+## 📡 2. REDESIGNED SEARCH & SMART TITLE MATCH
+* **Deep Search Filter**: Upgraded scraping engine to fetch up to 30 search results per query, ensuring main titles are never missed.
+* **High-Accuracy Title Matching**: Added strict title validation and reverse-word check. If a result is missing unique words from your query, it is automatically rejected—completely preventing spinoff or movie mismatches.
+* **Multi-Filter Browser**: Sort and filter titles by Genre, Season, Release Year, Dub/Sub formats, Rating, and Episode Counts.
+
+## 📥 3. FAST SEGMENTED DOWNLOADER
+* **Multi-Quality download picker**: Choose between Best, 1080p, 720p, 480p, etc. before starting downloads.
+* **Parallel HLS downloader**: Segmented download engine that is up to 3x faster than traditional single-thread downloaders.
+* **Custom storage locations**: Set your own download path (save files to internal memory, custom folders, or SD Cards).
+
+## ⚡ 4. CORE APP FEATURES
+* **100% Ad-Free**: Zero popups, zero redirects, and zero banner ads.
+* **Automatic Self-Updater**: Built-in APK updater that checks for updates on launch and downloads/installs new releases directly inside the app.
+* **Premium Dark Mode UI**: Elegant, optimized design utilizing custom glassmorphism and modern typography.
+
+---
+
 # AniPlay v1.4 Major Release: The Immersive Performance Update 🚀
 
 We are proud to present **AniPlay version 1.4**, our largest and most comprehensive update yet. This release represents a complete architectural overhaul of our core database syncing mechanisms, streaming resolvers, and user-interface render paths. 
