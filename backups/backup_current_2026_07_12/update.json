@@ -1,0 +1,15 @@
+{
+  "latestVersion": "1.5",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5/bundle.zip",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5/AniPlay.apk",
+  "changelog": "FullScreen UI optimizations, redesigned Search & filters, customized download location setting, and 3x faster parallel HLS downloading.",
+  "forceUpdate": false,
+  "domains": {
+    "neko": "https://anineko.to",
+    "waves": "https://aniwaves.ru",
+    "gogo": "https://anitaku.bz",
+    "fallback_gogo": "https://anitaku.so",
+    "animepahe": "https://animepahe.pw"
+  },
+  "maintenanceMessage": null
+}

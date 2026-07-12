@@ -24,13 +24,15 @@ export async function syncNativeCookies(url) {
 export let ANINEKO = 'https://anineko.to';
 export let AW = 'https://aniwaves.ru';
 export let ANIMETSU = 'https://animetsu.net';
+export let ANIKOTO = 'https://anikoto.cz';
 
 export function setDynamicDomains(newDomains) {
   if (!newDomains) return;
   if (newDomains.neko) ANINEKO = newDomains.neko;
   if (newDomains.waves) AW = newDomains.waves;
   if (newDomains.animetsu) ANIMETSU = newDomains.animetsu;
-  console.log('[Scrapers] Dynamic domains updated:', { ANINEKO, AW, ANIMETSU });
+  if (newDomains.anikoto) ANIKOTO = newDomains.anikoto;
+  console.log('[Scrapers] Dynamic domains updated:', { ANINEKO, AW, ANIMETSU, ANIKOTO });
 }
 
 const UA = isCapacitorApp 
@@ -165,11 +167,19 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
     return 0;
   }
 
-  const strip = t => t
-    .replace(/\b(season|part|s)\s*\d+\b/gi, '')
-    .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
-    .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio|recap|summary|preview|side\s*story|mini|short|shorts|chibi|break\s*time|breaktime|petit|petite|spin\s*off|spinoff)\b/gi, '')
-    .trim();
+  const GENERIC_WORDS = new Set([
+    'the', 'and', 'of', 'in', 'a', 'an', 'to', 'is', 'it', 'on', 'for',
+    'no', 'wa', 'ga', 'wo', 'ni', 'de', 'mo', 'to', 'ya', 'ka',
+    'girl', 'boy', 'guy', 'man', 'woman', 'people', 'person',
+    'anime', 'manga', 'tv', 'sub', 'dub', 'ova', 'ona', 'movie', 'film',
+  ]);
+
+  const strip = t =>
+    t
+      .replace(/\b(season|part|s)\s*\d+\b/gi, '')
+      .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
+      .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio|recap|summary|preview|side\s*story|mini|short|shorts|chibi|break\s*time|breaktime|petit|petite|spin\s*off|spinoff)\b/gi, '')
+      .trim();
 
   const qWords = strip(qn).split(/\s+/).filter(w => w.length > 1);
   const rWords = strip(rn).split(/\s+/).filter(w => w.length > 1);
@@ -181,11 +191,31 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
 
   const score = (2 * intersection.length) / (qWords.length + rWords.length);
 
-  // Penalize extra non-metadata words in the result title (gates different shows/spin-offs)
+  // Hard-block FORWARD: if result has ANY significant extra word not in the query title,
+  // it's a different show (spin-off, sequel subtitle, etc.) — return 0.
+  // Standalone numbers (years like 2011, counts) are excluded.
   const extraWords = rWords.filter(w => !qWords.includes(w));
-  const nonMetaExtra = extraWords.filter(w => !/^(season|part|episode|ep|tv|movie|ova|ona|special|specials|dub|sub|uncensored|uncut|multi|audio)$/i.test(w));
-  if (nonMetaExtra.length > 0) {
-    return Math.max(0, score - 0.25 * nonMetaExtra.length);
+  const nonMetaExtra = extraWords.filter(w =>
+    !GENERIC_WORDS.has(w)
+    && !/^(season|part|episode|ep|tv|movie|ova|ona|special|specials|dub|sub|uncensored|uncut|multi|audio)$/i.test(w)
+    && !/^\d+$/.test(w)  // allow standalone numbers (years, etc.)
+  );
+  if (nonMetaExtra.length > 0) return 0;
+
+  // Hard-block REVERSE: if the query has significant unique words (5+ chars, non-generic)
+  // that are completely absent from the result, it's a different (shorter-named) show.
+  // e.g. query="...Nanoha EXCEEDS Gun BlazeVengeance" vs result="...Nanoha" — block it.
+  const uniqueQueryWords = qWords.filter(w =>
+    w.length >= 5
+    && !GENERIC_WORDS.has(w)
+    && !/^(season|part|episode|ep|tv|movie|ova|ona|special|specials|dub|sub|uncensored|uncut|multi|audio)$/i.test(w)
+    && !/^\d+$/.test(w)
+  );
+  if (uniqueQueryWords.length > 0) {
+    const missingFromResult = uniqueQueryWords.filter(w => !rWords.includes(w));
+    // If ANY unique discriminating word from the query is absent from the result → hard block
+    // e.g. "exceeds" missing from "Magical Girl Lyrical Nanoha" → score 0
+    if (missingFromResult.length > 0) return 0;
   }
 
   return score;
@@ -740,9 +770,238 @@ export async function scrapeAniNeko(title, episode, isMovie = false) {
   return { servers, animeTitle: best.title, slug: best.slug };
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Animetsu Scraper Ã¢â€â‚¬Ã¢â€â‚¬
+// ── AniKoto Scraper ──
 
-// Stream URL session cache: animeId/episode/type Ã¢â€ â€™ { data, expires }
+const kotoSearchCache = new Map();  // title → { slug, animeId, animeTitle, watchUrl }
+const kotoEpListCache = new Map();  // animeId → epsHtml (full episode list HTML)
+const kotoEpCache = new Map();      // slug-episode → { servers, animeTitle, slug }
+
+export async function scrapeAniKoto(title, episode, isMovie = false) {
+  const domain = ANIKOTO;
+  
+  let searchResult = kotoSearchCache.get(title);
+  if (!searchResult) {
+    const cleanTitle = cleanAnimeTitle(title);
+    const filterUrl = `${domain}/filter?keyword=${encodeURIComponent(cleanTitle)}`;
+    console.log(`[AniKoto] Searching via filter page: ${filterUrl}`);
+    
+    let searchHtml;
+    try {
+      searchHtml = await clientFetch(filterUrl, {
+        referer: domain,
+        timeout: 10000
+      });
+    } catch (e) {
+      console.error('[AniKoto] Search failed:', e.message);
+    }
+    
+    if (!searchHtml) {
+      throw new Error(`Search failed on AniKoto`);
+    }
+
+    const itemRe = /<a\s+class="name d-title"\s+href="([^"]*?\/watch\/([^"\/]+)(?:\/ep-\d+)?)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m;
+    const results = [];
+    while ((m = itemRe.exec(searchHtml)) !== null) {
+      results.push({ fullUrl: m[1], slug: m[2], animeTitle: m[3].replace(/<[^>]*>/g, '').trim() });
+    }
+
+    if (results.length === 0) {
+      throw new Error(`Anime not found on AniKoto`);
+    }
+
+    // Score and get best match
+    let best = null, maxScore = -1;
+
+    // Fast-path: exact normalized title match
+    const normQuery = norm(title);
+    const exactMatch = results.find(r => norm(r.animeTitle) === normQuery);
+    if (exactMatch) {
+      best = exactMatch;
+      maxScore = 1.0;
+    } else {
+      for (const r of results) {
+        const score = titleScore(r.animeTitle, title, isMovie);
+        if (score > maxScore) {
+          maxScore = score;
+          best = r;
+        }
+      }
+    }
+
+    if (!best || maxScore < 0.65) {
+      throw new Error(`No confident match on AniKoto for "${title}" (score: ${maxScore.toFixed(2)})`);
+    }
+    console.log(`[AniKoto] Best match: "${best.animeTitle}" (score: ${maxScore.toFixed(2)})`);
+
+    // Resolve animeId from watch page
+    const watchUrl = best.fullUrl.startsWith('http') ? best.fullUrl : `${domain}/watch/${best.slug}`;
+    console.log(`[AniKoto] Fetching watch page to resolve ID: ${watchUrl}`);
+    const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 10000 });
+    const idMatch = watchHtml.match(/data-id="(\d+)"/i) || watchHtml.match(/const mangaId = (\d+);/i) || watchHtml.match(/\/getinfo\/(\d+)/i);
+    if (!idMatch) throw new Error('Could not resolve anime ID on AniKoto');
+    const animeId = idMatch[1];
+    
+    searchResult = { slug: best.slug, animeId, animeTitle: best.animeTitle, watchUrl };
+    kotoSearchCache.set(title, searchResult);
+  }
+
+  const { slug, animeId, animeTitle, watchUrl } = searchResult;
+  
+  // Per-episode result cache
+  const cacheKey = `${slug}-${episode}`;
+  if (kotoEpCache.has(cacheKey)) {
+    return kotoEpCache.get(cacheKey);
+  }
+
+  // Episode list cache (per animeId – reused across all episodes of the same show!)
+  let epsHtml = kotoEpListCache.get(animeId);
+  if (!epsHtml) {
+    const epsUrl = `${domain}/ajax/episode/list/${animeId}`;
+    console.log(`[AniKoto] Fetching episode list: ${epsUrl}`);
+    const epsResp = await clientFetch(epsUrl, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      referer: watchUrl,
+      timeout: 8000
+    });
+    const epsParsed = JSON.parse(epsResp);
+    if (epsParsed.status !== 200 || !epsParsed.result) {
+      throw new Error(`Failed to load episodes for ${animeTitle}`);
+    }
+    epsHtml = epsParsed.result;
+    kotoEpListCache.set(animeId, epsHtml);
+  }
+
+  const epRe = /data-id="([^"]+)"[^>]*data-num="(\d+)"[^>]*data-slug="[^"]*"[^>]*data-mal="[^"]*"[^>]*data-timestamp="[^"]*"[^>]*data-sub="[^"]*"[^>]*data-dub="[^"]*"[^>]*data-ids="([^"]+)"/g;
+  let epMatch;
+  let targetIds = null;
+  while ((epMatch = epRe.exec(epsHtml)) !== null) {
+    const epNum = epMatch[2];
+    const epIds = epMatch[3];
+    if (parseInt(epNum) === parseInt(episode)) {
+      targetIds = epIds;
+      break;
+    }
+  }
+
+  if (!targetIds) {
+    // Looser fallback regex
+    const looserRe = /data-num="(\d+)"[^>]*data-ids="([^"]+)"|data-ids="([^"]+)"[^>]*data-num="(\d+)"/g;
+    let lMatch;
+    while ((lMatch = looserRe.exec(epsHtml)) !== null) {
+      const num = lMatch[1] || lMatch[4];
+      const ids = lMatch[2] || lMatch[3];
+      if (parseInt(num) === parseInt(episode)) {
+        targetIds = ids;
+        break;
+      }
+    }
+  }
+
+  if (!targetIds) {
+    throw new Error(`Episode ${episode} not found on AniKoto`);
+  }
+
+  // Get server list
+  const srvUrl = `${domain}/ajax/server/list?servers=${encodeURIComponent(targetIds)}`;
+  console.log(`[AniKoto] Fetching server list: ${srvUrl}`);
+  const srvResp = await clientFetch(srvUrl, {
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    referer: watchUrl,
+    timeout: 8000
+  });
+  const srvParsed = JSON.parse(srvResp);
+  if (srvParsed.status !== 200 || !srvParsed.result) {
+    throw new Error(`Failed to load server list for episode ${episode}`);
+  }
+
+  const srvHtml = srvParsed.result;
+  const sections = srvHtml.split(/<div\s+class="type"/i);
+  const rawServers = [];
+  for (const sec of sections) {
+    const typeMatch = sec.match(/data-type="(sub|dub|hsub|raw)"/i);
+    if (!typeMatch) continue;
+    const type = typeMatch[1];
+    
+    if (type !== 'sub' && type !== 'dub') continue;
+
+    const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([\s\S]+?)<\/li>/g;
+    let liMatch;
+    while ((liMatch = liRe.exec(sec)) !== null) {
+      const linkId = liMatch[1];
+      const name = liMatch[2].replace(/<[^>]+>/g, '').trim();
+      rawServers.push({ type, linkId, serverName: name });
+    }
+  }
+
+  if (rawServers.length === 0) {
+    throw new Error(`No servers found for episode ${episode} on AniKoto`);
+  }
+
+  // Only resolve AniHD (HD-1 → megaplay s-5) and AniVid (VidPlay-1 → vidtube)
+  // Both are embed pages — scrapeEmbedNative extracts the real m3u8 from inside them
+  const ALLOWED_SERVERS = [
+    { key: 'HD-1',      label: 'AniHD', isHLS: false },  // megaplay.buzz embed → scrapeEmbedNative → HLS
+    { key: 'VidPlay-1', label: 'AniVid', isHLS: false }, // vidtube.site embed
+  ];
+
+  // Filter rawServers to only allowed ones, in priority order
+  const filteredServers = [];
+  for (const allowed of ALLOWED_SERVERS) {
+    for (const s of rawServers) {
+      if (s.serverName === allowed.key) {
+        filteredServers.push({ ...s, label: allowed.label, isHLS: allowed.isHLS });
+      }
+    }
+  }
+
+  if (filteredServers.length === 0) {
+    throw new Error(`No AniHD/AniVid servers found for episode ${episode} on AniKoto`);
+  }
+
+  const resolved = await Promise.allSettled(
+    filteredServers.map(async (s) => {
+      const getUrl = `${domain}/ajax/server?get=${encodeURIComponent(s.linkId)}`;
+      const resp = await clientFetch(getUrl, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        referer: watchUrl,
+        timeout: 6000
+      });
+      const parsed = JSON.parse(resp);
+      const embedUrl = parsed.result?.url || '';
+      if (!embedUrl) return null;
+
+      // Both AniHD and AniVid are embed pages — wrap through iframe proxy for browser,
+      // scrapeEmbedNative handles extraction on native (Capacitor) platform
+      const videoUrl = formatIframeProxyUrl(embedUrl, domain);
+      return {
+        name: s.label,   // → 'AniHD' or 'AniVid'
+        videoUrl,
+        embedUrl,
+        referer: domain + '/',
+        type: s.type,
+        subtitles: [],
+        isHLS: s.isHLS
+      };
+    })
+  );
+
+  const servers = resolved
+    .filter(r => r.status === 'fulfilled' && r.value)
+    .map(r => r.value);
+
+  if (servers.length === 0) {
+    throw new Error(`Failed to resolve KotoHD/KotoVid stream URLs for episode ${episode}`);
+  }
+
+  const resultData = { servers, animeTitle, slug };
+  kotoEpCache.set(cacheKey, resultData);
+  return resultData;
+}
+
+// ── Animetsu Scraper ──
+
+// Stream URL session cache: animeId/episode/type → { data, expires }
 // TTL = 25 minutes (stream URLs typically expire in ~30 min)
 const STREAM_CACHE_TTL_MS = 25 * 60 * 1000;
 

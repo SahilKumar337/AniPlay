@@ -337,6 +337,7 @@ export default function AniPlayer({
 
     let hls;
     let mediaErrRetries = 0;
+    let networkErrRetries = 0;
 
     if (Hls.isSupported()) {
       log('Hls.js is supported. Spawning player...');
@@ -365,8 +366,9 @@ export default function AniPlayer({
         log(`HLS Error: type=${data.type}, details=${data.details}, fatal=${data.fatal}`);
         if (!data.fatal) return;
         
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          log('Fatal network error, retrying startLoad...');
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkErrRetries < 3) {
+          networkErrRetries++;
+          log(`Fatal network error (retry ${networkErrRetries}/3), calling startLoad...`);
           hls.startLoad();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 2) {
           mediaErrRetries++;
@@ -1106,11 +1108,42 @@ export default function AniPlayer({
               boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)',
             }}
             onClick={() => {
+              // Full HLS re-init: destroy old instance so fresh manifest+CDN URLs are fetched
+              const v = videoRef.current;
+              if (!v) return;
               setHlsErr(null);
               setNeedsTap(false);
-              const v = videoRef.current;
-              const h = hlsRef.current;
-              if (h && v) { h.detachMedia(); h.attachMedia(v); h.loadSource(url); }
+              setWaiting(true);
+              const oldHls = hlsRef.current;
+              if (oldHls) { try { oldHls.destroy(); } catch {} hlsRef.current = null; }
+              const newHls = new Hls({
+                enableWorker: false,
+                startLevel: -1,
+                maxMaxBufferLength: 60,
+                manifestLoadingMaxRetry: 5,
+                manifestLoadingRetryDelay: 1500,
+                levelLoadingMaxRetry: 5,
+                levelLoadingRetryDelay: 1500,
+                fragLoadingMaxRetry: 5,
+                fragLoadingRetryDelay: 1500,
+                highBufferWatchdogPeriod: 2,
+                nudgeOffset: 0.1,
+                nudgeMaxRetries: 10,
+                pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+                fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+              });
+              hlsRef.current = newHls;
+              newHls.attachMedia(v);
+              newHls.on(Hls.Events.MEDIA_ATTACHED, () => {
+                newHls.loadSource(url);
+              });
+              newHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                setWaiting(false);
+                v.play().catch(() => {});
+              });
+              newHls.on(Hls.Events.ERROR, (_, d) => {
+                if (d.fatal) { setHlsErr(`Stream error: ${d.details || d.type}. Tap retry.`); setWaiting(false); }
+              });
             }}
           >
             ↺ Retry

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="description" content="AniPlay - Watch Anime Online, Streaming for Free. Browse thousands of anime with filters, schedule, and more." />
+    <title>AniPlay - Watch Anime Online Free</title>
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#6366f1" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        var errBox = document.getElementById('anilab-fatal-error');
+        if (!errBox) {
+          errBox = document.createElement('div');
+          errBox.id = 'anilab-fatal-error';
+          errBox.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#800;color:#fff;z-index:999999;padding:24px;box-sizing:border-box;font-family:monospace;overflow:auto;';
+          document.body.appendChild(errBox);
+        }
+        var msg = e.error ? (e.error.message + '\n' + e.error.stack) : e.message;
+        errBox.innerHTML = '<h2>🚨 Fatal Javascript Crash</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msg + '</pre>';
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var msg = e.reason ? (e.reason.message || e.reason) : '';
+        var msgStr = String(msg);
+        if (
+          msgStr.indexOf('play()') !== -1 ||
+          msgStr.indexOf('AbortError') !== -1 ||
+          msgStr.indexOf('interrupted') !== -1 ||
+          msgStr.indexOf('media was removed') !== -1
+        ) {
+          return; // Ignore harmless media playback aborts
+        }
+        var errBox = document.getElementById('anilab-fatal-error');
+        if (!errBox) {
+          errBox = document.createElement('div');
+          errBox.id = 'anilab-fatal-error';
+          errBox.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#800;color:#fff;z-index:999999;padding:24px;box-sizing:border-box;font-family:monospace;overflow:auto;';
+          document.body.appendChild(errBox);
+        }
+        errBox.innerHTML = '<h2>🚨 Fatal Promise Rejection</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msgStr + '</pre>';
+      });
+
+      // ── Disable browser context menu (Right-click / Long press save) ──
+      document.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+      });
+
+      // ── Disable pinch-to-zoom ──────────────────────────────────────────
+      document.addEventListener('touchmove', function(e) {
+        if (e.scale !== undefined && e.scale !== 1) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // ── Disable double-tap to zoom ─────────────────────────────────────
+      var lastTouchEnd = 0;
+      document.addEventListener('touchend', function(e) {
+        var now = (new Date()).getTime();
+        if (now - lastTouchEnd <= 300) {
+          e.preventDefault();
+        }
+        lastTouchEnd = now;
+      }, false);
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

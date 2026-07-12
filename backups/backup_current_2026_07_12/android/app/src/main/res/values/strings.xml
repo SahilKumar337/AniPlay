@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AniPlay</string>
+    <string name="title_activity_main">AniPlay</string>
+    <string name="package_name">com.aniplay.aniplay</string>
+    <string name="custom_url_scheme">com.aniplay.aniplay</string>
+</resources>

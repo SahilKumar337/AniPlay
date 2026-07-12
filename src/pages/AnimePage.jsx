@@ -22,17 +22,21 @@ import { downloadManager } from '../utils/DownloadManager';
 const isDownloadable = (srv) => {
   if (!srv) return false;
   const name = (srv.name || '').toLowerCase();
-  
-  // Only allow NekoHD servers for download
-  const isNeko = name.includes('neko');
-  if (!isNeko) return false;
 
-  // For SUB, it must have English subtitles
-  if (srv.type === 'sub') {
-    return srv.subtitles && srv.subtitles.length > 0;
+  // Allow NekoHD servers (require English subs for sub track)
+  if (name.includes('neko')) {
+    if (srv.type === 'sub') {
+      return srv.subtitles && srv.subtitles.length > 0;
+    }
+    return true;
   }
-  
-  return true;
+
+  // Allow AniHD and AniVid (HLS streams, no subtitle requirement)
+  if (name === 'anihd' || name === 'anivid') {
+    return true;
+  }
+
+  return false;
 };
 
 
@@ -419,40 +423,86 @@ export default function AnimePage() {
         const expandedServers = [];
         for (const srv of enriched) {
           if (isDownloadable(srv)) {
+            let pushed = false;
             try {
               let finalUrl = srv.videoUrl;
-              // Always use srv.referer (e.g. https://anineko.to/) NOT the embedUrl as referer
               let referer = srv.referer || '';
               const isEmbed = !srv.isHLS && srv.embedUrl;
+
               if (isEmbed) {
                 if (Capacitor.isNativePlatform()) {
-                  finalUrl = await scrapeEmbedNative(srv.embedUrl, referer, 25000);
+                  // Longer timeout so megaplay/vidtube have time to start their HLS player
+                  finalUrl = await scrapeEmbedNative(srv.embedUrl, referer, 35000);
                 } else {
                   finalUrl = srv.embedUrl;
                 }
+                // For CDN segment/playlist requests use embed origin, not parent page
+                try { referer = new URL(srv.embedUrl).origin + '/'; } catch {}
               } else if (srv.isHLS && srv.embedUrl) {
                 finalUrl = srv.embedUrl;
               }
-              
-              if (finalUrl && finalUrl.includes('.m3u8')) {
-                const qualities = await parseM3U8Qualities(finalUrl, referer);
+
+              // Detect HLS: explicit .m3u8 extension OR common HLS content patterns
+              const isHlsUrl = finalUrl && (
+                finalUrl.includes('.m3u8') ||
+                finalUrl.includes('/hls/') ||
+                finalUrl.includes('/index') ||
+                finalUrl.includes('/master')
+              );
+
+              if (finalUrl && isHlsUrl) {
+                // Try quality variants from master playlist
+                let qualities = [];
+                try {
+                  qualities = await parseM3U8Qualities(finalUrl, referer);
+                } catch (qe) {
+                  console.warn('[Downloads] Quality parse failed:', qe.message);
+                }
+
                 if (qualities.length > 0) {
+                  // Expand into per-quality entries (e.g. AniHD (1080p), AniHD (720p))
                   for (const q of qualities) {
                     expandedServers.push({
                       ...srv,
                       name: `${srv.name.split(' (')[0]} (${q.name})`,
                       videoUrl: q.url,
+                      embedUrl: undefined,
+                      referer,
                       isHLS: true
                     });
                   }
+                  pushed = true;
+                  continue;
+                } else {
+                  // Media playlist (no variants) — single "Best" entry with resolved URL
+                  expandedServers.push({
+                    ...srv,
+                    name: `${srv.name.split(' (')[0]} (Best)`,
+                    videoUrl: finalUrl,
+                    embedUrl: undefined,
+                    referer,
+                    isHLS: true
+                  });
+                  pushed = true;
                   continue;
                 }
+              } else if (finalUrl && finalUrl !== srv.videoUrl) {
+                // Resolved to a non-HLS direct URL (e.g. MP4)
+                expandedServers.push({
+                  ...srv,
+                  videoUrl: finalUrl,
+                  embedUrl: undefined,
+                  referer,
+                  isHLS: false
+                });
+                pushed = true;
+                continue;
               }
             } catch (e) {
-              console.error('Error parsing HLS variants:', e);
+              console.error('[Downloads] Error resolving server for quality picker:', e.message);
             }
+            if (!pushed) expandedServers.push(srv); // fallback: show as-is
           }
-          expandedServers.push(srv);
         }
 
         setServerPickerData({
@@ -811,6 +861,8 @@ export default function AnimePage() {
         preferred = matchingServers.find(s => /neko|gogo/i.test(s.name)) || matchingServers[0] || enriched[0];
       } else if (preferredSrv === 'waveshd' || preferredSrv === 'waves') {
         preferred = matchingServers.find(s => /waves/i.test(s.name)) || matchingServers[0] || enriched[0];
+      } else if (preferredSrv === 'anikoto') {
+        preferred = matchingServers.find(s => /^(AniHD|AniVid)$/i.test(s.name)) || matchingServers[0] || enriched[0];
       } else {
         preferred = matchingServers[0] || enriched[0];
       }
@@ -864,6 +916,8 @@ export default function AnimePage() {
           preferred = matchingServers.find(s => /neko|gogo/i.test(s.name)) || matchingServers[0] || enriched[0];
         } else if (preferredSrv2 === 'waveshd' || preferredSrv2 === 'waves') {
           preferred = matchingServers.find(s => /waves/i.test(s.name)) || matchingServers[0] || enriched[0];
+        } else if (preferredSrv2 === 'anikoto') {
+          preferred = matchingServers.find(s => /^(AniHD|AniVid)$/i.test(s.name)) || matchingServers[0] || enriched[0];
         } else {
           preferred = matchingServers[0] || enriched[0];
         }
@@ -930,6 +984,8 @@ export default function AnimePage() {
       preferred = matchingServers.find(s => /neko|gogo/i.test(s.name));
     } else if (preferredSrv === 'waveshd' || preferredSrv === 'waves') {
       preferred = matchingServers.find(s => /waves/i.test(s.name));
+    } else if (preferredSrv === 'anikoto') {
+      preferred = matchingServers.find(s => /^(AniHD|AniVid)$/i.test(s.name));
     } else {
       preferred = matchingServers.find(s => /vidstream/i.test(s.name) || /vidplay/i.test(s.name) || /hd1/i.test(s.name))
                || matchingServers.find(s => /mycloud/i.test(s.name) || /hd2/i.test(s.name));

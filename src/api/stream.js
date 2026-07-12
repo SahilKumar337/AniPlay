@@ -5,7 +5,7 @@
  * through a lightweight Cloudflare Worker header proxy if configured.
  */
 
-import { scrapeAniNeko, scrapeAniWaves, getScraperEpisodeCount } from './scrapers';
+import { scrapeAniNeko, scrapeAniWaves, scrapeAniKoto, getScraperEpisodeCount } from './scrapers';
 export { getScraperEpisodeCount };
 
 const clientStreamCache = new Map();
@@ -63,7 +63,8 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
         const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
-        const isAllowed = ['NekoHD', 'WavesHD'].includes(baseName) || baseName.startsWith('Waves-');
+        const isAllowed = ['NekoHD', 'WavesHD', 'AniHD', 'AniVid'].includes(baseName)
+          || baseName.startsWith('Waves-');
         if (!isAllowed) return; // skip all other servers
 
         // Prevent duplicate server items
@@ -74,12 +75,14 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // Deduplicate and prioritize servers list: Neko → WavesHD
+      // Prioritize servers: Neko → WavesHD → AniHD → AniVid
       combinedServers.sort((a, b) => {
         const getPriority = (name) => {
           if (name.includes('Neko')) return 0;
-          if (name.includes('Waves') || name.includes('WavesHD')) return 1;
-          return 2;
+          if (name.includes('Waves') || name === 'WavesHD') return 1;
+          if (name === 'AniHD') return 2;
+          if (name === 'AniVid') return 3;
+          return 4;
         };
         return getPriority(a.name) - getPriority(b.name);
       });
@@ -126,9 +129,28 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     return null;
   })();
 
+  // Define AniKoto execution
+  const anikotoPromise = (async () => {
+    for (const title of titles) {
+      try {
+        console.log(`[ClientEngine] AniKoto trying: "${title}" ep ${episode}`);
+        const data = await scrapeAniKoto(title, episode, isMovie);
+        if (data?.servers?.length) {
+          handleScraperResult(data);
+          return data;
+        }
+      } catch (e) {
+        console.warn(`[ClientEngine] AniKoto failed for "${title}": ${e.message}`);
+        errors.push(`AniKoto[${title.slice(0, 30)}]: ${e.message}`);
+      }
+    }
+    return null;
+  })();
+
   const results = await Promise.allSettled([
     runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 12000, 'AniWaves').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(wavesPromise, 12000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(anikotoPromise, 12000, 'AniKoto').catch(e => { console.warn(e.message); return null; })
   ]);
 
   if (combinedServers.length === 0) {
@@ -137,7 +159,8 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
 
   const nekoSuccess = results[0].status === 'fulfilled' && results[0].value;
   const wavesSuccess = results[1].status === 'fulfilled' && results[1].value;
-  const isPartial = !nekoSuccess || !wavesSuccess;
+  const anikotoSuccess = results[2].status === 'fulfilled' && results[2].value;
+  const isPartial = !nekoSuccess || !wavesSuccess || !anikotoSuccess;
 
   const resultData = {
     ok: true,

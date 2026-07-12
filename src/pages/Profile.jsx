@@ -412,8 +412,9 @@ function SettingsPanel({ onBack }) {
             <Dropdown value={settings.preferredServer} onChange={v => updateSettings({ preferredServer: v })}
               options={[
                 { value: "auto", label: "Auto (Best)" },
-                { value: "neko", label: "NikoHD" },
-                { value: "waveshd", label: "WavesHD" }
+                { value: "neko", label: "NekoHD" },
+                { value: "waveshd", label: "WavesHD" },
+                { value: "anikoto", label: "AniKoto" }
               ]} />
           </SettingRow>
         </SettingsCard>

@@ -1,8 +1,8 @@
 {
-  "latestVersion": "1.5",
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5/bundle.zip",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5/AniPlay.apk",
-  "changelog": "[TEST BUILD] FullScreen UI optimizations, redesigned Search & filters, customized download location setting, and 3x faster parallel HLS downloading.",
+  "latestVersion": "1.5.1",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.1/bundle.zip",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.1/AniPlay.apk",
+  "changelog": "[TEST BUILD] Added new server AniHD and AniVid, fixed Sword Art Online/One Piece matching issues, and resolved mid-playback HLS timeouts.",
   "forceUpdate": false,
   "domains": {
     "neko": "https://anineko.to",
