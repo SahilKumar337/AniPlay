@@ -1,12 +1,12 @@
 {
   "latestVersion": "1.5.3",
   "versionCode": 18,
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/AniPlay-v1.5.3.apk",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/AniPlay.apk",
   "forceUpdate": false,
-  "changelog": "• Smoother home animations — no more jitter\n• Fixed fullscreen next episode — no portrait flash\n• Show All Results button fully visible\n• Profile page redesigned: avatar left, edit icon right\n• Edit Profile modal centered\n• Performance optimizations",
+  "changelog": "\u2022 Smoother home animations \u2014 no more jitter\n\u2022 Fixed fullscreen next episode \u2014 no portrait flash\n\u2022 Show All Results button fully visible\n\u2022 Profile page redesigned: avatar left, edit icon right\n\u2022 Edit Profile modal centered\n\u2022 Performance optimizations",
   "changelogItems": [
-    "Smoother home page animations — no more jitter on load",
-    "Fixed next episode in fullscreen — no portrait flash between episodes",
+    "Smoother home page animations \u2014 no more jitter on load",
+    "Fixed next episode in fullscreen \u2014 no portrait flash between episodes",
     "Show All Results button now fully visible above navigation bar",
     "Profile page redesigned: avatar left, edit icon right",
     "Edit Profile modal now centered correctly on screen",
@@ -36,5 +36,6 @@
       "anikoto": "frieren-beyond-journey-s-end-c6fbj",
       "waves": "frieren-beyond-journey-s-end-c6fb"
     }
-  }
+  },
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/bundle.zip"
 }
