@@ -3,10 +3,10 @@
   "versionCode": 18,
   "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/AniPlay-v1.5.3.apk",
   "forceUpdate": false,
-  "changelog": "• Smoother home animations — no more jitter\n• Fixed fullscreen next episode — no portrait flash\n• Show All Results button fully visible\n• Profile page redesigned: avatar left, edit icon right\n• Edit Profile modal centered\n• Performance optimizations",
+  "changelog": "â€¢ Smoother home animations â€” no more jitter\nâ€¢ Fixed fullscreen next episode â€” no portrait flash\nâ€¢ Show All Results button fully visible\nâ€¢ Profile page redesigned: avatar left, edit icon right\nâ€¢ Edit Profile modal centered\nâ€¢ Performance optimizations",
   "changelogItems": [
-    "Smoother home page animations — no more jitter on load",
-    "Fixed next episode in fullscreen — no portrait flash between episodes",
+    "Smoother home page animations â€” no more jitter on load",
+    "Fixed next episode in fullscreen â€” no portrait flash between episodes",
     "Show All Results button now fully visible above navigation bar",
     "Profile page redesigned: avatar left, edit icon right",
     "Edit Profile modal now centered correctly on screen",
@@ -21,11 +21,6 @@
     "anikoto": "https://anikoto.cz"
   },
   "mappings": {
-    "154587": {
-      "neko": "frieren-beyond-journeys-end",
-      "anikoto": "frieren-beyond-journey-s-end-c6fbj",
-      "waves": "frieren-beyond-journey-s-end-c6fb"
-    },
     "21": {
       "neko": "one-piece",
       "anikoto": "one-piece-odmau",
@@ -35,6 +30,11 @@
       "neko": "sword-art-online",
       "anikoto": "sword-art-online-c6fbv",
       "waves": "sword-art-online-c6fbv"
+    },
+    "154587": {
+      "neko": "frieren-beyond-journeys-end",
+      "anikoto": "frieren-beyond-journey-s-end-c6fbj",
+      "waves": "frieren-beyond-journey-s-end-c6fb"
     }
   }
 }
