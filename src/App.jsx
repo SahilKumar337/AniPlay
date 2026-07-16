@@ -193,7 +193,7 @@ function AppInner({ showWelcome, onEnter }) {
   );
 }
 
-import { setDynamicDomains } from './api/scrapers';
+import { setDynamicDomains, setDynamicMappings } from './api/scrapers';
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
@@ -228,11 +228,42 @@ export default function App() {
         } catch (e) {
           console.warn('[Capacitor] StatusBar settings error:', e);
         }
+        // Read actual status bar height (works even if hide() fails on some phones)
+        // and expose it as a CSS variable so the player overlay can use it as safe padding.
+        try {
+          const info = await StatusBar.getInfo();
+          // height is in pixels (already DPR-scaled on Capacitor Android)
+          const sbPx = info?.height ?? 0;
+          document.documentElement.style.setProperty('--sb-height', `${sbPx}px`);
+          console.log('[StatusBar] height:', sbPx, 'px | visible:', info?.visible);
+        } catch (e2) {
+          // Fallback: assume 0 (hidden successfully)
+          document.documentElement.style.setProperty('--sb-height', '0px');
+        }
+      } else {
+        document.documentElement.style.setProperty('--sb-height', '0px');
       }
     };
     initDeviceSettings();
   }, []);
 
+  // ── One-time cache purge: clear stale AniKoto search matches ──
+  // The old confidence threshold (0.65) was too loose and cached wrong-anime matches.
+  // This purges all anisearch_koto_* entries once so the stricter 0.88 threshold takes effect.
+  useEffect(() => {
+    const PURGE_KEY = 'anilab_koto_cache_purge_v2';
+    if (!localStorage.getItem(PURGE_KEY)) {
+      let purged = 0;
+      Object.keys(localStorage).forEach(k => {
+        if (k.startsWith('anisearch_koto_')) {
+          localStorage.removeItem(k);
+          purged++;
+        }
+      });
+      localStorage.setItem(PURGE_KEY, '1');
+      if (purged > 0) console.log(`[CachePurge] Cleared ${purged} stale AniKoto search entries`);
+    }
+  }, []);
 
   // ── Remote Update & Configuration Checker ──────────────────────
   useEffect(() => {
@@ -280,9 +311,12 @@ export default function App() {
 
       if (!data) return;
 
-      // 1. Load dynamic domains
+      // 1. Load dynamic domains and mappings
       if (data.domains) {
         setDynamicDomains(data.domains);
+      }
+      if (data.mappings) {
+        setDynamicMappings(data.mappings);
       }
 
       // 2. Check maintenance message
@@ -431,24 +465,34 @@ export default function App() {
               Version {updateInfo.latestVersion} (Current: {currentVersion})
             </div>
 
-            {updateInfo.changelog && (
+            {(updateInfo.changelogItems || updateInfo.changelog) && (
               <div style={{
                 background: 'rgba(255,255,255,0.03)',
                 border: '1px solid var(--border)',
                 borderRadius: 10,
-                padding: 12,
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-                lineHeight: 1.5,
+                padding: '10px 12px',
                 textAlign: 'left',
-                maxHeight: 120,
+                maxHeight: 160,
                 overflowY: 'auto',
                 marginBottom: 20
               }}>
-                <div style={{ fontWeight: 700, color: '#fff', marginBottom: 4 }}>What's New:</div>
-                {updateInfo.changelog}
+                <div style={{ fontWeight: 700, color: '#fff', marginBottom: 8, fontSize: 12 }}>✨ What's New:</div>
+                {Array.isArray(updateInfo.changelogItems)
+                  ? updateInfo.changelogItems.map((item, i) => (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 7,
+                      fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5,
+                      marginBottom: i < updateInfo.changelogItems.length - 1 ? 6 : 0
+                    }}>
+                      <span style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 1 }}>•</span>
+                      <span>{item}</span>
+                    </div>
+                  ))
+                  : <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{updateInfo.changelog}</div>
+                }
               </div>
             )}
+
 
             {/* Download progress bar */}
             {updateProgress !== null && (

@@ -1,15 +1,40 @@
 {
-  "latestVersion": "1.5.1",
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.1/bundle.zip",
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.1/AniPlay.apk",
-  "changelog": "Added new server AniHD and AniVid, fixed Sword Art Online/One Piece matching issues, and resolved mid-playback HLS timeouts.",
+  "latestVersion": "1.5.3",
+  "versionCode": 18,
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/app-release.apk",
   "forceUpdate": false,
+  "changelog": "Smoother animations, fullscreen fix, profile redesign, performance optimizations",
+  "changelogItems": [
+    "Smoother home page animations — no more jitter on load",
+    "Fixed next episode in fullscreen — no portrait flash between episodes",
+    "Show All Results button now fully visible above navigation bar",
+    "Profile page redesigned: avatar left, edit icon right",
+    "Edit Profile modal now centered correctly on screen",
+    "Major app performance optimizations across all screens",
+    "Filter bottom sheet now properly overlays the navigation bar",
+    "All modals use React Portals for correct z-index layering"
+  ],
   "domains": {
     "neko": "https://anineko.to",
     "waves": "https://aniwaves.ru",
-    "gogo": "https://anitaku.bz",
-    "fallback_gogo": "https://anitaku.so",
-    "animepahe": "https://animepahe.pw"
+    "animetsu": "https://animetsu.net",
+    "anikoto": "https://anikoto.cz"
   },
-  "maintenanceMessage": null
+  "mappings": {
+    "154587": {
+      "neko": "frieren-beyond-journeys-end",
+      "anikoto": "frieren-beyond-journey-s-end-c6fbj",
+      "waves": "frieren-beyond-journey-s-end-c6fb"
+    },
+    "21": {
+      "neko": "one-piece",
+      "anikoto": "one-piece-odmau",
+      "waves": "one-piece-odmau"
+    },
+    "11757": {
+      "neko": "sword-art-online",
+      "anikoto": "sword-art-online-c6fbv",
+      "waves": "sword-art-online-c6fbv"
+    }
+  }
 }

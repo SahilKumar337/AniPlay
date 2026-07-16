@@ -145,6 +145,12 @@ export default function AnimePage() {
   const [fsActive,      setFsActive]     = useState(false);
   const [scraperErrors, setScraperErrors] = useState([]);
   const hasAutoSelectedRef = useRef(false);
+  const lastFetchedRef = useRef(null);
+  const lastEpRef = useRef(null);
+  // Fullscreen-across-episode: tracks if we were in FS when user triggered next episode
+  const keepFsRef = useRef(false);         // signals AniPlayer unmount to skip orientation restore
+  const [epTransitionFs, setEpTransitionFs] = useState(false); // tells new AniPlayer to startInFs
+  const fsActiveRef = useRef(false);        // mirror of fsActive for use inside callbacks (avoids stale closures)
 
   // Secure Downloads State
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
@@ -842,6 +848,14 @@ export default function AnimePage() {
 
     hasAutoSelectedRef.current = false;
 
+    // Prevent redundant scraper runs for the same anime + episode combination
+    const currentKey = `${anime.id}_${epParam}`;
+    if (lastFetchedRef.current === currentKey && servers.length > 0) {
+      console.log('[AnimePage] Stream servers already resolved/resolving for: ' + currentKey + '. Skipping duplicate fetch.');
+      return;
+    }
+    lastFetchedRef.current = currentKey;
+
     const cachedResult = getCachedServers(anime, epParam);
     if (cachedResult?.servers?.length) {
       setStreamErr(null);
@@ -889,9 +903,12 @@ export default function AnimePage() {
     setStreamErr(null);
     setScraperErrors([]);
 
-    // Only clear servers and active player if we don't have one running,
-    // which prevents the player from unmounting and losing fullscreen status.
-    if (!activeUrl) {
+    // Only clear servers and active player if the episode actually changed or we don't have one running,
+    // which prevents the player from unmounting, losing fullscreen status, or layout flashing.
+    const epChanged = lastEpRef.current !== epParam;
+    lastEpRef.current = epParam;
+
+    if (epChanged || !activeUrl) {
       setServers([]);
       setActiveUrl('');
       setActiveName('');
@@ -1877,17 +1894,19 @@ export default function AnimePage() {
       <div style={{
         position: 'fixed', inset: 0, zIndex: 1000,
         background: '#000000', display: 'flex', flexDirection: 'column',
-        paddingTop: fsActive ? 0 : 'env(safe-area-inset-top)',
+        // Use max() of safe-area-inset-top (notch) and --sb-height (status bar that couldn't be hidden)
+        // This ensures the player is never hidden behind ANY type of system UI on any phone
+        paddingTop: fsActive ? 0 : 'max(env(safe-area-inset-top), var(--sb-height, 0px))',
         boxSizing: 'border-box',
       }} className="fade-in">
         
-        {/* 1. Player Box */}
+        {/* 1. Player Box — exact 16:9, no maxHeight cap */}
         <div style={{
           position: 'relative',
           width: '100%',
-          height: fsActive ? '100%' : 'calc(100vw * 9 / 16)',
-          minHeight: fsActive ? 'unset' : '250px',
-          flex: fsActive ? 1 : 'unset',
+          // Taller player: ~45% bigger than pure 16:9, capped at 52vh so episodes stay visible
+          height: fsActive ? '100%' : 'min(calc(100vw * 9 / 16 * 1.45), 52vh)',
+          flex: fsActive ? 1 : '0 0 auto',
           background: '#000',
           overflow: fsActive ? 'visible' : 'hidden'
         }}>
@@ -1922,16 +1941,34 @@ export default function AnimePage() {
                 subtitles={activeServer?.subtitles || []}
                 extraSubtitles={allSubtitleTracks}
                 onBack={() => navigate(-1)}
-                onFullscreenChange={setFsActive}
+                onFullscreenChange={(isFs) => {
+                  setFsActive(isFs);
+                  fsActiveRef.current = isFs;
+                  // Once the new episode's player has entered fullscreen, we no longer
+                  // need to force-start in FS — reset so future non-FS ep changes work correctly
+                  if (isFs) setEpTransitionFs(false);
+                }}
                 currentEpisode={epParam}
                 totalEpisodes={totalEps}
                 onEpisodeChange={(newEp) => {
+                  // Use ref to read latest FS state — avoids stale closure trapping old fsActive value
+                  const wasFs = fsActiveRef.current;
+                  if (wasFs) {
+                    keepFsRef.current = true;  // tell the unmounting AniPlayer to skip orientation restore
+                    setEpTransitionFs(true);   // tell the new AniPlayer to startInFs
+                    // Reset the keepFs flag after the new player has mounted and taken over
+                    setTimeout(() => { keepFsRef.current = false; }, 800);
+                  } else {
+                    setEpTransitionFs(false);
+                  }
                   setSearchParams({ play: 'true', ep: String(newEp) }, { replace: true });
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  if (!wasFs) window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 autoplay={settings?.autoplay !== false}
                 subtitleSettings={settings || null}
                 loading={loadStream}
+                startInFs={epTransitionFs}
+                keepFsOnEpChange={keepFsRef}
                 onStreamExpired={() => {
                   // CDN token expired mid-play — bust stale cache and re-select same server
                   console.log('[AnimePage] Stream expired — invalidating cache and re-selecting server...');
@@ -2051,9 +2088,9 @@ export default function AnimePage() {
           </div>
         )}
 
-        {/* 4. Episodes Scrollable List below */}
+        {/* 4. Episodes Scrollable List — takes all remaining space */}
         {!fsActive && (
-          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', minHeight: 0 }}>
             <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
               Episodes ({totalEps})
             </h3>

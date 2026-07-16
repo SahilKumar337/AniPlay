@@ -7,7 +7,7 @@
 .anip {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  height: 100%;        /* fills whatever the parent container gives it */
   background: #000;
   overflow: hidden;
   user-select: none;
@@ -21,6 +21,7 @@
   inset: 0 !important;
   width: 100% !important;
   height: 100% !important;
+  height: 100dvh !important;
   z-index: 99999 !important;
   aspect-ratio: unset !important;
   background: #000;

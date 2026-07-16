@@ -68,9 +68,9 @@ export default function HeroBanner({ animes = [] }) {
       style={{
         position: 'relative',
         width: '100%',
-        height: '42vh',
-        maxHeight: 420,
-        minHeight: 260,
+        height: '45vh',
+        maxHeight: 440,
+        minHeight: 280,
         overflow: 'hidden',
         background: 'linear-gradient(135deg, #121212 0%, #080808 100%)',
         userSelect: 'none',
@@ -114,7 +114,7 @@ export default function HeroBanner({ animes = [] }) {
         opacity: fading ? 0 : 1,
         transition: 'opacity 0.3s ease',
         zIndex: 2,
-        maxWidth: '60%',
+        maxWidth: '58%',
       }}>
         {/* Genres */}
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4 }}>
@@ -130,7 +130,7 @@ export default function HeroBanner({ animes = [] }) {
 
         {/* Title */}
         <h1 style={{
-          fontSize: 'clamp(15px, 4vw, 24px)',
+          fontSize: 'clamp(16px, 4.5vw, 26px)',
           fontWeight: 800,
           fontFamily: 'var(--font-brand)',
           color: '#fff',
@@ -163,8 +163,8 @@ export default function HeroBanner({ animes = [] }) {
 
       {/* ── Right Side: Full Uncropped Poster Image ─────────── */}
       <div style={{
-        width: '35%',
-        height: '70%',
+        width: '38%',
+        height: '80%',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -181,8 +181,8 @@ export default function HeroBanner({ animes = [] }) {
             maxHeight: '100%',
             maxWidth: '100%',
             objectFit: 'contain',
-            borderRadius: 8,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            borderRadius: 12,
+            boxShadow: '0 12px 32px rgba(0,0,0,0.6)',
             transform: 'translate3d(0, 0, 0)',
             willChange: 'opacity',
             backfaceVisibility: 'hidden',

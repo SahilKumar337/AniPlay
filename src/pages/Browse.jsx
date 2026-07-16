@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, memo, startTransition } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, SlidersHorizontal, X, Star, Play, Tag, Loader, ChevronDown, Check, RotateCcw } from 'lucide-react';
 import {
@@ -14,7 +15,7 @@ import { useDebounce }  from '../hooks/useDebounce';
 
 const GENRES = [
   'Action', 'Adventure', 'Cars', 'Comedy', 'Dementia', 'Demons', 'Drama', 'Ecchi',
-  'Fantasy', 'Game', 'Harem', 'Female Harem', 'Historical', 'Horror', 'Isekai', 'Josei', 'Kids',
+  'Fantasy', 'Game', 'Harem', 'Historical', 'Horror', 'Isekai', 'Josei', 'Kids',
   'Magic', 'Mahou Shoujo', 'Martial Arts', 'Mecha', 'Military', 'Music', 'Mystery',
   'Parody', 'Police', 'Psychological', 'Romance', 'Samurai', 'School', 'Sci-Fi',
   'Seinen', 'Shoujo', 'Shoujo Ai', 'Shounen', 'Shounen Ai', 'Slice of Life', 'Space',
@@ -56,20 +57,7 @@ const STATUS_LABEL = {
   NOT_YET_RELEASED: 'Upcoming',
 };
 
-// ─── Genre Emoji Map ────────────────────────────────────────────────
-const GENRE_EMOJI = {
-  'Action': '⚔️', 'Adventure': '🗺️', 'Cars': '🏎️', 'Comedy': '😂',
-  'Dementia': '🌀', 'Demons': '👹', 'Drama': '🎭', 'Ecchi': '🔞',
-  'Fantasy': '🧙', 'Game': '🎮', 'Harem': '💘', 'Female Harem': '💝', 'Historical': '📜',
-  'Horror': '👻', 'Isekai': '🌐', 'Josei': '💐', 'Kids': '🧸',
-  'Magic': '✨', 'Mahou Shoujo': '🪄', 'Martial Arts': '🥋', 'Mecha': '🤖',
-  'Military': '🎖️', 'Music': '🎵', 'Mystery': '🔍', 'Parody': '🎪',
-  'Police': '👮', 'Psychological': '🧠', 'Romance': '❤️', 'Samurai': '⛩️',
-  'School': '🎓', 'Sci-Fi': '🚀', 'Seinen': '📕', 'Shoujo': '🌸',
-  'Shoujo Ai': '🌺', 'Shounen': '💥', 'Shounen Ai': '🌼', 'Slice of Life': '☕',
-  'Space': '🌌', 'Sports': '⚽', 'Super Power': '💪', 'Supernatural': '👁️',
-  'Thriller': '😰', 'Vampire': '🧛',
-};
+
 
 export default function Browse() {
   const navigate = useNavigate();
@@ -87,23 +75,21 @@ export default function Browse() {
   const [results,        setResults]       = useState([]);
   const [loading,        setLoading]       = useState(false);
   const [showFilter,     setShowFilter]    = useState(false);
-  const [page,           setPage]          = useState(1);
   const [hasMore,        setHasMore]       = useState(true);
 
   const filterSheetRef  = useRef(null);
   const sentinelRef     = useRef(null);    // IntersectionObserver sentinel
   const generationRef   = useRef(0);       // Fresh search ID — stale results self-discard
   const loadingRef      = useRef(false);   // Sync flag: prevents double-fire
-  const pageRef         = useRef(1);       // Sync page — safe inside observer closure
-  const hasMoreRef      = useRef(true);    // Sync hasMore — safe inside observer closure
-  const loadMoreRef     = useRef(null);    // Always-current loadMore fn for observer
+  const pageRef         = useRef(1);       // Sync page — always read from here, not state
+  const hasMoreRef      = useRef(true);    // Sync hasMore — safe inside stable closures
+  const loadMoreRef     = useRef(null);    // Points to stable loadMore (set once at mount)
   const lastScrollY     = useRef(0);
+  const fetchPageRef    = useRef(null);    // Always-current fetchPage — read by stable closures
+  const abortRef        = useRef(null);    // AbortController: cancels stale in-flight searches
+  const headerRef       = useRef(null);    // Sticky header — DOM-mutated directly, zero re-renders
 
-  const [showHeader, setShowHeader] = useState(true);
 
-  // Keep refs in sync with state
-  useEffect(() => { pageRef.current   = page;    }, [page]);
-  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
   // 450ms debounce — feels instant, avoids API call on every keystroke
   const debounced = useDebounce(query, 450);
@@ -153,23 +139,28 @@ export default function Browse() {
     return { sortVal, formatVal, statusVal };
   }, [category, format, status]);
 
-  // ─── Fetch a single page of results ────────────────────────────────
-  // Returns { rows, rawCount } so callers can distinguish:
-  //   rawCount = how many AniList returned (gate hasMore)
-  //   rows     = potentially re-ranked/filtered subset (what we display)
+  // ─── PRODUCTION FIX: fetchPageRef pattern ────────────────────────
+  // fetchPage is a useCallback that recreates every time debounced/genre/format
+  // changes. Storing it in a ref breaks the dependency chain:
+  //   fetchPage → doSearch → loadMore → loadMoreRef
+  // doSearch and loadMore now have [] deps (STABLE, never recreate).
+  // They read fetchPageRef.current at call-time — always fresh, never stale.
   const fetchPage = useCallback(async (pg) => {
     const PER_PAGE = 24;
     let rows = [];
     let rawCount = 0;
+    let hasNextPage = false;
 
     if (debounced || selectedGenres.length || format || status) {
       const { sortVal, formatVal, statusVal } = resolveQueryParams();
-      rows = await searchAnime(
+      const result = await searchAnime(
         debounced || null, pg, PER_PAGE,
         selectedGenres, formatVal, statusVal, sortVal
       );
-      rawCount = rows.length; // store BEFORE local re-ranking
-      // Re-rank only on page 1 with text search — pages 2+ stay in AniList order
+      // searchAnime now returns { rows, hasNextPage }
+      rows = result.rows ?? result; // fallback for safety
+      hasNextPage = result.hasNextPage ?? (rows.length >= PER_PAGE);
+      rawCount = rows.length;
       if (debounced && pg === 1 && rows.length > 0) {
         rows = searchAndRankAnime(debounced, rows);
       }
@@ -183,121 +174,120 @@ export default function Browse() {
       else if (category === 'top-rated')    rows = (await getTopRated(pg, PER_PAGE)).filter(a => a.format === 'TV');
       else if (category === 'movies')       rows = await getMovies(pg, PER_PAGE);
       rawCount = rows.length;
+      hasNextPage = rows.length >= PER_PAGE;
     } else {
-      rows = await searchAnime(null, pg, PER_PAGE);
+      const result = await searchAnime(null, pg, PER_PAGE);
+      rows = result.rows ?? result;
+      hasNextPage = result.hasNextPage ?? (rows.length >= PER_PAGE);
       rawCount = rows.length;
     }
 
-    return { rows, rawCount };
-  }, [debounced, selectedGenres, format, status, category, resolveQueryParams]);
+    // Apply KNN ranking on this page's results if not text searching
+    if (!debounced && rows.length > 0 && recentlyViewed && recentlyViewed.length > 0) {
+      try {
+        rows = rankAnimeByKnn(rows, recentlyViewed);
+      } catch (err) {
+        console.error('[Browse] KNN page ranking failed:', err);
+      }
+    }
 
-  // ─── Initial / fresh search ──────────────────────────────────────
+    return { rows, rawCount, hasNextPage };
+  }, [debounced, selectedGenres, format, status, category, resolveQueryParams, recentlyViewed]);
+
+  // Keep fetchPageRef current — MUST be declared before doSearch and loadMore
+  // so React runs this effect before the search trigger effect.
+  useEffect(() => { fetchPageRef.current = fetchPage; }, [fetchPage]);
+
+  // ─── Initial / fresh search (STABLE — [] deps) ───────────────────
+  // Reads fetchPageRef.current at call-time: always has latest filters.
+  // AbortController cancels any previous in-flight AniList request.
   const doSearch = useCallback(async () => {
-    const gen = ++generationRef.current; // Stale-discard via generation counter
+    // Cancel previous in-flight request (Method #4 — AbortController)
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = new AbortController();
 
-    loadingRef.current = true;
+    // Reset ALL sync state before any async work
+    const gen = ++generationRef.current;
+    loadingRef.current   = true;
+    pageRef.current      = 1;
+    hasMoreRef.current   = true;
+    window.scrollTo({ top: 0, behavior: 'instant' });
     setLoading(true);
-    setPage(1);
-    pageRef.current  = 1;
     setHasMore(true);
-    hasMoreRef.current = true;
     setResults([]);
 
     try {
-      const result = await fetchPage(1);
-      if (gen !== generationRef.current) return; // Stale — a newer search started
-      const { rows, rawCount } = result;
+      const { rows, hasNextPage } = await fetchPageRef.current(1);
+      if (gen !== generationRef.current) return; // newer search started, discard
       setResults(rows);
-      // Use rawCount (pre-ranking) to gate hasMore so local re-ranking
-      // never prematurely kills pagination.
-      const done = rawCount < 24;
-      setHasMore(!done);
-      hasMoreRef.current = !done;
+      hasMoreRef.current = !!hasNextPage;
+      setHasMore(!!hasNextPage);
     } catch (e) {
       if (gen !== generationRef.current) return;
-      console.warn('[Browse] fetch error:', e?.message || String(e));
+      if (e?.name === 'AbortError') return; // intentionally cancelled, not an error
       setResults([]);
-      setHasMore(false);
       hasMoreRef.current = false;
+      setHasMore(false);
     } finally {
       if (gen === generationRef.current) {
-        loadingRef.current = false;
+        loadingRef.current = false; // reset sync flag BEFORE React state update
         setLoading(false);
-        // ══ Post-search viewport check ══════════════════════════════════
-        // IntersectionObserver only fires on STATUS CHANGE (not≥0→1). If results
-        // are fewer than one screenful, the sentinel is ALREADY in view when
-        // the observer attached, so it fires immediately — but loadingRef was
-        // still true and blocked it. After we clear loadingRef above we must
-        // manually check and kick off loadMore if needed.
-        requestAnimationFrame(() => {
-          if (hasMoreRef.current && !loadingRef.current && sentinelRef.current) {
-            const { top } = sentinelRef.current.getBoundingClientRect();
-            if (top <= window.innerHeight + 400) {
-              loadMoreRef.current?.();
-            }
-          }
-        });
       }
     }
-  }, [fetchPage]);
+  }, []); // STABLE — reads fetchPageRef.current at call-time
 
-  // ─── Load next page (infinite scroll) ───────────────────────────
+  // ─── Load next page (STABLE — [] deps) ───────────────────────────
+  // Reads fetchPageRef.current at call-time: always has latest filters.
+  // The loadingRef.current guard (Guard 1) is the ONLY double-fire prevention
+  // needed — the previous 400ms rate-limit was removed because it blocked calls
+  // when AniList responded quickly (< 150ms) and TRIGGER 2 fired within 400ms.
   const loadMore = useCallback(async () => {
+    // Guard: no double-fire, no fire when exhausted
     if (loadingRef.current || !hasMoreRef.current) return;
+
     loadingRef.current = true;
-    const nextPage = pageRef.current + 1;
     setLoading(true);
+    const nextPage = pageRef.current + 1;
+
     try {
-      const result = await fetchPage(nextPage);
-      const { rows, rawCount } = result;
+      const { rows, rawCount, hasNextPage } = await fetchPageRef.current(nextPage);
       if (!rows || rawCount === 0) {
-        setHasMore(false);
         hasMoreRef.current = false;
+        setHasMore(false);
       } else {
         setResults(prev => {
           const seen = new Set(prev.map(a => a.id));
           return [...prev, ...rows.filter(a => a && !seen.has(a.id))];
         });
-        setPage(nextPage);
-        pageRef.current = nextPage;
-        if (rawCount < 24) {
-          setHasMore(false);
-          hasMoreRef.current = false;
-        }
+        pageRef.current = nextPage; // sync — BEFORE clearing loading flag
+        hasMoreRef.current = !!hasNextPage;
+        setHasMore(!!hasNextPage);
       }
     } catch (e) {
       console.warn('[Browse] loadMore error:', e?.message || String(e));
     } finally {
-      loadingRef.current = false;
+      loadingRef.current = false; // reset sync flag BEFORE React state update
       setLoading(false);
     }
-  }, [fetchPage]);
+  }, []); // STABLE — reads fetchPageRef.current at call-time
 
-  // Keep loadMoreRef current so the IntersectionObserver closure always
-  // calls the latest version without needing to reconnect the observer.
+
+  // Set loadMoreRef once at mount — loadMore is stable so this never re-runs
   useEffect(() => { loadMoreRef.current = loadMore; }, [loadMore]);
 
-  // Trigger fresh search when filters / query change
-  useEffect(() => { doSearch(); }, [doSearch]);
-
-  // ─── Scroll direction: show/hide sticky header ───────────────────
+  // ─── Search trigger: explicit deps, no cascading recreations ─────
+  // doSearch is stable ([] deps) so this effect only re-runs when the actual
+  // search parameters change — not when any internal function recreates.
+  // fetchPageRef is updated BEFORE this fires (declared first above).
   useEffect(() => {
-    const handleScroll = () => {
-      const y = window.scrollY;
-      if (y < 10) setShowHeader(true);
-      else if (y < lastScrollY.current) setShowHeader(true);
-      else if (y > lastScrollY.current + 5) setShowHeader(false);
-      lastScrollY.current = y;
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+    doSearch();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debounced, selectedGenres, format, status, category]);
 
-  // ─── IntersectionObserver: jitter-free infinite scroll ──────────
-  // Attached ONCE on mount. Uses loadMoreRef so it always calls the
-  // latest loadMore without needing to disconnect/reconnect the observer
-  // every time fetchPage identity changes (which was causing the gap
-  // where the sentinel was in view but the observer wasn't yet attached).
+  // ─── TRIGGER 1: IntersectionObserver (primary, async, zero layout cost) ──
+  // Observes a zero-height sentinel div at the bottom of the list.
+  // Fires 700px before the sentinel enters the viewport for pre-loading.
+  // Edge-triggered: only fires when sentinel CROSSES the threshold boundary.
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
@@ -307,30 +297,88 @@ export default function Browse() {
           loadMoreRef.current?.();
         }
       },
-      { rootMargin: '400px 0px' } // trigger 400px before sentinel is visible
+      { rootMargin: '600px 0px' } // trigger 600px before sentinel is visible for smooth load
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, []); // ← empty deps: attach once, use refs to stay current
+  }, []); // Attach once — all state read from refs so always current
+
+  // ─── TRIGGER 2: Post-load check (debounced) ───────────────────────
+  // Fires after every page load completes with a 250ms DOM-settle delay.
+  // Threshold is 700px (same as IO + scroll listener) so it catches the case
+  // where new results append and push the sentinel down past the IO zone —
+  // the user is still "near the bottom" of what they can see but the sentinel
+  // is now further away. The 250ms delay + loadingRef guard prevent jitter.
+  useEffect(() => {
+    if (loading || !hasMore) return;
+    const timer = setTimeout(() => {
+      const isNearBottom =
+        window.scrollY + window.innerHeight >=
+        document.documentElement.scrollHeight - 700;
+      if (isNearBottom) loadMoreRef.current?.();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [loading, hasMore]);
+
+  // ─── TRIGGER 3: Scroll listener (rAF-throttled, fast-scroller backup) ──
+  // Throttled with requestAnimationFrame: runs at most once per display frame
+  // (≤16ms / 60fps) instead of firing 5-10x per scroll tick.
+  // Also drives the header show/hide animation.
+  useEffect(() => {
+    let rafId = null;
+    const handleScroll = () => {
+      if (rafId) return; // already scheduled for this frame, skip
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const y = window.scrollY;
+        // Header show/hide — direct DOM mutation, zero React re-renders during scroll
+        if (headerRef.current) {
+          if (y < 10 || y < lastScrollY.current) {
+            headerRef.current.style.transform = 'translateY(0)';
+          } else if (y > lastScrollY.current + 5) {
+            headerRef.current.style.transform = 'translateY(-100%)';
+          }
+        }
+        lastScrollY.current = y;
+        // Infinite scroll backup
+        if (!loadingRef.current && hasMoreRef.current) {
+          const isNearBottom =
+            y + window.innerHeight >=
+            document.documentElement.scrollHeight - 700;
+          if (isNearBottom) loadMoreRef.current?.();
+        }
+      });
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, []); // Attach once — state read from refs so always current
 
   const categoryTitle = category ? CATEGORY_TITLES[category] : null;
-  const personalizedResults = debounced ? results : rankAnimeByKnn(results, recentlyViewed);
+
+  const personalizedResults = results;
 
   return (
     <div className="page" style={{ background: 'var(--bg-primary)', minHeight: '100vh' }}>
 
       {/* ── Sticky Header ── */}
       <div 
+        ref={headerRef}
         className="sticky-header" 
         style={{ 
-          background: 'var(--bg-primary)',
+          background: 'rgba(15, 15, 15, 0.82)',
+          backdropFilter: 'blur(35px) saturate(200%)',
+          WebkitBackdropFilter: 'blur(35px) saturate(200%)',
           position: 'sticky',
           top: 0,
           left: 0,
           right: 0,
           zIndex: 100,
-          transform: showHeader ? 'translateY(0)' : 'translateY(-100%)',
+          transform: 'translateY(0)',
           transition: 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+          willChange: 'transform',
         }}
       >
         <div style={{ padding: '10px 14px 8px', display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -355,6 +403,11 @@ export default function Browse() {
               style={{
                 flex: 1, background: 'none', border: 'none', outline: 'none',
                 color: 'var(--text-primary)', fontSize: 14, fontFamily: 'var(--font-main)',
+                /* Android WebView: allow long-press Paste context menu */
+                WebkitUserSelect: 'text',
+                userSelect: 'text',
+                WebkitTouchCallout: 'default',
+                touchAction: 'auto',
               }}
             />
             {query && (
@@ -416,7 +469,7 @@ export default function Browse() {
                   color: '#fff', cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap',
                 }}
               >
-                {GENRE_EMOJI[g] || ''} {g}
+                {g}
                 <X size={10} style={{ opacity: 0.8 }} />
               </button>
             ))}
@@ -479,7 +532,6 @@ export default function Browse() {
                 key={anime.id}
                 anime={anime}
                 activeGenres={selectedGenres}
-                onClick={() => navigate(`/anime/${anime.id}`)}
               />
             ))}
             {loading && results.length > 0 && (
@@ -489,6 +541,7 @@ export default function Browse() {
             )}
           </>
         )}
+
         {/*
           Sentinel is ALWAYS in the DOM (outside conditionals) so the
           IntersectionObserver can attach to it immediately on mount.
@@ -499,7 +552,7 @@ export default function Browse() {
       </div>
 
       {/* ─── Bottom Sheet Filter Panel ─── */}
-      {showFilter && (
+      {showFilter && createPortal(
         <>
           {/* Backdrop */}
           <div
@@ -626,14 +679,14 @@ export default function Browse() {
                         display: 'flex', alignItems: 'center', gap: 8,
                         padding: '9px 12px', borderRadius: 12, cursor: 'pointer',
                         border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                        background: active ? 'rgba(229,9,20,0.12)' : 'var(--bg-card)',
-                        color: active ? '#fff' : 'var(--text-secondary)',
-                        fontSize: 12, fontWeight: active ? 700 : 500,
+                        background: active ? 'var(--accent-dim)' : 'var(--bg-elevated)',
+                        color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                        fontSize: 13, fontWeight: active ? 600 : 400,
                         textAlign: 'left', transition: 'all 0.18s',
+                        letterSpacing: '-0.1px',
                         WebkitTapHighlightColor: 'transparent',
                       }}
                     >
-                      <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>{GENRE_EMOJI[g] || '🎬'}</span>
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g}</span>
                       {active && (
                         <span style={{
@@ -651,7 +704,7 @@ export default function Browse() {
             </div>
 
             {/* ── Apply Button ── */}
-            <div style={{ padding: '12px 18px', paddingBottom: 'calc(var(--nav-height) + 12px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--border)' }}>
+            <div style={{ padding: '12px 18px', paddingBottom: 'calc(56px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--border)' }}>
               <button
                 onClick={() => setShowFilter(false)}
                 style={{
@@ -667,7 +720,8 @@ export default function Browse() {
               </button>
             </div>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );
@@ -706,7 +760,9 @@ function FilterChip({ label, active, onClick }) {
 }
 
 // ─── Search Result Item ──────────────────────────────────────────
-function SearchResultItem({ anime, onClick, activeGenres = [] }) {
+// Wrapped in memo to prevent redundant re-renders during scroll header changes
+const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
+  const navigate = useNavigate();
   const title  = getTitle(anime);
   const cover  = getCover(anime);
   const score  = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
@@ -715,16 +771,16 @@ function SearchResultItem({ anime, onClick, activeGenres = [] }) {
   const allGenres = getDisplayGenresOrTags(anime, activeGenres);
   // Normalize active filter names for highlight matching (Harem variants)
   const activeSet = new Set(activeGenres.map(g =>
-    (g === 'Female Harem' || g === 'Male Harem') ? 'Harem' : g
+    (g === 'Female Harem' || g === 'Male Harem' || g === 'Harem') ? 'Harem' : g
   ));
 
   return (
     <div
       className="search-result-item"
-      onClick={onClick}
+      onClick={() => navigate(`/anime/${anime.id}`)}
       role="button"
       tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && onClick()}
+      onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
       id={`search-result-${anime.id}`}
       style={{
         display: 'flex', gap: 12, padding: '10px 14px',
@@ -821,7 +877,7 @@ function SearchResultItem({ anime, onClick, activeGenres = [] }) {
       </div>
     </div>
   );
-}
+});
 
 // ─── Skeleton Loader ─────────────────────────────────────────────
 function SkeletonResultItem() {

@@ -53,6 +53,7 @@ export function getUserProfileVector(recentlyViewed) {
   let totalWeight = 0;
 
   recentlyViewed.forEach((item, index) => {
+    if (!item || !item.anime) return;
     // Recency weighting: more recent items have higher weight
     const weight = 1.0 / (index + 1);
     const vec = getFeatureVector(item.anime);
@@ -61,6 +62,11 @@ export function getUserProfileVector(recentlyViewed) {
     }
     totalWeight += weight;
   });
+
+  // If no valid items were found, return neutral profile
+  if (totalWeight === 0) {
+    return new Array(GENRES.length + 2).fill(0.5);
+  }
 
   // Normalize
   for (let i = 0; i < profile.length; i++) {

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Preferences } from '@capacitor/preferences';
 import { App } from '@capacitor/app';
 import { supabase, fetchCloudWatchlist, syncCloudProgress, fetchUserProfile, updateCloudRecentlyViewed, updateCloudSettings } from '../api/supabase';
@@ -35,17 +35,19 @@ export function AppProvider({ children }) {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   // Refs to always hold the LATEST state values without stale closures
-  const watchlistRef = useRef({});
-  const favoritesRef = useRef({});
-  const progressRef  = useRef({});
-  const settingsRef  = useRef(DEFAULT_SETTINGS);
+  const watchlistRef      = useRef({});
+  const favoritesRef      = useRef({});
+  const progressRef       = useRef({});
+  const settingsRef       = useRef(DEFAULT_SETTINGS);
   const recentlyViewedRef = useRef([]);
+  const userRef           = useRef(null);  // stable user access for [] callbacks
 
-  useEffect(() => { watchlistRef.current = watchlist; }, [watchlist]);
-  useEffect(() => { favoritesRef.current = favorites; }, [favorites]);
-  useEffect(() => { progressRef.current  = progress;  }, [progress]);
-  useEffect(() => { settingsRef.current  = settings;  }, [settings]);
+  useEffect(() => { watchlistRef.current      = watchlist;      }, [watchlist]);
+  useEffect(() => { favoritesRef.current      = favorites;      }, [favorites]);
+  useEffect(() => { progressRef.current       = progress;       }, [progress]);
+  useEffect(() => { settingsRef.current       = settings;       }, [settings]);
   useEffect(() => { recentlyViewedRef.current = recentlyViewed; }, [recentlyViewed]);
+  useEffect(() => { userRef.current           = user;           }, [user]);
 
   // ── Toast
   const [toast, setToast] = useState({ msg: '', show: false });
@@ -443,19 +445,23 @@ export function AppProvider({ children }) {
   const syncTimeoutRef = useRef(null);
 
   const triggerDebouncedSync = useCallback(() => {
-    if (!user) return;
+    if (!userRef.current) return;
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     syncTimeoutRef.current = setTimeout(() => {
       console.log('[Supabase Sync] Debounced background sync triggered...');
-      syncWithCloud().catch(e => console.warn('[Supabase Sync] Background sync failed:', e.message));
+      syncWithCloudRef.current?.().catch(e => console.warn('[Supabase Sync] Background sync failed:', e.message));
     }, 12000);
-  }, [user, syncWithCloud]);
+  }, []); // STABLE — reads userRef + syncWithCloudRef at call-time
+
+  // Ref so action callbacks can call triggerDebouncedSync without depending on it
+  const triggerDebouncedSyncRef = useRef(null);
+  useEffect(() => { triggerDebouncedSyncRef.current = triggerDebouncedSync; }, [triggerDebouncedSync]);
 
   const flushSync = useCallback(async () => {
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     console.log('[Supabase Sync] Flushing sync immediately...');
-    await syncWithCloud();
-  }, [syncWithCloud]);
+    await syncWithCloudRef.current?.();
+  }, []); // STABLE — reads syncWithCloudRef.current at call-time
 
   const flushSyncRef = useRef(null);
   useEffect(() => {
@@ -491,8 +497,8 @@ export function AppProvider({ children }) {
   // ── Update Settings Helper ──────────────────────────────────────
   const updateSettings = useCallback((partial) => {
     setSettings(prev => ({ ...prev, ...partial, updatedAt: Date.now() }));
-    triggerDebouncedSync();
-  }, [triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE
 
   // ── Apply theme/accent/compact styles to CSS variables/body when settings change ───
   useEffect(() => {
@@ -515,8 +521,8 @@ export function AppProvider({ children }) {
       [anime.id]: { anime, status, addedAt: Date.now() },
     }));
     showToast('Added to My List ✓');
-    triggerDebouncedSync();
-  }, [showToast, triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE — showToast is [] stable; reads triggerDebouncedSyncRef at call-time
 
   const removeFromWatchlist = useCallback((animeId) => {
     setWatchlist(prev => {
@@ -526,25 +532,26 @@ export function AppProvider({ children }) {
     });
     showToast('Removed from My List');
 
-    if (user) {
+    const u = userRef.current;
+    if (u) {
       supabase
         .from('watchlist')
         .delete()
-        .eq('user_id', user.id)
+        .eq('user_id', u.id)
         .eq('anime_id', String(animeId))
         .then(({ error }) => {
           if (error) console.warn('[Sync error]', error.message);
         });
     }
-  }, [user, showToast]);
+  }, []); // STABLE — reads userRef.current at call-time
 
   const updateWatchlistStatus = useCallback((animeId, status) => {
     setWatchlist(prev => ({
       ...prev,
       [animeId]: { ...prev[animeId], status },
     }));
-    triggerDebouncedSync();
-  }, [triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE
 
   const isInWatchlist = useCallback((animeId) => Boolean(watchlist[animeId]), [watchlist]);
 
@@ -564,14 +571,15 @@ export function AppProvider({ children }) {
       return next;
     });
 
-    if (user) {
+    const u = userRef.current;
+    if (u) {
       const status = watchlistRef.current[animeId]?.status || 'temp_watching';
       const ep = progressRef.current[animeId]?.episode || null;
       const ts = progressRef.current[animeId]?.timestamp || null;
       supabase
         .from('watchlist')
         .upsert({
-          user_id: user.id,
+          user_id: u.id,
           anime_id: String(animeId),
           status: status,
           favorite: isFav,
@@ -587,23 +595,23 @@ export function AppProvider({ children }) {
         });
     }
 
-    triggerDebouncedSync();
-  }, [user, showToast, triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE — reads userRef + watchlistRef + triggerDebouncedSyncRef at call-time
 
   const isFavorite = useCallback((animeId) => Boolean(favorites[animeId]), [favorites]);
 
   const setEpisodeProgress = useCallback((animeId, episode) => {
     const timestamp = Date.now();
     setProgress(prev => ({ ...prev, [animeId]: { episode, timestamp } }));
-    triggerDebouncedSync();
-  }, [triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE
 
   const getEpisodeProgress = useCallback((animeId) => progress[animeId] || null, [progress]);
 
   const addToRecentlyViewed = useCallback((anime, episode) => {
     setRecentlyViewed(prev => {
       const filtered = prev.filter(item => item.anime.id !== anime.id);
-      
+
       // Keep only essential fields to prevent Supabase storage bloat
       const minimizedAnime = {
         id: anime.id,
@@ -616,26 +624,46 @@ export function AppProvider({ children }) {
 
       return [{ anime: minimizedAnime, episode, timestamp: Date.now() }, ...filtered].slice(0, 15);
     });
-    triggerDebouncedSync();
-  }, [triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE
 
   const removeFromRecentlyViewed = useCallback((animeId) => {
     setRecentlyViewed(prev => prev.filter(item => item.anime.id !== animeId));
     showToast('Removed from Continue Watching');
-    triggerDebouncedSync();
-  }, [showToast, triggerDebouncedSync]);
+    triggerDebouncedSyncRef.current?.();
+  }, []); // STABLE
+
+  // ── Memoize context value ───────────────────────────────────────────────
+  // PRODUCTION FIX: toast is intentionally EXCLUDED from the context value.
+  // Including toast caused an app-wide re-render of all useApp() consumers
+  // every 2.5 seconds (show + hide cycle). Toast is rendered directly inside
+  // AppProvider without going through context. Only showToast (stable []) is
+  // exposed so consumers can trigger it without subscribing to toast state.
+  //
+  // All action callbacks (addToWatchlist, toggleFavorite, etc.) are now []  
+  // deps (stable, created once at mount) thanks to userRef and
+  // triggerDebouncedSyncRef. On login, only syncWithCloud (which genuinely
+  // needs user) updates in context — causing at most 1 Browse re-render.
+  const contextValue = useMemo(() => ({
+    watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
+    favorites, toggleFavorite, isFavorite,
+    progress, setEpisodeProgress, getEpisodeProgress,
+    recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
+    showToast, loaded, user, syncWithCloud, flushSync,
+    settings, updateSettings
+  }), [
+    watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
+    favorites, toggleFavorite, isFavorite,
+    progress, setEpisodeProgress, getEpisodeProgress,
+    recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
+    showToast, loaded, user, syncWithCloud, flushSync,
+    settings, updateSettings
+  ]);
 
   return (
-    <AppContext.Provider value={{
-      watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
-      favorites, toggleFavorite, isFavorite,
-      progress, setEpisodeProgress, getEpisodeProgress,
-      recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
-      showToast, toast, loaded, user, syncWithCloud, flushSync,
-      settings, updateSettings
-    }}>
+    <AppContext.Provider value={contextValue}>
       {children}
-      {/* Global Toast */}
+      {/* Global Toast — rendered directly (not via context) to avoid app-wide re-renders */}
       <div className={`toast ${toast.show ? 'show' : ''}`}>{toast.msg}</div>
     </AppContext.Provider>
   );

@@ -76,7 +76,7 @@ public class EmbedScraperPlugin extends Plugin {
                 // Adding a new View to the hierarchy can cause Android to briefly reset
                 // system bar colors and visibility — this prevents the nav bar from turning white.
                 android.view.Window window = getActivity().getWindow();
-                window.setNavigationBarColor(android.graphics.Color.BLACK);
+                window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     window.setNavigationBarContrastEnforced(false);
                 }
@@ -210,26 +210,38 @@ public class EmbedScraperPlugin extends Plugin {
 
     @PluginMethod
     public void setImmersiveMode(final PluginCall call) {
+        final boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", true));
         getActivity().runOnUiThread(() -> {
+            // Update the shared state flag so onWindowFocusChanged respects the right mode
+            MainActivity.isImmersiveMode = enabled;
+
             Window window = getActivity().getWindow();
             View decorView = window.getDecorView();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                WindowInsetsController controller = window.getInsetsController();
-                if (controller != null) {
-                    controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                    controller.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+
+            if (enabled) {
+                // Enter fullscreen for video: hide status bar + navigation bar
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    WindowInsetsController controller = window.getInsetsController();
+                    if (controller != null) {
+                        controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                        controller.setSystemBarsBehavior(
+                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                        );
+                    }
+                } else {
+                    decorView.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
                     );
                 }
             } else {
-                decorView.setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_FULLSCREEN
-                );
+                // Exit fullscreen: restore nav bar visibility via applyFullscreen()
+                // This ensures the nav bar is always restored properly including on older APIs
+                ((MainActivity) getActivity()).applyFullscreen();
             }
             call.resolve();
         });

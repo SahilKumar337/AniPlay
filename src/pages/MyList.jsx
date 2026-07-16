@@ -54,7 +54,7 @@ export default function MyList() {
           <div className="empty-state">
             <Bookmark size={48} className="empty-icon" />
             <p className="empty-title">No anime here</p>
-            <p className="empty-sub">Tap the <strong>🔖 bookmark icon</strong> on any anime page to add it here</p>
+            <p className="empty-sub">Tap the bookmark icon on any anime page to add it here</p>
             <button
               className="btn btn-primary"
               style={{ marginTop: 12 }}

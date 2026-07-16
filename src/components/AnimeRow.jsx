@@ -36,6 +36,7 @@ export default function AnimeRow({
               height={cardHeight}
               rank={showRank ? i + 1 : null}
               epLabel={showEpBadge && anime._latestEp ? `EP ${anime._latestEp}` : null}
+              index={i}
             />
           ))}
         </div>

@@ -53,12 +53,41 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     }
   }
 
-  // Collect all title variants
-  const titles = [
+  // Collect all title variants (romaji, english, native) plus useful synonyms
+  const isMini = anime.format === 'TV_SHORT' ||
+    /\bmini\b/i.test(anime.title?.english || '') ||
+    /\bmini\b/i.test(anime.title?.romaji || '') ||
+    (anime.synonyms || []).some(s => /\bmini\b/i.test(s));
+
+  const baseTitles = [
     anime.title?.romaji,
     anime.title?.english,
     anime.title?.native,
   ].filter(Boolean).filter((t, i, arr) => arr.indexOf(t) === i);
+
+  // Include English-looking synonyms (no CJK characters, reasonable length)
+  // These help cross-site matching where a site may use an alternate English/romaji title
+  const usefulSynonyms = (anime.synonyms || [])
+    .filter(s =>
+      s &&
+      s.length >= 4 &&
+      s.length <= 100 &&
+      !/[\u3000-\u9fff\uff00-\uffef]/.test(s) // no CJK characters
+    )
+    .slice(0, 3); // cap at 3 synonyms to avoid too many search queries
+
+  // Full list: romaji first (best for Japanese-named sites), then english, then synonyms
+  const allTitles = [
+    anime.title?.romaji,
+    anime.title?.english,
+    ...usefulSynonyms,
+  ].filter(Boolean).filter((t, i, arr) => arr.indexOf(t) === i);
+
+  // For mini-series: also try searching with " Mini" appended so scrapers can
+  // match entries like "Anime Title Mini" or "Anime Title (Mini)" on streaming sites
+  const titles = isMini
+    ? [...baseTitles, ...baseTitles.map(t => `${t} Mini`)].filter((t, i, arr) => arr.indexOf(t) === i)
+    : baseTitles;
 
   if (titles.length === 0) throw new Error('No anime title available');
 
@@ -102,64 +131,39 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     }
   };
 
-  // Define Neko execution
-  const nekoPromise = (async () => {
-    for (const title of titles) {
+  // Each scraper tries all title variants in PARALLEL — first success wins instantly.
+  // allTitles is passed to scrapers so they can internally search with ALL naming systems
+  // (e.g. both romaji and English names) and use cross-language trigram matching.
+  const tryAllTitles = async (scraperFn, scraperName) => {
+    const attempts = titles.map(async (title) => {
       try {
-        console.log(`[ClientEngine] AniNeko trying: "${title}" ep ${episode}`);
-        const data = await scrapeAniNeko(title, episode, isMovie);
-        if (data?.servers?.length) {
-          handleScraperResult(data);
-          return data;
-        }
+        console.log(`[ClientEngine] ${scraperName} trying: "${title}" ep ${episode}`);
+        const data = await scraperFn(title, episode, isMovie, anime.id, allTitles);
+        if (data?.servers?.length) return data;
+        throw new Error('no servers');
       } catch (e) {
-        console.warn(`[ClientEngine] AniNeko failed for "${title}": ${e.message}`);
-        errors.push(`Neko[${title.slice(0, 30)}]: ${e.message}`);
+        console.warn(`[ClientEngine] ${scraperName} failed for "${title}": ${e.message}`);
+        errors.push(`${scraperName}[${title.slice(0, 30)}]: ${e.message}`);
+        throw e;
       }
+    });
+    try {
+      const result = await Promise.any(attempts);
+      handleScraperResult(result);
+      return result;
+    } catch {
+      return null;
     }
-    return null;
-  })();
+  };
 
-  // Define Waves execution
-  const wavesPromise = (async () => {
-    for (const title of titles) {
-      try {
-        console.log(`[ClientEngine] AniWaves trying: "${title}" ep ${episode}`);
-        const data = await scrapeAniWaves(title, episode, isMovie);
-        if (data?.servers?.length) {
-          handleScraperResult(data);
-          return data;
-        }
-      } catch (e) {
-        console.warn(`[ClientEngine] AniWaves failed for "${title}": ${e.message}`);
-        errors.push(`Waves[${title.slice(0, 30)}]: ${e.message}`);
-      }
-    }
-    return null;
-  })();
-
-  // Define AniKoto execution
-  const anikotoPromise = (async () => {
-    for (const title of titles) {
-      try {
-        console.log(`[ClientEngine] AniKoto trying: "${title}" ep ${episode}`);
-        const data = await scrapeAniKoto(title, episode, isMovie);
-        if (data?.servers?.length) {
-          handleScraperResult(data);
-          return data;
-        }
-      } catch (e) {
-        console.warn(`[ClientEngine] AniKoto failed for "${title}": ${e.message}`);
-        errors.push(`AniKoto[${title.slice(0, 30)}]: ${e.message}`);
-      }
-    }
-    return null;
-  })();
+  const nekoPromise    = tryAllTitles(scrapeAniNeko,   'AniNeko');
+  const wavesPromise   = tryAllTitles(scrapeAniWaves,  'AniWaves');
+  const anikotoPromise = tryAllTitles(scrapeAniKoto,   'AniKoto');
 
   const results = await Promise.allSettled([
-    runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise, 12000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(anikotoPromise, 12000, 'AniKoto').catch(e => { console.warn(e.message); return null; })
+    runWithTimeout(nekoPromise,    18000, 'AniNeko').catch(e  => { console.warn(e.message); return null; }),
+    runWithTimeout(wavesPromise,   18000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+    runWithTimeout(anikotoPromise, 18000, 'AniKoto').catch(e  => { console.warn(e.message); return null; })
   ]);
 
   if (combinedServers.length === 0) {

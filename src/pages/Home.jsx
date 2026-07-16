@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Bell, Play, X } from 'lucide-react';
+import { Search, Bell, Play, X, WifiOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   getTrending, getTopRated,
@@ -29,6 +29,15 @@ export default function Home() {
   const [ready,          setReady]          = useState(false);
   const [apiError,       setApiError]        = useState(null);
   const [retryCount,     setRetryCount]      = useState(0);
+  const [loadingSections, setLoadingSections] = useState({
+    trending: true,
+    airing: true,
+    newReleases: true,
+    popularSeason: true,
+    topRated: true,
+    movies: true,
+    schedule: true,
+  });
 
   useEffect(() => {
     const handleScroll = () => {
@@ -45,12 +54,16 @@ export default function Home() {
   useEffect(() => {
     let live = true;
 
-    async function load(fn, set, ...args) {
+    async function load(fn, set, key, ...args) {
       try {
         const d = await fn(...args);
         if (live && d?.length) set(d.filter(a => getCover(a)));
       } catch (e) {
-        console.warn('[Home] section failed:', e.message);
+        console.warn(`[Home] ${key} section failed:`, e.message);
+      } finally {
+        if (live && key) {
+          setLoadingSections(prev => ({ ...prev, [key]: false }));
+        }
       }
     }
 
@@ -70,25 +83,28 @@ export default function Home() {
         } else if (live) {
           setApiError(e.message || 'Failed to load anime data. Check your internet connection.');
         }
+      } finally {
+        if (live) {
+          setLoadingSections(prev => ({ ...prev, trending: false }));
+          setReady(true);
+        }
       }
-      // Always mark ready so the page renders (even if empty or errored)
-      if (live) setReady(true);
 
       // Load ALL sections simultaneously — sessionStorage cache handles AniList
       // rate limits so the 500ms pause is no longer needed. Each setter is
       // independent so any section that finishes first renders immediately.
       await Promise.allSettled([
-        load(getAiring,            setAiring,        1, 20),
-        load(getNewReleases,       setNewReleases,   1, 20),
-        load(getPopularThisSeason, setPopularSeason, 1, 15),
-        load(getTopRated,          setTopRated,      1, 15),
-        load(getMovies,            setMovies,        1, 12),
+        load(getAiring,            setAiring,        'airing',        1, 20),
+        load(getNewReleases,       setNewReleases,   'newReleases',   1, 20),
+        load(getPopularThisSeason, setPopularSeason, 'popularSeason', 1, 15),
+        load(getTopRated,          setTopRated,      'topRated',      1, 15),
+        load(getMovies,            setMovies,        'movies',        1, 12),
         load(async () => {
           const sched = await getSchedule(1, 30);
           return sched
             .filter(s => getCover(s.media))
             .map(s => ({ ...s.media, _schedEp: s.episode, _schedAt: s.airingAt }));
-        }, setWeekSchedule),
+        }, setWeekSchedule, 'schedule'),
       ]);
     })();
 
@@ -101,20 +117,26 @@ export default function Home() {
   if (apiError && trending.length === 0) {
     return (
       <div className="page" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', padding: '0 24px', textAlign: 'center' }}>
-        <div style={{ fontSize: 52, marginBottom: 16 }}>📡</div>
-        <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 10, fontFamily: 'var(--font-brand)' }}>Service Unavailable</h2>
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65, maxWidth: 300, marginBottom: 28 }}>
+        <div style={{
+          width: 64, height: 64, borderRadius: 20, background: 'var(--bg-elevated)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18,
+          border: '0.5px solid var(--border)',
+        }}>
+          <WifiOff size={28} color="var(--text-muted)" />
+        </div>
+        <h2 style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.4px', color: 'var(--text-primary)', marginBottom: 10 }}>Service Unavailable</h2>
+        <p style={{ fontSize: 14, color: 'var(--text-tertiary)', lineHeight: 1.6, maxWidth: 300, marginBottom: 28, letterSpacing: '-0.1px' }}>
           {apiError}
         </p>
         <button
           onClick={() => { setReady(false); setRetryCount(c => c + 1); }}
           style={{
-            padding: '12px 32px', borderRadius: 12, border: 'none',
-            background: 'linear-gradient(135deg, #6366f1, #a78bfa)',
-            color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer'
+            padding: '13px 32px', borderRadius: 'var(--radius-md)', border: 'none',
+            background: 'var(--accent)',
+            color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', letterSpacing: '-0.2px',
           }}
         >
-          🔄 Retry
+          Try Again
         </button>
       </div>
     );
@@ -139,19 +161,18 @@ export default function Home() {
         padding: '12px 16px 12px',
         paddingTop: 'max(32px, env(safe-area-inset-top))',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: scrolled ? 'rgba(15, 15, 15, 0.75)' : 'rgba(15, 15, 15, 0)',
-        backdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
-        WebkitBackdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
+        background: scrolled ? 'rgba(15, 15, 15, 0.82)' : 'rgba(10, 10, 10, 0)',
+        backdropFilter: scrolled ? 'blur(35px) saturate(200%)' : 'blur(0px) saturate(100%)',
+        WebkitBackdropFilter: scrolled ? 'blur(35px) saturate(200%)' : 'blur(0px) saturate(100%)',
         borderBottom: scrolled ? '1px solid var(--border)' : '1px solid rgba(255, 255, 255, 0)',
         transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
         pointerEvents: 'none',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'all', cursor: 'pointer', opacity: scrolled ? 1 : 0.9, transition: 'opacity 0.2s' }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
           <div style={{
-            width: 28, height: 28, background: 'linear-gradient(135deg, #818cf8, #a78bfa)', borderRadius: 8,
+            width: 28, height: 28, background: 'var(--accent)', borderRadius: 8,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 12, fontWeight: 900, fontFamily: 'var(--font-brand)', color: '#fff', paddingLeft: 1
-          }}>▶</div>
+          }}><Play size={13} color="#fff" fill="#fff" /></div>
           <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', letterSpacing: -0.5 }}>AniPlay</span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
@@ -185,7 +206,11 @@ export default function Home() {
                 const title = getTitle(item.anime);
                 const cover = getCover(item.anime);
                 return (
-                  <div key={idx} style={{ flexShrink: 0 }}>
+                  <div
+                    key={idx}
+                    className="card-entrance"
+                    style={{ flexShrink: 0, animationDelay: `${idx * 40}ms` }}
+                  >
                     {/* Card with full anime-card hover effects */}
                     <div
                       className="anime-card"
@@ -253,7 +278,9 @@ export default function Home() {
         )}
 
         {/* ── 2. New Episode Releases (aired last 2 weeks, real schedule data) */}
-        {personalizedNewReleases.length > 0 && (
+        {loadingSections.newReleases ? (
+          <RowSkeleton title="New Episode Releases" subtitle="Last 2 weeks" cardWidth={120} cardHeight={160} />
+        ) : personalizedNewReleases.length > 0 ? (
           <AnimeRow
             title="New Episode Releases"
             subtitle="Last 2 weeks"
@@ -263,10 +290,12 @@ export default function Home() {
             showEpBadge
             onSeeAll={() => navigate('/browse?category=new-releases')}
           />
-        )}
+        ) : null}
 
         {/* ── 3. Top Airing (currently releasing, ranked by trending score) */}
-        {personalizedAiring.length > 0 && (
+        {loadingSections.airing ? (
+          <RowSkeleton title="Top Airing" subtitle="Trending now" cardWidth={120} cardHeight={160} />
+        ) : personalizedAiring.length > 0 ? (
           <AnimeRow
             title="Top Airing"
             subtitle="Trending now"
@@ -275,10 +304,12 @@ export default function Home() {
             cardHeight={160}
             onSeeAll={() => navigate('/browse?category=airing')}
           />
-        )}
+        ) : null}
 
-        {/* ── 4. This Week's Schedule teaser ──────────────────── */}
-        {weekSchedule.length > 0 && (
+        {/* ── 4. Airing This Week schedule teaser ── */}
+        {loadingSections.schedule ? (
+          <RowSkeleton title="Airing This Week" subtitle="Next 7 days" cardWidth={100} cardHeight={140} count={6} />
+        ) : weekSchedule.length > 0 ? (
           <section className="home-section">
             <div className="section-header">
               <div>
@@ -300,7 +331,8 @@ export default function Home() {
                 return (
                   <div
                     key={idx}
-                    style={{ width: 100, flexShrink: 0 }}
+                    className="card-entrance"
+                    style={{ width: 100, flexShrink: 0, animationDelay: `${idx * 40}ms` }}
                   >
                     <div
                       className="anime-card"
@@ -354,10 +386,17 @@ export default function Home() {
               })}
             </div>
           </section>
-        )}
+        ) : null}
 
         {/* ── 5. Popular This Season (this season ranked by trending) */}
-        {personalizedPopularSeason.length > 0 && (
+        {loadingSections.popularSeason ? (
+          <RowSkeleton
+            title="Popular This Season"
+            subtitle={(() => { const { season, year } = getCurrentSeason(); return `${season.charAt(0) + season.slice(1).toLowerCase()} ${year}`; })()}
+            cardWidth={120}
+            cardHeight={160}
+          />
+        ) : personalizedPopularSeason.length > 0 ? (
           <AnimeRow
             title="Popular This Season"
             subtitle={(() => { const { season, year } = getCurrentSeason(); return `${season.charAt(0) + season.slice(1).toLowerCase()} ${year}`; })()}
@@ -366,10 +405,12 @@ export default function Home() {
             cardHeight={160}
             onSeeAll={() => navigate('/browse?category=seasonal')}
           />
-        )}
+        ) : null}
 
         {/* ── 6. Top Trending (global trending across all time) ── */}
-        {personalizedTrending.length > 0 && (
+        {loadingSections.trending ? (
+          <RowSkeleton title="Top Trending" subtitle="All time" cardWidth={130} cardHeight={180} />
+        ) : personalizedTrending.length > 0 ? (
           <AnimeRow
             title="Top Trending"
             subtitle="All time"
@@ -379,10 +420,12 @@ export default function Home() {
             showRank
             onSeeAll={() => navigate('/browse?category=trending')}
           />
-        )}
+        ) : null}
 
         {/* ── 7. Top TV Series (highest rated finished series) ── */}
-        {personalizedTopRated.length > 0 && (
+        {loadingSections.topRated ? (
+          <RowSkeleton title="Top TV Series" subtitle="Highest rated" cardWidth={120} cardHeight={160} />
+        ) : personalizedTopRated.length > 0 ? (
           <AnimeRow
             title="Top TV Series"
             subtitle="Highest rated"
@@ -391,10 +434,12 @@ export default function Home() {
             cardHeight={160}
             onSeeAll={() => navigate('/browse?category=top-rated')}
           />
-        )}
+        ) : null}
 
         {/* ── 8. Top Movies ───────────────────────────────────── */}
-        {personalizedMovies.length > 0 && (
+        {loadingSections.movies ? (
+          <RowSkeleton title="Top Movies" subtitle="Films & specials" cardWidth={120} cardHeight={160} />
+        ) : personalizedMovies.length > 0 ? (
           <AnimeRow
             title="Top Movies"
             subtitle="Films & specials"
@@ -403,11 +448,42 @@ export default function Home() {
             cardHeight={160}
             onSeeAll={() => navigate('/browse?category=movies')}
           />
-        )}
+        ) : null}
 
         <div style={{ height: 16 }} />
       </div>
     </div>
+  );
+}
+
+function RowSkeleton({ title, subtitle, count = 5, cardWidth = 120, cardHeight = 160 }) {
+  return (
+    <section className="home-section" style={{ position: 'relative' }}>
+      <div className="section-header">
+        <div>
+          <h2 className="section-title" style={{ opacity: 0.8 }}>{title}</h2>
+          {subtitle && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginTop: 1, opacity: 0.6 }}>{subtitle}</span>
+          )}
+        </div>
+      </div>
+      <div style={{ position: 'relative', width: '100%' }}>
+        <div className="h-scroll" style={{ overflowX: 'hidden' }}>
+          {Array.from({ length: count }).map((_, i) => (
+            <div
+              key={i}
+              className="skeleton"
+              style={{
+                width: cardWidth,
+                height: cardHeight,
+                borderRadius: 12,
+                flexShrink: 0,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 

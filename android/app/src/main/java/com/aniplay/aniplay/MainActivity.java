@@ -18,8 +18,10 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.JSObject;
+import android.content.pm.ActivityInfo;
 
 public class MainActivity extends BridgeActivity {
+    public static boolean isImmersiveMode = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,7 +55,7 @@ public class MainActivity extends BridgeActivity {
                 }
             });
 
-            // Only apply bottom inset (for gesture nav bar) when keyboard is hidden.
+            // Adjust WebView bounds based on whether immersive mode is active
             ViewCompat.setOnApplyWindowInsetsListener(getBridge().getWebView(), (v, insets) -> {
                 Insets navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars());
                 Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
@@ -61,9 +63,17 @@ public class MainActivity extends BridgeActivity {
 
                 android.view.ViewGroup.MarginLayoutParams lp = (android.view.ViewGroup.MarginLayoutParams) v.getLayoutParams();
                 if (lp != null) {
-                    lp.topMargin    = 0;            // No top margin — status bar is hidden
-                    lp.bottomMargin = isKeyboardVisible ? 0 : navInsets.bottom; // Flush WebView to keyboard when open
+                    lp.topMargin    = 0; // Full edge-to-edge on top
+                    lp.bottomMargin = 0; // Full edge-to-edge on bottom — CSS --android-safe-bottom pads content
                     v.setLayoutParams(lp);
+                }
+                // Inject the navigation bar height as a CSS variable so in-app content can pad itself
+                int navBarHeightPx = isImmersiveMode ? 0 : navInsets.bottom;
+                float density = getResources().getDisplayMetrics().density;
+                int navBarHeightDp = (int) (navBarHeightPx / density);
+                final String js = "document.documentElement.style.setProperty('--android-safe-bottom', '" + navBarHeightDp + "px')";
+                if (getBridge() != null && getBridge().getWebView() != null) {
+                    getBridge().getWebView().post(() -> getBridge().getWebView().evaluateJavascript(js, null));
                 }
                 return insets;
             });
@@ -83,38 +93,15 @@ public class MainActivity extends BridgeActivity {
         // Set window background to solid black
         window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK));
 
-        // Draw edge-to-edge behind system bars
+        // Draw edge-to-edge behind system bars — both bars are transparent so WebView content bleeds through
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
-        window.setNavigationBarColor(android.graphics.Color.BLACK);
+        // TRANSPARENT: app content (translucent glass navbar) shows through the system nav bar
+        window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // API 30+: modern WindowInsetsController approach
-            window.setDecorFitsSystemWindows(false);
-            android.view.WindowInsetsController insetsController = window.getInsetsController();
-            if (insetsController != null) {
-                // Hide BOTH status bar (time, battery) AND navigation bar
-                insetsController.hide(
-                    android.view.WindowInsets.Type.statusBars() |
-                    android.view.WindowInsets.Type.navigationBars()
-                );
-                // Swipe-from-edges gesture temporarily shows bars, then auto-hides
-                insetsController.setSystemBarsBehavior(
-                    android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                );
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            // API 21–29: legacy flags for fullscreen + immersive
-            window.getDecorView().setSystemUiVisibility(
-                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN          // hide status bar
-                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN  // draw behind status bar
-                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY   // auto-hide after swipe
-            );
-        }
+        applyFullscreen();
     }
 
     @Override
@@ -126,27 +113,63 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    private void applyFullscreen() {
+    public void applyFullscreen() {
         Window window = getWindow();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.view.WindowInsetsController ctrl = window.getInsetsController();
-            if (ctrl != null) {
-                ctrl.hide(
-                    android.view.WindowInsets.Type.statusBars() |
-                    android.view.WindowInsets.Type.navigationBars()
-                );
-                ctrl.setSystemBarsBehavior(
-                    android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (isImmersiveMode) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.setDecorFitsSystemWindows(false);
+                android.view.WindowInsetsController ctrl = window.getInsetsController();
+                if (ctrl != null) {
+                    ctrl.hide(
+                        android.view.WindowInsets.Type.statusBars() |
+                        android.view.WindowInsets.Type.navigationBars()
+                    );
+                    ctrl.setSystemBarsBehavior(
+                        android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    );
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                window.getDecorView().setSystemUiVisibility(
+                    android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 );
             }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            window.getDecorView().setSystemUiVisibility(
-                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            );
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.setDecorFitsSystemWindows(false);
+                android.view.WindowInsetsController ctrl = window.getInsetsController();
+                if (ctrl != null) {
+                    // Hide only status bars (immersive top), show navigation bars (visible bottom)
+                    ctrl.hide(android.view.WindowInsets.Type.statusBars());
+                    ctrl.show(android.view.WindowInsets.Type.navigationBars());
+                    // Light text/icons on dark system bars (0 means dark background appearance)
+                    ctrl.setSystemBarsAppearance(0, android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+                    ctrl.setSystemBarsAppearance(0, android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                window.getDecorView().setSystemUiVisibility(
+                    android.view.View.SYSTEM_UI_FLAG_FULLSCREEN // Hide status bar
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                );
+            }
+        }
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().requestApplyInsets();
+        }
+    }
+
+    @Override
+    public void setRequestedOrientation(int requestedOrientation) {
+        if (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {
+            // Map standard landscape lock to sensor-landscape (allows 180 degree rotation standard/reverse landscape)
+            super.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        } else {
+            super.setRequestedOrientation(requestedOrientation);
         }
     }
 
@@ -188,14 +211,5 @@ public class MainActivity extends BridgeActivity {
         // ── Native Feel Optimizations ──────────────────────────────────
         // Disable scroll overscroll bounce/glow effect
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
-
-        // Disable native Android long-press selection menu/handlers
-        webView.setOnLongClickListener(new android.view.View.OnLongClickListener() {
-            @Override
-            public boolean onLongClick(android.view.View v) {
-                return true; // Consume the long-press event
-            }
-        });
-        webView.setLongClickable(false);
     }
 }

@@ -256,7 +256,6 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
     'Harem':        'Harem',
     'Haram':        'Harem',
     'haram':        'Harem',
-    'Female Harem': 'Female Harem',
     'Historical':   'Historical',
     'Isekai':       'Isekai',
     'Josei':        'Josei',
@@ -295,22 +294,64 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
     mediaParams.push('genre_in:$g');
     vars.g = gList;
   }
-  if (tList.length) {
-    queryParams.push('$t:[String]');
-    mediaParams.push('tag_in:$t');
-    vars.t = tList;
-  }
+  const hasHarem = tList.includes('Female Harem') && tList.includes('Male Harem');
 
-  const q = `query(${queryParams.join(',')}){
-    Page(page:$p,perPage:$n){
-      media(${mediaParams.join(',')}){${MEDIA_FIELDS}}
+  let q = '';
+  if (hasHarem) {
+    const tList1 = tList.filter(t => t !== 'Male Harem');
+    const tList2 = tList.filter(t => t !== 'Female Harem');
+
+    queryParams.push('$t1:[String]', '$t2:[String]');
+    vars.t1 = tList1;
+    vars.t2 = tList2;
+
+    q = `query(${queryParams.join(',')}){
+      female: Page(page:$p,perPage:$n){
+        pageInfo { hasNextPage }
+        media(tag_in:$t1,${mediaParams.join(',')}){${MEDIA_FIELDS}}
+      }
+      male: Page(page:$p,perPage:$n){
+        pageInfo { hasNextPage }
+        media(tag_in:$t2,${mediaParams.join(',')}){${MEDIA_FIELDS}}
+      }
+    }`;
+  } else {
+    if (tList.length) {
+      queryParams.push('$t:[String]');
+      mediaParams.push('tag_in:$t');
+      vars.t = tList;
     }
-  }`;
+    q = `query(${queryParams.join(',')}){
+      Page(page:$p,perPage:$n){
+        pageInfo { hasNextPage }
+        media(${mediaParams.join(',')}){${MEDIA_FIELDS}}
+      }
+    }`;
+  }
 
   // Use LIVE TTL for text searches (user expects fresh results), NORMAL for filters-only
   const ttl = search ? TTL.NORMAL : TTL.STABLE;
   const d = await gql(q, vars, ttl);
-  return d?.Page?.media || [];
+
+  if (hasHarem) {
+    const femaleMedia = d?.female?.media || [];
+    const maleMedia = d?.male?.media || [];
+    const merged = [...femaleMedia, ...maleMedia];
+    const seen = new Set();
+    const unique = [];
+    for (const m of merged) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        unique.push(m);
+      }
+    }
+    const hasNextPage = !!(d?.female?.pageInfo?.hasNextPage || d?.male?.pageInfo?.hasNextPage);
+    return { rows: unique, hasNextPage };
+  } else {
+    const rows = d?.Page?.media || [];
+    const hasNextPage = d?.Page?.pageInfo?.hasNextPage ?? (rows.length >= perPage);
+    return { rows, hasNextPage };
+  }
 }
 
 /* ── Anime Detail ──────────────────────────────────────────────────── */
@@ -392,28 +433,34 @@ export const getDisplayGenresOrTags = (a, pinnedTags = []) => {
   if (!a) return [];
   const genres = [...(a.genres || [])];
   
+  // Rank >= 70: AniList's own standard for confident tags (70% of voters agree)
+  // Anything below 70 is too uncertain to display to users
   let tags = (a.tags || [])
-    .filter(t => !t.isMediaSpoiler && t.rank >= 60)
+    .filter(t => !t.isMediaSpoiler && t.rank >= 70)
     .map(t => {
       const name = t.name;
       if (name === 'Female Harem' || name === 'Male Harem') return 'Harem';
       return name;
     });
 
-  const blocklist = new Set(['Nudity', 'Heterosexual', 'Male Protagonist', 'Primarily Female Cast', 'Kuudere', 'Tsundere']);
+  const blocklist = new Set(['Nudity', 'Heterosexual', 'Male Protagonist', 'Female Protagonist', 'Primarily Female Cast', 'Primarily Male Cast', 'Kuudere', 'Tsundere', 'Yandere']);
   tags = tags.filter(t => !blocklist.has(t));
 
-  // Ensure pinned filter tags always appear even if rank < 60 or not in genres
+  // Ensure pinned filter tags always appear — but only if the anime GENUINELY
+  // has that tag at rank >= 50 (prevents low-confidence tags from being forced on)
   const pinnedNormalized = (pinnedTags || []).map(p =>
     (p === 'Female Harem' || p === 'Male Harem') ? 'Harem' : p
   );
   for (const p of pinnedNormalized) {
     if (!genres.includes(p) && !tags.includes(p)) {
-      // Check if the anime actually has the tag at any rank
+      // Only pin if the tag exists at rank >= 50 (confident enough to surface)
       const hasTag = (a.tags || []).some(t =>
-        t.name === p || (p === 'Harem' && (t.name === 'Female Harem' || t.name === 'Male Harem'))
+        t.rank >= 50 && (
+          t.name === p ||
+          (p === 'Harem' && (t.name === 'Female Harem' || t.name === 'Male Harem'))
+        )
       );
-      if (hasTag) tags.unshift(p); // Pin to front of tag list
+      if (hasTag) tags.unshift(p);
     }
   }
 

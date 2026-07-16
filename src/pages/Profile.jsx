@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   User, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock,
   Save, Check, X, AlertTriangle, Cloud, CloudLightning,
@@ -34,7 +35,7 @@ const renderAvatarContent = (val, name) => {
     return <img src={val} alt="Avatar" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />;
   }
   const initial = name ? name.charAt(0).toUpperCase() : "?";
-  return <span style={{ fontWeight: 800, fontSize: 36, color: "#fff" }}>{initial}</span>;
+  return <span style={{ fontWeight: 800, fontSize: "clamp(20px, 38%, 36px)", color: "#fff" }}>{initial}</span>;
 };
 
 /* ── Image Resizer & Compressor ────────────────────────────────────────── */
@@ -583,21 +584,21 @@ function SettingsPanel({ onBack }) {
 
 /* ── Modal ───────────────────────────────────────────────────────────────── */
 function Modal({ title, children, onClose }) {
-  return (
+  return createPortal(
     <div style={{
       position: "fixed", inset: 0, zIndex: 99999,
       background: "rgba(0,0,0,0.82)", backdropFilter: "blur(6px)",
-      display: "flex", alignItems: "flex-end", justifyContent: "center",
-      padding: "0 16px calc(var(--nav-height) + env(safe-area-inset-bottom, 16px) + 16px) 16px",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "20px 16px",
     }} onClick={onClose}>
       <style>{GLOBAL_STYLES}</style>
       <div onClick={e => e.stopPropagation()} style={{
-        width: "100%", maxWidth: 480,
+        width: "100%", maxWidth: 380,
         background: "linear-gradient(160deg, rgba(22,18,38,0.99), rgba(14,12,26,0.99))",
         borderRadius: "24px", padding: "22px 20px 24px",
         border: "1px solid rgba(255,255,255,0.08)",
         boxShadow: "0 8px 48px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08)",
-        animation: "slideUp 0.3s cubic-bezier(0.34,1.1,0.64,1)",
+        animation: "dropIn 0.22s cubic-bezier(0.34,1.2,0.64,1)",
       }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
           <h2 style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>{title}</h2>
@@ -611,7 +612,8 @@ function Modal({ title, children, onClose }) {
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -742,18 +744,24 @@ export default function Profile() {
   return (
     <div className="page fade-in-up">
       <style>{GLOBAL_STYLES}</style>
-      <div style={{ padding: "24px 16px 16px" }}>
+      <div style={{
+        padding: "16px 16px 12px",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: "calc(100vh - var(--nav-height) - 40px - env(safe-area-inset-bottom))",
+        boxSizing: "border-box"
+      }}>
 
-        {/* Avatar */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        {/* ── Profile Header: avatar left · name center · edit right ── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18, marginTop: 10, padding: "0 2px" }}>
+          {/* Avatar */}
           <div onClick={openEditModal} style={{
-            width: 86, height: 86, borderRadius: "50%",
+            width: 72, height: 72, borderRadius: "50%", flexShrink: 0,
             background: getAvatarBackground(avatar),
             display: "flex", alignItems: "center", justifyContent: "center",
-            border: "3px solid rgba(255,255,255,0.1)",
-            boxShadow: "0 8px 36px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.04)",
-            cursor: "pointer", position: "relative",
-            overflow: "hidden",
+            border: "3px solid rgba(255,255,255,0.12)",
+            boxShadow: "0 6px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04)",
+            cursor: "pointer", position: "relative", overflow: "hidden",
           }}>
             {renderAvatarContent(avatar, displayName)}
             <div style={{
@@ -767,36 +775,60 @@ export default function Profile() {
             onMouseEnter={e => e.currentTarget.style.opacity = 1}
             onMouseLeave={e => e.currentTarget.style.opacity = 0}
             >
-              <Camera size={20} color="#fff" />
+              <Camera size={16} color="#fff" />
             </div>
           </div>
-          <div style={{ textAlign: "center" }}>
-            <div onClick={openEditModal} style={{ fontSize: 21, fontWeight: 900, letterSpacing: "-0.02em", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+
+          {/* Name & status */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 19, fontWeight: 900, letterSpacing: "-0.02em", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {displayName}
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: user ? "#10b981" : "#6b7280" }} />
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: user ? "#10b981" : "#6b7280", flexShrink: 0 }} />
               {user ? "Cloud Synced Member" : "Local Guest Mode"}
             </div>
           </div>
+
+          {/* Edit Profile pen icon */}
+          <button
+            onClick={openEditModal}
+            style={{
+              width: 38, height: 38, borderRadius: 12,
+              background: "rgba(255,255,255,0.07)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", flexShrink: 0,
+              transition: "background 0.18s",
+            }}
+            onTouchStart={e => e.currentTarget.style.background = "rgba(255,255,255,0.13)"}
+            onTouchEnd={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}
+          >
+            {/* Pen/Edit icon via inline SVG (lucide Pencil) */}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-muted)" }}>
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
         </div>
+
 
         {/* Cloud banner / status */}
         {!user ? (
           <div style={{
             background: "linear-gradient(135deg, rgba(124,58,237,0.1), rgba(99,102,241,0.05))",
-            border: "1px solid rgba(124,58,237,0.18)", borderRadius: 20,
-            padding: "18px", marginBottom: 22, textAlign: "center",
+            border: "1px solid rgba(124,58,237,0.18)", borderRadius: 16,
+            padding: "14px", marginBottom: 14, textAlign: "center",
           }}>
-            <h4 style={{ margin: "0 0 6px 0", fontSize: 14, fontWeight: 800, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <Cloud size={15} color="var(--accent)" /> Backup & Sync
+            <h4 style={{ margin: "0 0 5px 0", fontSize: 13, fontWeight: 800, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <Cloud size={14} color="var(--accent)" /> Backup & Sync
             </h4>
-            <p style={{ margin: "0 0 14px 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+            <p style={{ margin: "0 0 12px 0", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
               Keep your watchlist and progress safe across devices.
             </p>
             <button onClick={() => setShowAuthModal(true)} style={{
               background: "linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #818cf8))",
-              color: "#fff", border: "none", borderRadius: 12, padding: "11px 0",
+              color: "#fff", border: "none", borderRadius: 10, padding: "10px 0",
               fontSize: 13, fontWeight: 800, cursor: "pointer", width: "100%",
               boxShadow: "0 4px 18px -3px var(--accent)",
             }}>Sign Up / Log In</button>
@@ -804,12 +836,12 @@ export default function Profile() {
         ) : (
           <div style={{
             background: "rgba(56,189,248,0.06)", border: "1px solid rgba(56,189,248,0.16)",
-            borderRadius: 18, padding: "12px 16px", marginBottom: 22,
+            borderRadius: 14, padding: "10px 14px", marginBottom: 14,
             display: "flex", alignItems: "center", justifyContent: "space-between",
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(56,189,248,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Cloud size={16} color="#38bdf8" />
+              <div style={{ width: 30, height: 30, borderRadius: 9, background: "rgba(56,189,248,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Cloud size={14} color="#38bdf8" />
               </div>
               <div>
                 <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", display: "block" }}>Cloud Active</span>
@@ -822,7 +854,7 @@ export default function Profile() {
               style={{
                 background: syncing ? "rgba(255,255,255,0.05)" : "rgba(56,189,248,0.1)",
                 border: syncing ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(56,189,248,0.22)",
-                borderRadius: 10, padding: "6px 12px", fontSize: 11,
+                borderRadius: 9, padding: "5px 11px", fontSize: 11,
                 color: syncing ? "var(--text-muted)" : "#38bdf8",
                 fontWeight: 700, cursor: syncing ? "not-allowed" : "pointer",
               }}
@@ -832,8 +864,8 @@ export default function Profile() {
           </div>
         )}
 
-        {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 22 }}>
+        {/* Stats — more compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
           {[
             { icon: Bookmark, label: "My List",   value: wlCount,  to: "/mylist",    color: "#818cf8" },
             { icon: Heart,    label: "Favorites", value: favCount, to: "/favorites", color: "#f43f5e" },
@@ -841,56 +873,66 @@ export default function Profile() {
           ].map(s => (
             <div key={s.label} onClick={() => navigate(s.to)} style={{
               background: "linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018))",
-              borderRadius: 18, padding: "14px 8px",
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+              borderRadius: 14, padding: "11px 6px",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
               cursor: "pointer", border: "1px solid rgba(255,255,255,0.07)",
-              boxShadow: "0 2px 16px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.05)",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05)",
               transition: "transform 0.18s",
             }}
             onTouchStart={e => e.currentTarget.style.transform = "scale(0.96)"}
             onTouchEnd={e => e.currentTarget.style.transform = "scale(1)"}
             >
-              <s.icon size={20} color={s.color} />
-              <span style={{ fontSize: 26, fontWeight: 900, letterSpacing: "-0.04em" }}>{s.value}</span>
-              <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 600 }}>{s.label}</span>
+              <s.icon size={18} color={s.color} />
+              <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: "-0.04em" }}>{s.value}</span>
+              <span style={{ fontSize: 9.5, color: "var(--text-muted)", fontWeight: 600 }}>{s.label}</span>
             </div>
           ))}
         </div>
 
-        {/* Menu list */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {/* Menu list — more compact */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
           {MENU.map((item, i) => (
             <button key={item.label} id={`profile-menu-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
               onClick={item.action}
               style={{
-                display: "flex", alignItems: "center", gap: 14, padding: "14px 16px",
+                display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
                 background: i === 0
                   ? "linear-gradient(135deg, rgba(124,58,237,0.14), rgba(99,102,241,0.07))"
                   : "linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018))",
-                borderRadius: 18,
+                borderRadius: 15,
                 border: i === 0 ? "1px solid rgba(124,58,237,0.22)" : "1px solid rgba(255,255,255,0.07)",
                 cursor: "pointer", textAlign: "left",
-                boxShadow: "0 2px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.05)",
+                boxShadow: "0 2px 10px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.05)",
                 transition: "all 0.2s",
               }}
             >
               <div style={{
-                width: 38, height: 38, borderRadius: 11,
+                width: 34, height: 34, borderRadius: 10,
                 background: `${item.color || "#fff"}18`,
                 border: `1px solid ${item.color || "#fff"}2a`,
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
               }}>
-                <item.icon size={18} color={item.color || "var(--text-secondary)"} />
+                <item.icon size={16} color={item.color || "var(--text-secondary)"} />
               </div>
-              <span style={{ flex: 1, fontSize: 15, fontWeight: 700, color: item.color || "var(--text-primary)", letterSpacing: "-0.01em" }}>
+              <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: item.color || "var(--text-primary)", letterSpacing: "-0.01em" }}>
                 {item.label}
               </span>
-              <ChevronRight size={16} color="rgba(255,255,255,0.18)" />
+              <ChevronRight size={15} color="rgba(255,255,255,0.18)" />
             </button>
           ))}
         </div>
 
-        <div onClick={handleVersionTap} style={{ textAlign: "center", marginTop: 30, color: "var(--text-muted)", fontSize: 11, cursor: "pointer", userSelect: "none", lineHeight: 1.8 }}>
+        {/* Version & attribution pushed to the bottom */}
+        <div onClick={handleVersionTap} style={{
+          textAlign: "center",
+          marginTop: "auto",
+          paddingTop: "16px",
+          color: "var(--text-muted)",
+          fontSize: 11,
+          cursor: "pointer",
+          userSelect: "none",
+          lineHeight: 1.8
+        }}>
           AniPlay v{appVersion} {localStorage.getItem("anilab_test_updates") === "true" && "· Beta Test"}
           <br /><span style={{ opacity: 0.45 }}>Made with ❤ for anime fans</span>
         </div>

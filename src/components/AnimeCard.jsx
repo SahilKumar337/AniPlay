@@ -12,9 +12,11 @@ export default function AnimeCard({
   epLabel = null,
   showBadges = true,
   className = '',
+  index = 0,
 }) {
   const navigate = useNavigate();
   const [imgError, setImgError] = useState(false);
+  const [imgLoaded, setImgLoaded] = useState(false);
   const { settings } = useApp();
 
   // Apply compact card sizing
@@ -30,8 +32,12 @@ export default function AnimeCard({
 
   return (
     <div
-      className={`anime-card ${className}`}
-      style={{ width: cardWidth, height: cardHeight }}
+      className={`anime-card card-entrance ${className}`}
+      style={{
+        width: cardWidth,
+        height: cardHeight,
+        animationDelay: `${index * 40}ms`,
+      }}
       onClick={handleClick}
       id={`anime-card-${anime.id}`}
       role="button"
@@ -45,7 +51,14 @@ export default function AnimeCard({
           src={cover}
           alt={title}
           loading="lazy"
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onLoad={() => setImgLoaded(true)}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            opacity: imgLoaded ? 1 : 0,
+            transition: 'opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1)',
+          }}
           onError={() => setImgError(true)}
         />
       ) : (

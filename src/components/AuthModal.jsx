@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Mail, Lock, User, Loader, Eye, EyeOff } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { X, Mail, Lock, User, Loader, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { cloudSignIn, cloudSignUp } from '../api/supabase';
 import { useApp } from '../context/AppContext';
 
@@ -103,7 +104,7 @@ export default function AuthModal({ isOpen, onClose }) {
           clearTimeout(timer);
           setLoading(false);
           if (signUpData?.session) {
-            showToast('Account created & logged in successfully! Welcome 🎉');
+            showToast('Account created — logged in successfully!');
             onClose();
           } else {
             setSignUpDone(true); // Show "check your email" screen if confirmation is required
@@ -114,7 +115,7 @@ export default function AuthModal({ isOpen, onClose }) {
         if (mountedRef.current) {
           clearTimeout(timer);
           setLoading(false);
-          showToast('Logged in successfully! Welcome back 👋');
+          showToast('Logged in successfully — welcome back.');
           onClose();
         }
       }
@@ -135,25 +136,26 @@ export default function AuthModal({ isOpen, onClose }) {
 
   // ── "Check your email" confirmation screen ──────────────────────────
   if (signUpDone) {
-    return (
+    return createPortal(
       <div style={{
         position: 'fixed', inset: 0, zIndex: 2000,
         background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(10px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
       }}>
         <div style={{
-          background: 'rgba(15,15,20,0.98)', border: '1px solid rgba(255,255,255,0.08)',
+          background: 'rgba(28,28,30,0.98)', border: '0.5px solid rgba(255,255,255,0.1)',
           borderRadius: 24, width: '100%', maxWidth: 380, padding: 32,
           textAlign: 'center', boxShadow: '0 24px 48px rgba(0,0,0,0.6)',
         }}>
           {/* Icon */}
           <div style={{
-            width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
-            background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(99,102,241,0.2))',
-            border: '2px solid rgba(124,58,237,0.4)',
+            width: 56, height: 56, borderRadius: '50%', margin: '0 auto 20px',
+            background: 'var(--bg-elevated)',
+            border: '0.5px solid var(--border)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 28,
-          }}>📬</div>
+          }}>
+            <Mail size={24} color="var(--accent)" />
+          </div>
 
           <h3 style={{ margin: '0 0 10px', fontSize: 20, fontWeight: 800, color: '#fff' }}>
             Check Your Email
@@ -172,7 +174,7 @@ export default function AuthModal({ isOpen, onClose }) {
             onClick={onClose}
             style={{
               width: '100%', padding: '13px 0', borderRadius: 14, border: 'none',
-              background: 'linear-gradient(135deg, var(--accent), #6366f1)',
+              background: 'var(--accent)',
               color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
             }}
           >
@@ -188,12 +190,13 @@ export default function AuthModal({ isOpen, onClose }) {
             Already confirmed? Sign In
           </button>
         </div>
-      </div>
+      </div>,
+      document.body
     );
   }
 
   // ── Main Auth Form ──────────────────────────────────────────────────
-  return (
+  return createPortal(
     <div style={{
       position: 'fixed', inset: 0, zIndex: 2000,
       background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(10px)',
@@ -217,81 +220,88 @@ export default function AuthModal({ isOpen, onClose }) {
             borderRadius: '50%', width: 34, height: 34,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: '#fff', cursor: 'pointer',
+            zIndex: 1, transition: 'background 0.2s',
           }}
+          onTouchStart={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
+          onTouchEnd={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
         >
-          <X size={16} />
+          <X size={15} />
         </button>
 
-        {/* Header */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 22, marginBottom: 6 }}>{isSignUp ? '✨' : '👋'}</div>
-          <h3 style={{ margin: '0 0 6px', fontSize: 20, fontWeight: 800, color: '#fff' }}>
+        {/* Title */}
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 22, fontWeight: 900, color: '#fff', letterSpacing: '-0.5px' }}>
             {isSignUp ? 'Create Account' : 'Welcome Back'}
           </h3>
           <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.4)' }}>
-            {isSignUp
-              ? 'Sync your watchlist across devices'
-              : 'Sign in to restore your watchlist & favorites'}
+            {isSignUp ? 'Join AniPlay for cloud backups' : 'Sign in to access your cloud watchlist'}
           </p>
         </div>
 
         {/* Error */}
         {errorMsg && (
           <div style={{
-            background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)',
-            borderRadius: 12, padding: '11px 14px', marginBottom: 18,
-            color: '#f87171', fontSize: 13, lineHeight: 1.5, display: 'flex', gap: 8,
+            display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 14,
+            background: 'rgba(239,68,68,0.1)', border: '1.5px solid rgba(239,68,68,0.16)',
+            marginBottom: 20, color: '#f87171', fontSize: 13, fontWeight: 500,
+            lineHeight: 1.5,
           }}>
-            <span style={{ flexShrink: 0, marginTop: 1 }}>⚠️</span>
+            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
             <span>{errorMsg}</span>
           </div>
         )}
 
         {/* Form */}
-        <form noValidate onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
           {/* Nickname (sign-up only) */}
           {isSignUp && (
             <div style={{ position: 'relative' }}>
-              <User size={15} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.3)', pointerEvents: 'none' }} />
+              <User size={15} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.35)' }} />
               <input
                 type="text"
-                placeholder="Display Nickname"
+                placeholder="Nickname"
                 value={nickname}
                 onChange={e => setNickname(e.target.value.slice(0, 25))}
                 style={INPUT_STYLE}
                 disabled={loading}
                 autoComplete="nickname"
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
               />
             </div>
           )}
 
           {/* Email */}
           <div style={{ position: 'relative' }}>
-            <Mail size={15} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.3)', pointerEvents: 'none' }} />
+            <Mail size={15} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.35)' }} />
             <input
               type="email"
-              placeholder="Email Address"
+              placeholder="Email address"
               value={email}
               onChange={e => setEmail(e.target.value)}
               style={INPUT_STYLE}
               disabled={loading}
               autoComplete="email"
               inputMode="email"
+              onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+              onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
             />
           </div>
 
           {/* Password */}
           <div style={{ position: 'relative' }}>
-            <Lock size={15} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.3)', pointerEvents: 'none' }} />
+            <Lock size={15} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.35)' }} />
             <input
               type={showPassword ? 'text' : 'password'}
-              placeholder="Password (min. 6 characters)"
+              placeholder="Password"
               value={password}
               onChange={e => setPassword(e.target.value)}
               style={{ ...INPUT_STYLE, paddingRight: 44 }}
               disabled={loading}
               autoComplete={isSignUp ? 'new-password' : 'current-password'}
+              onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+              onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
             />
             <button
               type="button"
@@ -313,8 +323,8 @@ export default function AuthModal({ isOpen, onClose }) {
             style={{
               marginTop: 6,
               background: loading
-                ? 'rgba(124,58,237,0.5)'
-                : 'linear-gradient(135deg, var(--accent), #6366f1)',
+                ? 'rgba(10,132,255,0.4)'
+                : 'var(--accent)',
               color: '#fff', border: 'none', borderRadius: 14,
               padding: '14px 0', fontSize: 14, fontWeight: 700,
               cursor: loading ? 'not-allowed' : 'pointer',
@@ -348,6 +358,7 @@ export default function AuthModal({ isOpen, onClose }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

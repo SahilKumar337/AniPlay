@@ -35,6 +35,51 @@ export function setDynamicDomains(newDomains) {
   console.log('[Scrapers] Dynamic domains updated:', { ANINEKO, AW, ANIMETSU, ANIKOTO });
 }
 
+// ─── ID-Based Cross-Reference Mapping System ───
+// Maps AniList IDs directly to piracy provider slugs to bypass unstable fuzzy string searching
+const STATIC_MAPPINGS = {
+  // Frieren: Beyond Journey's End
+  '154587': {
+    neko: 'frieren-beyond-journeys-end',
+    anikoto: 'frieren-beyond-journey-s-end-c6fbj',
+    waves: 'frieren-beyond-journey-s-end-c6fb'
+  },
+  // One Piece
+  '21': {
+    neko: 'one-piece',
+    anikoto: 'one-piece-odmau',
+    waves: 'one-piece-odmau'
+  },
+  // Sword Art Online
+  '11757': {
+    neko: 'sword-art-online',
+    anikoto: 'sword-art-online-c6fbv',
+    waves: 'sword-art-online-c6fbv'
+  }
+};
+
+let dynamicMappings = {};
+
+export function setDynamicMappings(mappings) {
+  if (mappings) {
+    dynamicMappings = mappings;
+    console.log('[Scrapers] Dynamic ID mappings loaded:', Object.keys(mappings).length);
+  }
+}
+
+export function getMappedSlug(animeId, provider) {
+  if (!animeId) return null;
+  const idStr = String(animeId);
+  if (dynamicMappings[idStr]?.[provider]) {
+    return dynamicMappings[idStr][provider];
+  }
+  if (STATIC_MAPPINGS[idStr]?.[provider]) {
+    return STATIC_MAPPINGS[idStr][provider];
+  }
+  return null;
+}
+
+
 const UA = isCapacitorApp 
   ? 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36'
   : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
@@ -118,17 +163,18 @@ function lsSearchKey(scraper, title) {
 
 function norm(s) {
   return s.toLowerCase()
-    .replace(/[''`]/g, "'")
-    .replace(/[""]/g, '"')
+    .replace(/[’‘ʼ´`']/g, '')        // Normalize and contract all single quotes/apostrophes: journey’s → journeys
+    .replace(/["“”]/g, '"')
     .replace(/&amp;/g, '&')
-    .replace(/&#039;/g, "'")
-    .replace(/[^a-z0-9\s']/g, ' ')
+    .replace(/&#039;/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function cleanAnimeTitle(title) {
   return title
+    .replace(/[’‘ʼ´`']/g, ' ')      // Replace all single quotes/apostrophes with space for searching
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -154,6 +200,80 @@ function extractSeason(t) {
   }
 
   return 1;
+}
+
+// ── Cross-language trigram helpers (for English ↔ Japanese-romaji bridging) ──
+
+function getTrigrams(str) {
+  const s = str.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (s.length < 3) return s.split('');
+  const grams = [];
+  for (let i = 0; i < s.length - 2; i++) grams.push(s.slice(i, i + 3));
+  return grams;
+}
+
+function trigramSimilarity(a, b) {
+  const t1 = getTrigrams(a);
+  const t2 = getTrigrams(b);
+  if (!t1.length || !t2.length) return 0;
+  const s1 = new Set(t1);
+  let overlap = 0;
+  for (const g of t2) { if (s1.has(g)) overlap++; }
+  return (2 * overlap) / (t1.length + t2.length);
+}
+
+/**
+ * Cross-language title score: handles English ↔ Japanese-romanized mismatch.
+ * When word-level matching fails because the site uses a different naming system
+ * (e.g. "Komi Can't Communicate" vs "Komi-san wa, Comyushou desu."),
+ * use first-word-prefix + season matching as the signal.
+ *
+ * Full-title trigram similarity CANNOT be used here because cross-language pairs
+ * share almost no character trigrams ("communicate" vs "comyushou" = ~0% overlap).
+ * Instead, anime titles in different languages almost always share the same character
+ * name at the start (e.g. "Komi" in both "Komi Can't Communicate" and "Komi-san wa...").
+ *
+ * Requirements to activate the fallback:
+ *  1. Same season number must match.
+ *  2. First significant word must share at least its first 3 characters (character name anchor).
+ *  3. Neither title may have a "movie/film" marker if the other doesn't.
+ *
+ * Returns 0.55 — above the 0.35 cross-lang acceptance floor but safely below the
+ * 0.88 same-language threshold, so it never beats a proper word-intersection match.
+ */
+function crossLangScore(resultTitle, queryTitle) {
+  const rn = norm(resultTitle);
+  const qn = norm(queryTitle);
+
+  // Season must match before we even attempt cross-lang scoring
+  if (extractSeason(rn) !== extractSeason(qn)) return 0;
+
+  // Movie/TV consistency — don't cross-match movies with series
+  const resultIsMovie = /\b(movie|film)\b/i.test(rn);
+  const queryIsMovie  = /\b(movie|film)\b/i.test(qn);
+  if (resultIsMovie !== queryIsMovie) return 0;
+
+  // The first meaningful word must be shared — anchors the character/show name
+  // e.g. both "Komi Can't Communicate" and "Komi-san wa, Comyushou desu." start with "komi"
+  const firstWord = s => s.replace(/^\s*(the|a|an)\s+/i, '').split(/\s+/)[0] || '';
+  const rFirst = firstWord(rn);
+  const qFirst = firstWord(qn);
+  if (rFirst.length < 2 || qFirst.length < 2) return 0;
+
+  // First words must share at least their first 3 characters (same character name prefix)
+  const prefixLen = Math.min(rFirst.length, qFirst.length, 4);
+  if (rFirst.slice(0, prefixLen) !== qFirst.slice(0, prefixLen)) return 0;
+
+  // Also verify the first words themselves are reasonably similar (both romaji/english
+  // for the same character name are usually identical or very close: "komi" = "komi")
+  // Use trigrams on just the first words as a secondary quality gate
+  const firstWordSim = trigramSimilarity(rFirst, qFirst);
+  if (firstWordSim < 0.5) return 0;
+
+  // All checks passed — this is a plausible cross-language match.
+  // Return a fixed 0.55 confidence: above the 0.35 acceptance floor but safely below
+  // the 0.88 same-language threshold so it never beats a proper word-intersection match.
+  return 0.55;
 }
 
 function titleScore(resultTitle, queryTitle, isMovie = false) {
@@ -200,6 +320,7 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
 
   const strip = t =>
     t
+      .replace(/[''ʼ´`']/g, '')     // remove all forms of apostrophes first: journey's → journeys
       .replace(/\b(season|part|s)\s*\d+\b/gi, '')
       .replace(/\b\d+(st|nd|rd|th)\s+season\b/gi, '')
       .replace(/\b(sub|dub|uncensored|uncut|tv|movie|ova|ona|special|specials|multi|audio|recap|summary|preview|side\s*story|mini|short|shorts|chibi|break\s*time|breaktime|petit|petite|spin\s*off|spinoff)\b/gi, '')
@@ -210,8 +331,18 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
 
   if (!qWords.length || !rWords.length) return 0;
 
-  const intersection = qWords.filter(w => rWords.includes(w));
-  if (intersection.length === 0) return 0;
+  const intersection = qWords.filter(w =>
+    rWords.includes(w) || rWords.some(rw => trigramSimilarity(w, rw) >= 0.7)
+  );
+
+  // ── Cross-language fallback ──────────────────────────────────────────────────
+  // When word-intersection is zero, the two titles may be the same anime but in
+  // different naming systems (English vs Japanese-romanized). Use trigram similarity
+  // as a soft bridge. This is capped at 0.75 so it never beats a true word-match.
+  if (intersection.length === 0) {
+    return crossLangScore(resultTitle, queryTitle);
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   const score = (2 * intersection.length) / (qWords.length + rWords.length);
 
@@ -219,11 +350,17 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   // it's a different show (spin-off, sequel subtitle, etc.) — return 0.
   // Standalone numbers (years like 2011, counts) are excluded.
   const extraWords = rWords.filter(w => !qWords.includes(w));
-  const nonMetaExtra = extraWords.filter(w =>
-    !GENERIC_WORDS.has(w)
-    && !/^(season|part|episode|ep|tv|movie|ova|ona|special|specials|dub|sub|uncensored|uncut|multi|audio)$/i.test(w)
-    && !/^\d+$/.test(w)  // allow standalone numbers (years, etc.)
-  );
+  const nonMetaExtra = extraWords.filter(w => {
+    if (GENERIC_WORDS.has(w)) return false;
+    if (/^(season|part|episode|ep|tv|movie|ova|ona|special|specials|dub|sub|uncensored|uncut|multi|audio)$/i.test(w)) return false;
+    if (/^\d+$/.test(w)) return false;
+
+    // Fuzzy matching for spelling variants / typos (e.g. comyushou vs komyushou)
+    const isFuzzyMatch = qWords.some(qw => trigramSimilarity(w, qw) >= 0.7);
+    if (isFuzzyMatch) return false;
+
+    return true;
+  });
   if (nonMetaExtra.length > 0) return 0;
 
   // Hard-block REVERSE: if the query has significant unique words (5+ chars, non-generic)
@@ -238,8 +375,13 @@ function titleScore(resultTitle, queryTitle, isMovie = false) {
   if (uniqueQueryWords.length > 0) {
     const missingFromResult = uniqueQueryWords.filter(w => !rWords.includes(w));
     // If ANY unique discriminating word from the query is absent from the result → hard block
-    // e.g. "exceeds" missing from "Magical Girl Lyrical Nanoha" → score 0
-    if (missingFromResult.length > 0) return 0;
+    if (missingFromResult.length > 0) {
+      // Fuzzy matching for missing words as well
+      const missingNonFuzzy = missingFromResult.filter(qw =>
+        !rWords.some(rw => trigramSimilarity(qw, rw) >= 0.7)
+      );
+      if (missingNonFuzzy.length > 0) return 0;
+    }
   }
 
   return score;
@@ -429,7 +571,8 @@ async function awSearch(title, isMovie = false) {
     if (score > maxScore) { maxScore = score; best = r; }
   }
 
-  if (!best || maxScore < 0.55) { // Slightly stricter threshold to avoid near-miss wrong anime
+  // Strict 0.88 threshold — must match the full anime name with high confidence
+  if (!best || maxScore < 0.88) {
     throw new Error(`No confident match on AniWaves for "${title}" (best score: ${maxScore.toFixed(2)})`);
   }
   return best;
@@ -575,9 +718,15 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
 }
 
 
-export async function scrapeAniWaves(title, episode, isMovie = false) {
+export async function scrapeAniWaves(title, episode, isMovie = false, animeId = null, allTitles = null) {
   let searchResult = wavesSearchCache.get(title);
-  if (!searchResult) {
+  
+  // Try industry-standard ID-based cross-referencing first
+  const mappedSlug = getMappedSlug(animeId, 'waves');
+  if (mappedSlug) {
+    searchResult = { slug: mappedSlug, animeId: mappedSlug, animeTitle: title };
+    console.log(`[AniWaves] ID Cross-Ref HIT for AniList ID ${animeId} ➔ "${mappedSlug}"`);
+  } else if (!searchResult) {
     // Check localStorage before hitting the network
     const lsCached = lsGet(lsSearchKey('waves', title));
     if (lsCached) {
@@ -585,18 +734,30 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
       searchResult = lsCached;
       wavesSearchCache.set(title, searchResult);
     } else {
-      searchResult = await awSearch(title, isMovie);
-      wavesSearchCache.set(title, searchResult);
-      lsSet(lsSearchKey('waves', title), searchResult);
+      // Try all provided title variants — first successful match wins
+      const titlesToTry = allTitles?.length ? allTitles : [title];
+      let lastErr = null;
+      for (const t of titlesToTry) {
+        try {
+          searchResult = await awSearch(t, isMovie);
+          wavesSearchCache.set(title, searchResult);
+          lsSet(lsSearchKey('waves', title), searchResult);
+          break;
+        } catch (e) {
+          lastErr = e;
+          console.warn(`[AniWaves] awSearch failed for "${t}": ${e.message}`);
+        }
+      }
+      if (!searchResult) throw lastErr || new Error(`Anime "${title}" not found on AniWaves`);
     }
   }
-  const { slug, animeId, animeTitle } = searchResult;
+  const { slug, animeId: wavesId, animeTitle } = searchResult;
 
-  // Check session cache Ã¢â‚¬â€ skip all API calls if same episode was already fetched
-  const cached = getWavesServersCache(animeId, episode);
+  // Check session cache — skip all API calls if same episode was already fetched
+  const cached = getWavesServersCache(wavesId, episode);
   if (cached) return { servers: cached, animeTitle, slug };
 
-  const rawServers = await awGetServers(animeId, episode, slug);
+  const rawServers = await awGetServers(wavesId, episode, slug);
   const servers = [];
 
   // Parallelize sub and dub server resolution to halve latency
@@ -633,7 +794,7 @@ export async function scrapeAniWaves(title, episode, isMovie = false) {
   if (dubRes) servers.push(dubRes);
 
   // Cache the resolved server list for this episode (avoids re-fetching on revisit)
-  if (servers.length > 0) setWavesServersCache(animeId, episode, servers);
+  if (servers.length > 0) setWavesServersCache(wavesId, episode, servers);
 
   return { servers, animeTitle, slug };
 }
@@ -662,54 +823,83 @@ function setNekoEpisodeCache(slug, episode, servers) {
   } catch {}
 }
 
-export async function scrapeAniNeko(title, episode, isMovie = false) {
+export async function scrapeAniNeko(title, episode, isMovie = false, animeId = null, allTitles = null) {
   let best, results;
-  const cached = nekoSearchCache.get(title);
-  if (cached) {
-    best = cached.best;
-    results = cached.results;
+  
+  // Try industry-standard ID-based cross-referencing first
+  const mappedSlug = getMappedSlug(animeId, 'neko');
+  if (mappedSlug) {
+    best = { slug: mappedSlug, title: title };
+    results = [best];
+    console.log(`[AniNeko] ID Cross-Ref HIT for AniList ID ${animeId} ➔ "${mappedSlug}"`);
   } else {
-    const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    const words = cleanTitle.split(' ').filter(w => w.length > 1);
-    let searchQueries = [cleanTitle];
-    if (words.length > 1) {
-      searchQueries.push(words.slice(0, 3).join(' '));
-      searchQueries.push(words.slice(0, 2).join(' '));
-    }
-    searchQueries.push(getLongestWord(title));
-    searchQueries = [...new Set(searchQueries)].filter(Boolean);
-
-    results = [];
-    const re = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
-
-    for (const keyword of searchQueries) {
-      try {
-        const searchHtml = await clientFetch(`${ANINEKO}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: ANINEKO, timeout: 20000 });
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(searchHtml)) !== null) {
-          results.push({ slug: m[1], title: m[2].trim() });
+    // Fallback to memory search cache
+    const cached = nekoSearchCache.get(title);
+    if (cached) {
+      best = cached.best;
+      results = cached.results;
+    } else {
+      // Build search queries from ALL title variants (romaji, english, synonyms)
+      // AniNeko uses Japanese-romanized names, so romaji is most likely to match directly
+      const titlesToSearch = allTitles?.length ? allTitles : [title];
+      const allQueries = new Set();
+      for (const t of titlesToSearch) {
+        const cleanT = t.replace(/'/g, '').replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        const words = cleanT.split(' ').filter(w => w.length > 1);
+        allQueries.add(cleanT);
+        if (words.length > 1) {
+          allQueries.add(words.slice(0, 3).join(' '));
+          allQueries.add(words.slice(0, 2).join(' '));
         }
-        if (results.length > 0) break;
-      } catch (e) {
-        console.error('[scrapeAniNeko] Search failed for ' + keyword + ':', e.message);
+        allQueries.add(getLongestWord(t));
       }
-    }
+      const searchQueries = [...allQueries].filter(Boolean);
 
-    if (!results.length) throw new Error(`Anime not found on AniNeko`);
+      results = [];
+      const re = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
 
-    best = results[0];
-    let maxScore = -1;
-    for (const r of results) {
-      const score = titleScore(r.title, title, isMovie);
-      if (score > maxScore) { maxScore = score; best = r; }
-    }
-    const threshold = (maxScore >= 0.6 && results.length <= 3) ? 0.6 : 0.75;
-    if (!best || maxScore < threshold) {
-      throw new Error(`No match on AniNeko for "${title}" (score: ${maxScore.toFixed(2)})`);
-    }
+      // Search all queries in parallel for speed and aggregation
+      await Promise.all(searchQueries.map(async (keyword) => {
+        try {
+          const searchHtml = await clientFetch(`${ANINEKO}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: ANINEKO, timeout: 10000 });
+          re.lastIndex = 0;
+          let m;
+          while ((m = re.exec(searchHtml)) !== null) {
+            const found = { slug: m[1], title: m[2].trim() };
+            // Thread-safe inclusion check
+            if (!results.some(r => r.slug === found.slug)) {
+              results.push(found);
+            }
+          }
+        } catch (e) {
+          console.warn('[scrapeAniNeko] Search failed for ' + keyword + ':', e.message);
+        }
+      }));
 
-    nekoSearchCache.set(title, { best, results });
+      if (!results.length) throw new Error(`Anime not found on AniNeko`);
+
+      best = results[0];
+      let maxScore = -1;
+      // Score against ALL provided titles — pick whichever pairing gives the highest score
+      const allQueryTitles = allTitles?.length ? allTitles : [title];
+      for (const r of results) {
+        let score = 0;
+        for (const qt of allQueryTitles) {
+          score = Math.max(score, titleScore(r.title, qt, isMovie));
+        }
+        if (score > maxScore) { maxScore = score; best = r; }
+      }
+      // Threshold: cross-lang matches score up to 0.75, same-lang up to 1.0
+      // Use 0.35 as the floor to accept cross-language matches
+      if (!best || maxScore < 0.35) {
+        throw new Error(`No match on AniNeko for "${title}" (score: ${maxScore.toFixed(2)})`);
+      }
+      if (maxScore < 0.88) {
+        console.log(`[AniNeko] Cross-language match: "${best.title}" for "${title}" (score: ${maxScore.toFixed(2)})`);
+      }
+
+      nekoSearchCache.set(title, { best, results });
+    }
   }
 
   // Check episode-level session cache before fetching any watch pages
@@ -825,11 +1015,13 @@ async function kotoJsonSearch(domain, keyword) {
   if (parsed.status === 404 || !parsed.result?.html) return [];
   const html = parsed.result.html;
   // Parse search results from HTML fragment
-  const itemRe = /href="\/watch\/([\w%-]+-?(\d+))"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
+  // Slugs on AniKoto can be purely alphanumeric (e.g. "frieren-beyond-journey-s-end-c6fbj")
+  // and URLs can be absolute (e.g. "https://anikoto.cz/watch/...") or relative.
+  const itemRe = /href="(?:https?:\/\/[^\/]+)?\/watch\/(\w[\w%-]*)"[\s\S]*?class="name d-title"[^>]*>([^<]+)<\/div>/g;
   let m;
   const results = [];
   while ((m = itemRe.exec(html)) !== null) {
-    results.push({ slug: m[1], animeTitle: m[3].trim() });
+    results.push({ slug: m[1], animeTitle: m[2].trim() });
   }
   return results;
 }
@@ -850,7 +1042,7 @@ async function kotoFilterSearch(domain, keyword) {
   return results;
 }
 
-export async function scrapeAniKoto(title, episode, isMovie = false) {
+export async function scrapeAniKoto(title, episode, isMovie = false, animeId = null, allTitles = null) {
   const domain = ANIKOTO;
 
   // ── Step 1: Search cache (memory first, then localStorage) ──
@@ -864,87 +1056,112 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
     }
   }
 
-  // ── Step 2: Network search (parallel JSON race + filter page fallback) ──
+  // ── Step 2: Resolve best match (ID mapping → network search) ──
   if (!searchResult) {
-    const cleanTitle = cleanAnimeTitle(title);
-
-    // Build keyword strategies (same as AniWaves awSearch)
-    const engWords = cleanTitle.split(/[^a-zA-Z0-9]/).filter(w => w.length > 3);
-    const longestWord = engWords.length ? engWords.reduce((a, b) => a.length >= b.length ? a : b) : null;
-    const firstTwo = cleanTitle.split(' ').slice(0, 2).join(' ');
-    const firstThree = cleanTitle.split(' ').slice(0, 3).join(' ');
-    const strategies = [cleanTitle, firstThree, firstTwo, longestWord].filter(Boolean).filter((s, i, a) => a.indexOf(s) === i);
-
-    console.log(`[AniKoto] Racing JSON search + filter page for "${title}"...`);
-
-    // Race: fire JSON search strategies + filter page in parallel
-    // The first one to return a confident match wins — others are cancelled by settled flag
     let best = null;
-    let maxScore = -1;
-    let settled = false;
+    const mappedSlug = getMappedSlug(animeId, 'anikoto');
 
-    const scoreResults = (results) => {
-      const normQuery = norm(title);
-      const exactMatch = results.find(r => norm(r.animeTitle) === normQuery);
-      if (exactMatch) return { best: exactMatch, score: 1.0 };
-      let localBest = null, localMax = -1;
-      for (const r of results) {
-        const s = titleScore(r.animeTitle, title, isMovie);
-        if (s > localMax) { localMax = s; localBest = r; }
+    if (mappedSlug) {
+      // ── Industry-standard ID cross-reference: bypass search entirely ──
+      best = { slug: mappedSlug, animeTitle: title };
+      console.log(`[AniKoto] ID Cross-Ref HIT for AniList ID ${animeId} ➔ "${mappedSlug}"`);
+    } else {
+      // ── Fuzzy search fallback ──
+      // Build strategies from ALL title variants (romaji, english, synonyms)
+      // AniKoto uses Japanese-romanized names, so romaji usually matches directly
+      const titlesToSearch = allTitles?.length ? allTitles : [title];
+      const allQueryTitles = allTitles?.length ? allTitles : [title];
+      const strategiesSet = new Set();
+      for (const t of titlesToSearch) {
+        const cleanT = cleanAnimeTitle(t);
+        const engWords = cleanT.split(/[^a-zA-Z0-9]/).filter(w => w.length > 3);
+        const longest = engWords.length ? engWords.reduce((a, b) => a.length >= b.length ? a : b) : null;
+        strategiesSet.add(cleanT);
+        strategiesSet.add(cleanT.split(' ').slice(0, 3).join(' '));
+        strategiesSet.add(cleanT.split(' ').slice(0, 2).join(' '));
+        if (longest) strategiesSet.add(longest);
       }
-      return { best: localBest, score: localMax };
-    };
+      const strategies = [...strategiesSet].filter(Boolean);
+      const primaryCleanTitle = cleanAnimeTitle(title);
 
-    // Promise that resolves as soon as any strategy finds a confident match
-    const raceResult = await new Promise((resolve) => {
-      let pending = strategies.length + 1; // +1 for filter page
-      const tryResolve = (results) => {
-        if (settled) return;
-        const { best: b, score: s } = scoreResults(results);
-        if (b && s >= 0.65) {
-          settled = true;
-          resolve({ best: b, score: s, source: 'fast' });
-        } else {
-          pending--;
-          if (pending <= 0) resolve(null); // all failed
+      console.log(`[AniKoto] Racing JSON search + filter page for "${title}" (${strategies.length} strategies)...`);
+
+      let settled = false;
+      // Score results against ALL title variants — best cross-title pairing wins
+      const scoreResults = (results) => {
+        // Exact normalized match against any query title
+        for (const qt of allQueryTitles) {
+          const normQuery = norm(qt);
+          const exactMatch = results.find(r => norm(r.animeTitle) === normQuery);
+          if (exactMatch) return { best: exactMatch, score: 1.0 };
         }
+        let localBest = null, localMax = -1;
+        for (const r of results) {
+          let s = 0;
+          for (const qt of allQueryTitles) {
+            s = Math.max(s, titleScore(r.animeTitle, qt, isMovie));
+          }
+          if (s > localMax) { localMax = s; localBest = r; }
+        }
+        return { best: localBest, score: localMax };
       };
 
-      // Fire all JSON keyword strategies in parallel
-      for (const kw of strategies) {
-        kotoJsonSearch(domain, kw).then(tryResolve).catch(() => {
+      // Two-tier threshold: same-language must reach 0.88, cross-language 0.35
+      const SAME_LANG_THRESHOLD = 0.88;
+      const CROSS_LANG_THRESHOLD = 0.35;
+      const raceResult = await new Promise((resolve) => {
+        let pending = strategies.length + 1; // +1 for filter page
+        let bestSoFar = null; // track best cross-lang result in case nothing exceeds 0.88
+        const tryResolve = (results) => {
+          if (settled) return;
+          const { best: b, score: s } = scoreResults(results);
+          if (b && s >= SAME_LANG_THRESHOLD) {
+            settled = true;
+            resolve({ best: b, score: s, source: 'fast' });
+            return;
+          }
+          // Track best cross-lang candidate
+          if (b && s >= CROSS_LANG_THRESHOLD) {
+            if (!bestSoFar || s > bestSoFar.score) bestSoFar = { best: b, score: s, source: 'fast' };
+          }
           pending--;
-          if (pending <= 0 && !settled) resolve(null);
-        });
-      }
-
-      // Also fire the filter page search concurrently
-      kotoFilterSearch(domain, cleanTitle).then(results => {
-        if (settled) return;
-        const { best: b, score: s } = scoreResults(results);
-        if (b && s >= 0.65) {
-          settled = true;
-          console.log(`[AniKoto] Filter page search resolved "${b.animeTitle}" (score: ${s.toFixed(2)})`);
-          resolve({ best: b, score: s, source: 'filter' });
-        } else {
-          pending--;
-          if (pending <= 0 && !settled) resolve(null);
+          if (pending <= 0 && !settled) resolve(bestSoFar); // use best cross-lang if nothing same-lang matched
+        };
+        for (const kw of strategies) {
+          kotoJsonSearch(domain, kw).then(tryResolve).catch(() => {
+            pending--;
+            if (pending <= 0 && !settled) resolve(bestSoFar);
+          });
         }
-      }).catch(() => {
-        pending--;
-        if (pending <= 0 && !settled) resolve(null);
+        kotoFilterSearch(domain, primaryCleanTitle).then(results => {
+          if (settled) return;
+          const { best: b, score: s } = scoreResults(results);
+          if (b && s >= SAME_LANG_THRESHOLD) {
+            settled = true;
+            console.log(`[AniKoto] Filter page search resolved "${b.animeTitle}" (score: ${s.toFixed(2)})`);
+            resolve({ best: b, score: s, source: 'filter' });
+            return;
+          }
+          if (b && s >= CROSS_LANG_THRESHOLD) {
+            if (!bestSoFar || s > bestSoFar.score) bestSoFar = { best: b, score: s, source: 'filter' };
+          }
+          pending--;
+          if (pending <= 0 && !settled) resolve(bestSoFar);
+        }).catch(() => {
+          pending--;
+          if (pending <= 0 && !settled) resolve(bestSoFar);
+        });
       });
-    });
 
-    if (!raceResult) {
-      throw new Error(`No confident match on AniKoto for "${title}"`);
+      if (!raceResult) {
+        throw new Error(`No confident match on AniKoto for "${title}"`);
+      }
+      best = raceResult.best;
+      const matchType = raceResult.score >= SAME_LANG_THRESHOLD ? 'same-lang' : 'cross-lang';
+      console.log(`[AniKoto] Best match [${raceResult.source}/${matchType}]: "${best.animeTitle}" (score: ${raceResult.score.toFixed(2)})`);
     }
 
-    best = raceResult.best;
-    maxScore = raceResult.score;
-    console.log(`[AniKoto] Best match [${raceResult.source}]: "${best.animeTitle}" (score: ${maxScore.toFixed(2)})`);
-
-    // ── Resolve animeId from watch page ──
+    // ── Resolve the site's internal numeric ID from its watch page ──
     const watchUrl = (best.fullUrl && best.fullUrl.startsWith('http'))
       ? best.fullUrl
       : `${domain}/watch/${best.slug}`;
@@ -955,16 +1172,15 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
       || watchHtml.match(/const mangaId = (\d+);/i)
       || watchHtml.match(/\/getinfo\/(\d+)/i);
     if (!idMatch) throw new Error('Could not resolve anime ID on AniKoto');
-    const animeId = idMatch[1];
-    console.log(`[AniKoto] Extracted real animeId: ${animeId}`);
+    const kotoInternalId = idMatch[1];
+    console.log(`[AniKoto] Extracted internal animeId: ${kotoInternalId}`);
 
-    searchResult = { slug: best.slug, animeId, animeTitle: best.animeTitle, watchUrl };
+    searchResult = { slug: best.slug, animeId: kotoInternalId, animeTitle: best.animeTitle, watchUrl };
     kotoSearchCache.set(title, searchResult);
-    // ── Fix 4: Persist to localStorage for next app launch ──
     lsSet(lsSearchKey('koto', title), searchResult);
   }
 
-  const { slug, animeId, animeTitle, watchUrl } = searchResult;
+  const { slug, animeId: kotoId, animeTitle, watchUrl } = searchResult;
 
   // Per-episode result cache
   const cacheKey = `${slug}-${episode}`;
@@ -972,10 +1188,10 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
     return kotoEpCache.get(cacheKey);
   }
 
-  // Episode list cache (per animeId – reused across all episodes of the same show!)
-  let epsHtml = kotoEpListCache.get(animeId);
+  // Episode list cache (per animeId – reused across all episodes of the same show!
+  let epsHtml = kotoEpListCache.get(kotoId);
   if (!epsHtml) {
-    const epsUrl = `${domain}/ajax/episode/list/${animeId}`;
+    const epsUrl = `${domain}/ajax/episode/list/${kotoId}`;
     console.log(`[AniKoto] Fetching episode list: ${epsUrl}`);
     const epsResp = await clientFetch(epsUrl, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
@@ -987,7 +1203,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
       throw new Error(`Failed to load episodes for ${animeTitle}`);
     }
     epsHtml = epsParsed.result;
-    kotoEpListCache.set(animeId, epsHtml);
+    kotoEpListCache.set(kotoId, epsHtml);
   }
 
   const epRe = /data-id="([^"]+)"[^>]*data-num="(\d+)"[^>]*data-slug="[^"]*"[^>]*data-mal="[^"]*"[^>]*data-timestamp="[^"]*"[^>]*data-sub="[^"]*"[^>]*data-dub="[^"]*"[^>]*data-ids="([^"]+)"/g;
@@ -1017,7 +1233,11 @@ export async function scrapeAniKoto(title, episode, isMovie = false) {
   }
 
   if (!targetIds) {
-    throw new Error(`Episode ${episode} not found on AniKoto`);
+    // Episode not found — clear any cached match for this title so a bad match
+    // doesn't persist across app restarts via localStorage
+    kotoSearchCache.delete(title);
+    try { localStorage.removeItem(lsSearchKey('koto', title)); } catch {}
+    throw new Error(`Episode ${episode} not found on AniKoto (matched: "${animeTitle}") — server hidden`);
   }
 
   // Get server list

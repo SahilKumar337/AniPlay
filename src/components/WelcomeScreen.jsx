@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Play } from 'lucide-react';
 import { getTrending, getCover } from '../api/anilist';
 
 const SLIDES = [
@@ -12,7 +13,7 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
   const [slide,  setSlide]  = useState(0);
 
   useEffect(() => {
-    getTrending(1, 9).then(data => setCovers(data.map(a => getCover(a)))).catch(() => {});
+    getTrending(1, 9).then(data => setCovers(data.map(a => getCover(a)).filter(Boolean))).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -26,26 +27,28 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
     covers.slice(6, 9),
   ];
 
-  const fallback = 'https://via.placeholder.com/120x160/1e1e1e/666?text=AniLab';
-
   return (
     <div className="welcome-screen">
-      <div className="welcome-hero">
-        {/* Collage */}
-        <div className="welcome-collage">
-          {rows.map((row, i) => (
-            <div key={i} className="welcome-collage-row">
-              {(row.length > 0 ? row : [fallback, fallback, fallback]).map((src, j) => (
-                <img key={j} src={src || fallback} alt="" loading="lazy" />
-              ))}
-            </div>
-          ))}
-        </div>
+      <div className="welcome-hero" style={{ background: 'radial-gradient(circle at 75% 25%, rgba(10, 132, 255, 0.18) 0%, #000000 80%)', backgroundColor: '#000000' }}>
+        {/* Collage (only shown when covers are successfully loaded) */}
+        {covers.length > 0 && (
+          <div className="welcome-collage" style={{ opacity: 0.45 }}>
+            {rows.map((row, i) => (
+              <div key={i} className="welcome-collage-row">
+                {row.map((src, j) => (
+                  <img key={j} src={src} alt="" loading="lazy" />
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Overlay */}
         <div className="welcome-overlay">
           <div className="welcome-logo">
-            <div className="welcome-logo-icon" style={{ background: 'linear-gradient(135deg, #818cf8, #a78bfa)', borderRadius: 12 }}>▶</div>
+            <div className="welcome-logo-icon" style={{ background: 'var(--accent)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Play size={22} color="#fff" fill="#fff" />
+            </div>
             <span style={{ fontSize: 24, fontWeight: 900, fontFamily: 'var(--font-brand)', color: '#fff', letterSpacing: -0.5, marginLeft: 2 }}>AniPlay</span>
           </div>
           <div className="welcome-text">

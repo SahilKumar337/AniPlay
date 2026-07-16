@@ -49,8 +49,15 @@
         errBox.innerHTML = '<h2>🚨 Fatal Promise Rejection</h2><pre style="white-space:pre-wrap;word-break:break-all;">' + msgStr + '</pre>';
       });
 
-      // ── Disable browser context menu (Right-click / Long press save) ──
+      // ── Disable browser context menu except on input elements (enables long press paste) ──
       document.addEventListener('contextmenu', function(e) {
+        var target = e.target;
+        if (target) {
+          var tagName = target.tagName ? target.tagName.toLowerCase() : '';
+          if (tagName === 'input' || tagName === 'textarea' || target.isContentEditable) {
+            return; // Allow native Cut/Copy/Paste popup
+          }
+        }
         e.preventDefault();
       });
 

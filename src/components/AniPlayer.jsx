@@ -224,6 +224,8 @@ export default function AniPlayer({
   subtitleSettings = null,
   loading = false,
   onStreamExpired = null,  // Called when CDN token expires mid-play — parent should refresh stream URL
+  startInFs = false,       // If true, immediately enter fullscreen on mount (episode transition)
+  keepFsOnEpChange = null, // Ref<boolean> — parent sets true before triggering episode change so unmount skips orientation restore
 }) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
@@ -244,7 +246,7 @@ export default function AniPlayer({
   const [volume,    setVolume]    = useState(1);
   const [muted,     setMuted]     = useState(false);
   const [bright,    setBright]    = useState(1);
-  const [fs,        setFs]        = useState(false);
+  const [fs,        setFs]        = useState(startInFs); // init directly so first render is already in FS (avoids portrait flash on ep transition)
   const [waiting,   setWaiting]   = useState(false);
   const [ctrlVis,   setCtrlVis]   = useState(true);
   const [qualities, setQualities] = useState([]);
@@ -764,8 +766,11 @@ export default function AniPlayer({
             await StatusBar.hide();
           }
         } else {
-          // Unlock orientation + restore system bars
-          try { await ScreenOrientation.unlock(); } catch {}
+          // Force back to portrait first, then unlock orientation, and restore system bars
+          try {
+            await ScreenOrientation.lock({ orientation: 'portrait' });
+            await ScreenOrientation.unlock();
+          } catch {}
           if (EmbedScraper?.setImmersiveMode) {
             await EmbedScraper.setImmersiveMode({ enabled: false });
           } else {
@@ -780,10 +785,14 @@ export default function AniPlayer({
   }, [fs]);
 
   // Always restore system bars + unlock orientation on unmount
+  // SKIP this when unmounting due to an episode transition (keepFsOnEpChange.current === true)
+  // so the next episode can immediately re-enter fullscreen without a portrait flash.
   useEffect(() => {
     return () => {
-      if (isNative) {
-        ScreenOrientation.unlock().catch(() => {});
+      if (isNative && !(keepFsOnEpChange?.current)) {
+        ScreenOrientation.lock({ orientation: 'portrait' })
+          .then(() => ScreenOrientation.unlock())
+          .catch(() => {});
         if (EmbedScraper?.setImmersiveMode) {
           EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
         } else {
@@ -867,6 +876,9 @@ export default function AniPlayer({
     // ScreenOrientation + immersive mode is handled by the fs useEffect above
     setFs(prev => !prev);
   }, []);
+
+  // Note: startInFs is handled by initialising fs state directly above (useState(startInFs)),
+  // so no separate useEffect is needed — avoids the portrait-flash caused by the two-render cycle.
 
   // ── Playback Speed ─────────────────────────────────────────
   useEffect(() => {
