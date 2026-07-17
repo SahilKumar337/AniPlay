@@ -1,7 +1,7 @@
 {
   "name": "anilab",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.5.4",
   "type": "module",
   "scripts": {
     "dev": "concurrently --names \"VITE,PROXY\" --prefix-colors \"cyan,magenta\" \"node --insecure-http-parser ./node_modules/vite/bin/vite.js --host\" \"node --insecure-http-parser server/proxy.mjs\"",

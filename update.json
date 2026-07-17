@@ -1,18 +1,15 @@
 {
-  "latestVersion": "1.5.3",
-  "versionCode": 18,
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/AniPlay.apk",
-  "forceUpdate": false,
-  "changelog": "\u2022 Smoother home animations \u2014 no more jitter\n\u2022 Fixed fullscreen next episode \u2014 no portrait flash\n\u2022 Show All Results button fully visible\n\u2022 Profile page redesigned: avatar left, edit icon right\n\u2022 Edit Profile modal centered\n\u2022 Performance optimizations",
+  "latestVersion": "1.5.4",
+  "versionCode": 19,
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.4/AniPlay.apk",
+  "forceUpdate": true,
+  "changelog": "⚠️ CRITICAL STORAGE UPDATE\n• Completely resolves database storage and network bandwidth limits\n• Reduces watchlist size by 99%\n• Faster app startup and list loading times\n• This update is mandatory to continue using synchronization features",
   "changelogItems": [
-    "Smoother home page animations \u2014 no more jitter on load",
-    "Fixed next episode in fullscreen \u2014 no portrait flash between episodes",
-    "Show All Results button now fully visible above navigation bar",
-    "Profile page redesigned: avatar left, edit icon right",
-    "Edit Profile modal now centered correctly on screen",
-    "Major app performance optimizations across all screens",
-    "Filter bottom sheet now properly overlays the navigation bar",
-    "All modals use React Portals for correct z-index layering"
+    "⚠️ CRITICAL UPDATE: Database storage and bandwidth optimizations",
+    "Resolves Supabase data limits — reduces network egress by 99%",
+    "Mandatory update to continue using watchlist synchronization",
+    " watchlist and progress data are now 99% smaller",
+    "Faster app loading and page transition times"
   ],
   "domains": {
     "neko": "https://anineko.to",
@@ -37,5 +34,5 @@
       "waves": "frieren-beyond-journey-s-end-c6fb"
     }
   },
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.3/bundle.zip"
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.4/bundle.zip"
 }

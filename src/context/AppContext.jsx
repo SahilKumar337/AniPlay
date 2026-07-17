@@ -5,6 +5,29 @@ import { supabase, fetchCloudWatchlist, syncCloudProgress, fetchUserProfile, upd
 
 const AppContext = createContext(null);
 
+// Helper to minimize anime objects to prevent database/storage bloat (removes heavy characters, recommendations, description tags)
+function minimizeAnime(anime) {
+  if (!anime) return null;
+  return {
+    id: anime.id,
+    idMal: anime.idMal || null,
+    title: {
+      romaji: anime.title?.romaji || '',
+      english: anime.title?.english || '',
+      native: anime.title?.native || ''
+    },
+    coverImage: {
+      large: anime.coverImage?.large || '',
+      extraLarge: anime.coverImage?.extraLarge || '',
+      color: anime.coverImage?.color || ''
+    },
+    format: anime.format || '',
+    averageScore: anime.averageScore || 0,
+    episodes: anime.episodes || 0,
+    status: anime.status || ''
+  };
+}
+
 // ── Default Settings ────────────────────────────────────────────────────────
 const DEFAULT_SETTINGS = {
   // Player
@@ -112,18 +135,33 @@ export function AppProvider({ children }) {
           } catch (_) {}
         }
 
-        if (finalWatchlist) setWatchlist(finalWatchlist);
+        if (finalWatchlist) {
+          const minimizedW = {};
+          Object.keys(finalWatchlist).forEach(id => {
+            const item = finalWatchlist[id];
+            minimizedW[id] = {
+              ...item,
+              anime: minimizeAnime(item?.anime)
+            };
+          });
+          setWatchlist(minimizedW);
+          finalWatchlist = minimizedW;
+        }
         
         if (finalFavorites) {
           if (Array.isArray(finalFavorites)) {
             // Convert legacy list/Set array of IDs to object
             const migrated = {};
             finalFavorites.forEach(id => {
-              migrated[id] = finalWatchlist?.[id]?.anime || { id };
+              migrated[id] = minimizeAnime(finalWatchlist?.[id]?.anime) || { id };
             });
             setFavorites(migrated);
           } else {
-            setFavorites(finalFavorites);
+            const minimizedF = {};
+            Object.keys(finalFavorites).forEach(id => {
+              minimizedF[id] = minimizeAnime(finalFavorites[id]);
+            });
+            setFavorites(minimizedF);
           }
         }
         
@@ -287,12 +325,21 @@ export function AppProvider({ children }) {
         const cloudEp     = cloudItem?.progress?.episode || null;
         const localEp     = localProg?.episode || null;
 
-        // If it doesn't exist in the cloud, or any of the values differ, queue for sync
+        const cloudAnime = cloudItem?.progress?.anime;
+        const needsMinimization = cloudAnime && (
+          cloudAnime.characters || 
+          cloudAnime.recommendations || 
+          cloudAnime.description || 
+          cloudAnime.bannerImage
+        );
+
+        // If it doesn't exist in the cloud, any of the values differ, or it needs data minimization, queue for sync
         if (
           !cloudItem ||
           cloudItem.status !== localStatus ||
           cloudFav !== localFav ||
-          cloudEp !== localEp
+          cloudEp !== localEp ||
+          needsMinimization
         ) {
           upsertRows.push({
             user_id: u.id,
@@ -302,7 +349,7 @@ export function AppProvider({ children }) {
             progress: {
               episode: localEp,
               timestamp: localProg?.timestamp || (cloudItem?.progress?.timestamp || null),
-              anime: localItem?.anime || nextFavorites[id] || (cloudItem?.progress?.anime || { id })
+              anime: minimizeAnime(localItem?.anime || nextFavorites[id] || cloudAnime || { id })
             },
             updated_at: new Date().toISOString()
           });
@@ -516,9 +563,10 @@ export function AppProvider({ children }) {
   }, [settings.accentColor, settings.darkMode, settings.compactCards, loaded]);
 
   const addToWatchlist = useCallback((anime, status = 'plan_to_watch') => {
+    const minimized = minimizeAnime(anime);
     setWatchlist(prev => ({
       ...prev,
-      [anime.id]: { anime, status, addedAt: Date.now() },
+      [anime.id]: { anime: minimized, status, addedAt: Date.now() },
     }));
     showToast('Added to My List ✓');
     triggerDebouncedSyncRef.current?.();
@@ -557,6 +605,7 @@ export function AppProvider({ children }) {
 
   const toggleFavorite = useCallback((animeId, anime = null) => {
     let isFav = false;
+    const minimized = minimizeAnime(anime);
     setFavorites(prev => {
       const next = { ...prev };
       if (next[animeId]) {
@@ -564,7 +613,7 @@ export function AppProvider({ children }) {
         showToast('Removed from Favorites');
         isFav = false;
       } else {
-        next[animeId] = anime || { id: animeId };
+        next[animeId] = minimized || { id: animeId };
         showToast('Added to Favorites ❤️');
         isFav = true;
       }
@@ -586,7 +635,7 @@ export function AppProvider({ children }) {
           progress: {
             episode: ep,
             timestamp: ts,
-            anime: anime || watchlistRef.current[animeId]?.anime || { id: animeId }
+            anime: minimized || minimizeAnime(watchlistRef.current[animeId]?.anime) || { id: animeId }
           },
           updated_at: new Date().toISOString()
         }, { onConflict: 'user_id,anime_id' })
