@@ -3,10 +3,10 @@
   "versionCode": 19,
   "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.4/AniPlay.apk",
   "forceUpdate": true,
-  "changelog": "⚠️ CRITICAL STORAGE UPDATE\n• Completely resolves database storage and network bandwidth limits\n• Reduces watchlist size by 99%\n• Faster app startup and list loading times\n• This update is mandatory to continue using synchronization features",
+  "changelog": "\u26a0\ufe0f CRITICAL STORAGE UPDATE\n\u2022 Completely resolves database storage and network bandwidth limits\n\u2022 Reduces watchlist size by 99%\n\u2022 Faster app startup and list loading times\n\u2022 This update is mandatory to continue using synchronization features",
   "changelogItems": [
-    "⚠️ CRITICAL UPDATE: Database storage and bandwidth optimizations",
-    "Resolves Supabase data limits — reduces network egress by 99%",
+    "\u26a0\ufe0f CRITICAL UPDATE: Database storage and bandwidth optimizations",
+    "Resolves Supabase data limits \u2014 reduces network egress by 99%",
     "Mandatory update to continue using watchlist synchronization",
     " watchlist and progress data are now 99% smaller",
     "Faster app loading and page transition times"
