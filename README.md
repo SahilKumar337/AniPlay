@@ -1,14 +1,12 @@
-# 🎬 AniPlay — Premium Mobile Anime Client
+# 🎬 AniPlay — Modern Mobile Anime Client
 
-[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/3NrBxjAJe)
-
-AniPlay is a premium, open-source mobile anime streaming client designed for Android devices. Built using a hybrid web-native architecture (React + Vite + Capacitor), it offers a fluid, glassmorphic UI, responsive controls, and high-performance video playback.
+AniPlay is a modern, open-source mobile anime streaming client designed for Android devices. Built using a hybrid web-native architecture (React + Vite + Capacitor), it offers a fluid, glassmorphic UI, responsive controls, and high-performance video playback.
 
 ---
 
 ## 📱 Screenshots & Application Walkthrough
 
-AniPlay provides a sleek, modern, and intuitive user interface designed to match premium streaming platforms. Below is an overview of the key screens and features:
+AniPlay provides a sleek, modern, and intuitive user interface designed to match major streaming platforms. Below is an overview of the key screens and features:
 
 | **Welcome & Onboarding** | **Spotlight & Home** | **Discovery Feed** |
 | :---: | :---: | :---: |

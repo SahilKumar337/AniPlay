@@ -24,7 +24,7 @@ We are proud to present **AniPlay version 1.5.1**, which fixes title-matching, e
 ## ⚡ 4. CORE APP FEATURES
 * **100% Ad-Free**: Zero popups, zero redirects, and zero banner ads.
 * **Automatic Self-Updater**: Built-in APK updater that checks for updates on launch and downloads/installs new releases directly inside the app.
-* **Premium Dark Mode UI**: Elegant, optimized design utilizing custom glassmorphism and modern typography.
+* **Modern Dark Mode UI**: Elegant, optimized design utilizing custom glassmorphism and modern typography.
 
 ---
 
@@ -32,7 +32,7 @@ We are proud to present **AniPlay version 1.5.1**, which fixes title-matching, e
 
 We are proud to present **AniPlay version 1.4**, our largest and most comprehensive update yet. This release represents a complete architectural overhaul of our core database syncing mechanisms, streaming resolvers, and user-interface render paths. 
 
-Our focus for v1.4 was to eliminate streaming downtime, make navigation feel incredibly smooth on mobile displays, and deliver premium customize options for your personal viewing profile.
+Our focus for v1.4 was to eliminate streaming downtime, make navigation feel incredibly smooth on mobile displays, and deliver high-quality customization options for your personal viewing profile.
 
 ---
 
@@ -66,7 +66,7 @@ Our focus for v1.4 was to eliminate streaming downtime, make navigation feel inc
 ### 🎛️ Custom Media Controls
 * **On-the-Fly Subtitle Sync**: Delay controls are now built directly into the video overlays, allowing you to shift subtitle timings forward or backward.
 * **Playback Speed Selectors**: Choose video playback speeds from 0.5x (slow-motion) up to 2.0x (fast-forward) using a new player menu.
-* **Cinematic Clean Mode**: Completely removed developer logs, warning banner overlays, and diagnostic prompts, giving you a clean, premium interface.
+* **Cinematic Clean Mode**: Completely removed developer logs, warning banner overlays, and diagnostic prompts, giving you a clean, polished interface.
 
 ---
 

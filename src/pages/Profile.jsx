@@ -5,7 +5,7 @@ import {
   Save, Check, X, AlertTriangle, Cloud, CloudLightning,
   Play, SkipForward, Server, Moon, Palette, LayoutGrid,
   Type, Sliders, Captions, Download, Upload,
-  Settings, ChevronDown, Camera,
+  Settings, ChevronDown, Camera, Globe,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
@@ -409,13 +409,24 @@ function SettingsPanel({ onBack }) {
           <SettingRow icon={Play} label="Autoplay Next Episode" sub="Auto-navigate to next episode when current ends" iconColor="#818cf8">
             <Toggle value={settings.autoplay} onChange={v => updateSettings({ autoplay: v })} />
           </SettingRow>
-          <SettingRow icon={Server} label="Preferred Server" sub="Stream source priority when multiple are available" iconColor="#60a5fa" last>
+          <SettingRow icon={Server} label="Preferred Server" sub="Stream source priority when multiple are available" iconColor="#60a5fa">
             <Dropdown value={settings.preferredServer} onChange={v => updateSettings({ preferredServer: v })}
               options={[
                 { value: "auto", label: "Auto (Best)" },
                 { value: "neko", label: "NekoHD" },
                 { value: "waveshd", label: "WavesHD" },
                 { value: "anikoto", label: "AniKoto" }
+              ]} />
+          </SettingRow>
+          <SettingRow icon={Globe} label="Preferred Dub Language" sub="Dub audio preference for GogoAnime streams" iconColor="#fb7185" last>
+            <Dropdown value={settings.preferredLanguage || 'english'} onChange={v => updateSettings({ preferredLanguage: v })}
+              options={[
+                { value: "english", label: "English" },
+                { value: "hindi", label: "Hindi" },
+                { value: "german", label: "German" },
+                { value: "french", label: "French" },
+                { value: "italian", label: "Italian" },
+                { value: "spanish", label: "Spanish" }
               ]} />
           </SettingRow>
         </SettingsCard>
@@ -949,7 +960,7 @@ export default function Profile() {
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Version {appVersion}</div>
             </div>
             <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.75, maxWidth: 300, margin: 0 }}>
-              A premium anime streaming app. Watch favorites in HD, track your progress, and discover new series.
+              A modern anime streaming app. Watch favorites in HD, track your progress, and discover new series.
             </p>
             <div style={{ fontSize: 11, color: "var(--text-muted)", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12, width: "100%" }}>
               Made with love for anime fans 🌸
