@@ -1,5 +1,9 @@
 package com.aniplay.aniplay;
 
+import android.content.pm.PackageManager;
+import android.Manifest;
+import java.util.ArrayList;
+import java.util.List;
 import android.os.Bundle;
 import android.os.Build;
 import android.webkit.WebSettings;
@@ -29,6 +33,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(EmbedScraperPlugin.class);
         registerPlugin(APKUpdaterPlugin.class);
         registerPlugin(OfflineDownloader.class);
+        registerPlugin(BrightnessPlugin.class);   // enables JS swipe-to-brightness control
 
         // Initialize the native Android 12+ SplashScreen splash view
         androidx.core.splashscreen.SplashScreen.installSplashScreen(this);
@@ -102,6 +107,40 @@ public class MainActivity extends BridgeActivity {
         window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
 
         applyFullscreen();
+
+        // Request storage permissions on first launch so offline playback works
+        getWindow().getDecorView().postDelayed(() -> {
+            requestStoragePermissionsIfNeeded();
+        }, 600);
+    }
+
+    /** Request storage read permissions on first launch. Without these:
+     *  - File.exists() returns false on Android 10+ for external storage
+     *  - Capacitor's _capacitor_file_ server can't open video files
+     *  We request at startup so the dialog appears before the user tries to play.
+     */
+    private void requestStoragePermissionsIfNeeded() {
+        List<String> perms = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+: granular media permissions
+            if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO)
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.READ_MEDIA_VIDEO);
+            if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES)
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.READ_MEDIA_IMAGES);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // Android 6-12
+            if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        if (!perms.isEmpty())
+            requestPermissions(perms.toArray(new String[0]), 100);
     }
 
     @Override
@@ -211,5 +250,9 @@ public class MainActivity extends BridgeActivity {
         // ── Native Feel Optimizations ──────────────────────────────────
         // Disable scroll overscroll bounce/glow effect
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
+
+        // Hide native scrollbars completely (CSS can't hide Android WebView scrollbars)
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
     }
 }

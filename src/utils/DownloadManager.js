@@ -3,28 +3,106 @@ import { registerPlugin, Capacitor } from '@capacitor/core';
 const isNative = Capacitor.isNativePlatform();
 const OfflineDownloader = isNative ? registerPlugin('OfflineDownloader') : null;
 
+/**
+ * Build the expected MP4 filename that Java saves the download as.
+ * Must match the Java pattern: "<safe title> - Ep <episode> (<TRACK>).mp4"
+ */
+export function getEpisodeFilename(animeTitle, episode, track = 'sub') {
+  const safe = (animeTitle || 'Anime').replace(/[\\\/:*?"<>|]/g, '_');
+  return `${safe} - Ep ${episode} (${track.toUpperCase()}).mp4`;
+}
+
+// ── Ultra-lean localStorage persistence ───────────────────────────────────────────────────────
+// Each saved entry is only ~200 bytes of JSON (5 short fields, no binary data).
+// 500 downloads = ~100KB — well within localStorage's 5MB limit on all Android WebViews.
+// Status/progress/error are NOT stored (those reset on each session anyway).
+const DL_META_KEY = 'aniplay_dlmeta';
+const DL_META_MAX = 500; // cap at 500 entries to prevent unbounded growth
+
+function _metaLoad() {
+  try {
+    const raw = localStorage.getItem(DL_META_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function _metaSave(list) {
+  try {
+    // Keep only the most recent DL_META_MAX entries
+    const trimmed = list.slice(-DL_META_MAX);
+    localStorage.setItem(DL_META_KEY, JSON.stringify(trimmed));
+  } catch (e) {
+    console.warn('[DownloadManager] localStorage write failed:', e.message);
+  }
+}
+
+function _metaAdd(animeId, animeTitle, cover, episode, track) {
+  const id = `${animeId}_${episode}_${track}`;
+  const list = _metaLoad().filter(x => x.id !== id); // remove old entry for same episode
+  list.push({ id, t: animeTitle, c: cover, e: String(episode), k: track });
+  _metaSave(list);
+}
+
+function _metaRemove(taskId) {
+  const list = _metaLoad().filter(x => x.id !== taskId);
+  _metaSave(list);
+}
+
 class DownloadManager {
   constructor() {
-    this.listeners = new Set();
+    this.listeners      = new Set();
     this.activeProgress = {};
-    this.completedList = []; // Track completed/failed downloads in current session
+    this.completedList  = [];
+    this.pendingMeta    = {}; // taskId → { animeId, animeTitle, cover, episode, track }
+
+    // ── Restore persisted metadata from previous sessions ──
+    // Entries are loaded as status:"completed" since we only persist finished downloads.
+    try {
+      const saved = _metaLoad();
+      for (const m of saved) {
+        this.completedList.push({
+          taskId:    m.id,
+          status:    'completed',
+          progress:  100,
+          error:     null,
+          remuxError: null,
+          animeId:    m.id.split('_')[0],
+          animeTitle: m.t || 'Anime',
+          cover:      m.c || '',
+          episode:    m.e || m.id.split('_')[1],
+          track:      m.k || m.id.split('_')[2] || 'sub',
+        });
+      }
+    } catch (e) {
+      console.warn('[DownloadManager] Failed to restore persisted metadata:', e);
+    }
 
     if (isNative && OfflineDownloader) {
       try {
         OfflineDownloader.addListener('downloadProgress', (data) => {
           const { taskId, progress, status, error, remuxError } = data;
           if (taskId) {
+            const meta = this.pendingMeta[taskId] || {};
             if (status === 'completed' || status === 'error') {
               delete this.activeProgress[taskId];
-              // Remove duplicate item in completed list if exists
               this.completedList = this.completedList.filter(x => x.taskId !== taskId);
               this.completedList.push({
                 taskId,
                 status,
                 progress: status === 'completed' ? 100 : 0,
-                error: error || null,
-                remuxError: remuxError || null
+                error:       error      || null,
+                remuxError:  remuxError || null,
+                animeId:    meta.animeId    || taskId.split('_')[0],
+                animeTitle: meta.animeTitle || 'Anime',
+                cover:      meta.cover      || '',
+                episode:    meta.episode    || taskId.split('_')[1],
+                track:      meta.track      || taskId.split('_')[2] || 'sub',
               });
+              // ─ Persist to localStorage (only on success, ~200 bytes per entry) ─
+              if (status === 'completed' && meta.animeId) {
+                _metaAdd(meta.animeId, meta.animeTitle, meta.cover, meta.episode, meta.track);
+              }
+              delete this.pendingMeta[taskId];
             } else {
               this.activeProgress[taskId] = progress;
             }
@@ -52,7 +130,13 @@ class DownloadManager {
           clearInterval(interval);
           delete this.activeProgress[taskId];
           this.completedList = this.completedList.filter(x => x.taskId !== taskId);
-          this.completedList.push({ taskId, status: 'completed', progress: 100 });
+          this.completedList.push({
+            taskId, status: 'completed', progress: 100,
+            animeId: String(anime.id),
+            animeTitle: anime.title?.english || anime.title?.romaji || 'Anime',
+            cover: anime.coverImage?.large || anime.coverImage?.medium || '',
+            episode: String(episode), track
+          });
           this.notify({ taskId, progress: 100, status: 'completed' });
         } else {
           this.activeProgress[taskId] = progress;
@@ -67,11 +151,17 @@ class DownloadManager {
       throw new Error('anime, episode, and srvUrl are required');
     }
 
-    const cover = anime.coverImage?.large || anime.coverImage?.medium || '';
+    const animeId    = String(anime.id);
     const animeTitle = anime.title?.english || anime.title?.romaji || 'Anime';
+    const cover      = anime.coverImage?.large || anime.coverImage?.medium || '';
+    const taskId     = `${animeId}_${episode}_${track}`;
+
+    // Store metadata NOW — completion event will include it in completedList
+    this.pendingMeta[taskId] = { animeId, animeTitle, cover, episode: String(episode), track };
+    this.activeProgress[taskId] = 0;
 
     return OfflineDownloader.downloadEpisode({
-      animeId: String(anime.id),
+      animeId,
       animeTitle,
       episode: String(episode),
       url: srvUrl,
@@ -92,42 +182,82 @@ class DownloadManager {
     for (const item of this.completedList) {
       const parts = item.taskId.split('_');
       list.push({
-        taskId: item.taskId,
-        animeId: parts[0],
-        episode: parts[1],
-        track: parts[2] || 'sub',
-        status: item.status,
-        progress: item.progress,
-        error: item.error,
+        taskId:     item.taskId,
+        animeId:    item.animeId    || parts[0],
+        animeTitle: item.animeTitle || 'Anime',
+        cover:      item.cover      || '',
+        episode:    item.episode    || parts[1],
+        track:      item.track      || parts[2] || 'sub',
+        status:     item.status,
+        progress:   item.progress,
+        error:      item.error,
         remuxError: item.remuxError,
-        animeTitle: 'Anime', // Fallback
-        timestamp: Date.now()
+        timestamp:  Date.now()
       });
     }
 
     // Add active progress items
     for (const [taskId, progress] of Object.entries(this.activeProgress)) {
+      const meta  = this.pendingMeta[taskId] || {};
       const parts = taskId.split('_');
       list.push({
         taskId,
-        animeId: parts[0],
-        episode: parts[1],
-        track: parts[2] || 'sub',
-        status: 'downloading',
+        animeId:    meta.animeId    || parts[0],
+        animeTitle: meta.animeTitle || 'Anime',
+        cover:      meta.cover      || '',
+        episode:    meta.episode    || parts[1],
+        track:      meta.track      || parts[2] || 'sub',
+        status:     'downloading',
         progress,
-        animeTitle: 'Anime',
-        timestamp: Date.now()
+        timestamp:  Date.now()
       });
     }
 
     return list;
   }
 
+  // Query MediaStore for the local file path, then convert to a WebView-accessible HTTP URL
+  // using Capacitor's built-in local file server (supports byte-range requests for seeking).
+  async getLocalFileUri(animeTitle, episode, track = 'sub') {
+    if (!isNative || !OfflineDownloader) {
+      console.log('[DownloadManager] getLocalFileUri: not available in browser');
+      return { videoUri: null, subtitleUri: null };
+    }
+    const displayName = getEpisodeFilename(animeTitle, episode, track);
+    try {
+      const result = await OfflineDownloader.getLocalVideoUri({ displayName });
+
+      // Convert filesystem paths to http://localhost/_capacitor_file_/... URLs
+      // that the WebView can stream. This is the official Capacitor pattern for
+      // serving local files to the WebView — supports byte-range (video seeking).
+      let videoUri = null;
+      let subtitleUri = null;
+
+      if (result.filePath) {
+        const { Capacitor } = await import('@capacitor/core');
+        const toCapacitorUrl = (p) => {
+          if (!p) return null;
+          const clean = p.startsWith('file://') ? p : `file://${p}`;
+          return Capacitor.convertFileSrc(clean);
+        };
+        videoUri = toCapacitorUrl(result.filePath);
+        subtitleUri = toCapacitorUrl(result.subtitlePath);
+      }
+
+      return { videoUri, subtitleUri };
+    } catch (e) {
+      console.error('[DownloadManager] getLocalFileUri failed:', e);
+      return { videoUri: null, subtitleUri: null };
+    }
+  }
+
   // Delete a downloaded episode (no-op as saved to gallery)
   async deleteDownload(animeId, episode, track = 'sub') {
     const taskId = `${animeId}_${episode}_${track}`;
-    this.completedList = this.completedList.filter(id => id !== taskId);
+    this.completedList   = this.completedList.filter(x => x.taskId !== taskId);
     delete this.activeProgress[taskId];
+    delete this.pendingMeta[taskId];
+    _metaRemove(taskId); // also remove from localStorage
     this.notify({ taskId, status: 'deleted' });
   }
 

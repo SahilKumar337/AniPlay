@@ -7,10 +7,10 @@ import {
   getTrending, getAiring, getSeasonal,
   getMostPopular, getTopRated, getMovies, getCurrentSeason
 } from '../api/anilist';
-import { useApp }       from '../context/AppContext';
+import { useApp } from '../context/AppContext';
 import { rankAnimeByKnn } from '../utils/knn';
 import { searchAndRankAnime } from '../utils/searchEngine';
-import { useDebounce }  from '../hooks/useDebounce';
+import { useDebounce } from '../hooks/useDebounce';
 
 
 const GENRES = [
@@ -23,37 +23,37 @@ const GENRES = [
 ];
 
 const FORMATS = [
-  { label: 'All',   value: null },
-  { label: 'TV',    value: 'TV' },
+  { label: 'All', value: null },
+  { label: 'TV', value: 'TV' },
   { label: 'Movie', value: 'MOVIE' },
-  { label: 'OVA',   value: 'OVA' },
-  { label: 'ONA',   value: 'ONA' },
+  { label: 'OVA', value: 'OVA' },
+  { label: 'ONA', value: 'ONA' },
 ];
 const STATUSES = [
-  { label: 'All',      value: null             },
-  { label: 'Airing',   value: 'RELEASING'      },
-  { label: 'Finished', value: 'FINISHED'       },
-  { label: 'Upcoming', value: 'NOT_YET_RELEASED'},
+  { label: 'All', value: null },
+  { label: 'Airing', value: 'RELEASING' },
+  { label: 'Finished', value: 'FINISHED' },
+  { label: 'Upcoming', value: 'NOT_YET_RELEASED' },
 ];
 
 const CATEGORY_TITLES = {
-  'airing':        'Top Airing',
-  'new-releases':  'New Episode Releases',
-  'trending':      'Top Hits Anime',
-  'seasonal':      'This Season',
-  'popular':       'Most Favorite',
-  'top-rated':     'Top TV Series',
-  'movies':        'Top Movies',
+  'airing': 'Top Airing',
+  'new-releases': 'New Episode Releases',
+  'trending': 'Top Hits Anime',
+  'seasonal': 'This Season',
+  'popular': 'Most Favorite',
+  'top-rated': 'Top TV Series',
+  'movies': 'Top Movies',
 };
 
 const STATUS_COLOR = {
-  RELEASING:        '#22c55e',
-  FINISHED:         'var(--text-muted)',
+  RELEASING: '#22c55e',
+  FINISHED: 'var(--text-muted)',
   NOT_YET_RELEASED: '#f59e0b',
 };
 const STATUS_LABEL = {
-  RELEASING:        'Airing',
-  FINISHED:         'Finished',
+  RELEASING: 'Airing',
+  FINISHED: 'Finished',
   NOT_YET_RELEASED: 'Upcoming',
 };
 
@@ -66,33 +66,46 @@ export default function Browse() {
 
   const initQuery = searchParams.get('q') || '';
   const initGenre = searchParams.get('genre') || null;
-  const category  = searchParams.get('category') || null;
+  const category = searchParams.get('category') || null;
 
-  const [query,          setQuery]         = useState(initQuery);
-  const [selectedGenres, setSelectedGenres]= useState(initGenre ? [initGenre] : []);
-  const [format,         setFormat]        = useState(null);
-  const [status,         setStatus]        = useState(null);
-  const [results,        setResults]       = useState([]);
-  const [loading,        setLoading]       = useState(false);
-  const [showFilter,     setShowFilter]    = useState(false);
-  const [hasMore,        setHasMore]       = useState(true);
+  const [query, setQuery] = useState(initQuery);
+  const [selectedGenres, setSelectedGenres] = useState(initGenre ? [initGenre] : []);
+  const [format, setFormat] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
-  const filterSheetRef  = useRef(null);
-  const sentinelRef     = useRef(null);    // IntersectionObserver sentinel
-  const generationRef   = useRef(0);       // Fresh search ID — stale results self-discard
-  const loadingRef      = useRef(false);   // Sync flag: prevents double-fire
-  const pageRef         = useRef(1);       // Sync page — always read from here, not state
-  const hasMoreRef      = useRef(true);    // Sync hasMore — safe inside stable closures
-  const loadMoreRef     = useRef(null);    // Points to stable loadMore (set once at mount)
-  const lastScrollY     = useRef(0);
-  const fetchPageRef    = useRef(null);    // Always-current fetchPage — read by stable closures
-  const abortRef        = useRef(null);    // AbortController: cancels stale in-flight searches
-  const headerRef       = useRef(null);    // Sticky header — DOM-mutated directly, zero re-renders
+  const filterSheetRef = useRef(null);
+  const sentinelRef = useRef(null);    // IntersectionObserver sentinel
+  const generationRef = useRef(0);       // Fresh search ID — stale results self-discard
+  const loadingRef = useRef(false);   // Sync flag: prevents double-fire
+  const pageRef = useRef(1);       // Sync page — always read from here, not state
+  const hasMoreRef = useRef(true);    // Sync hasMore — safe inside stable closures
+  const loadMoreRef = useRef(null);    // Points to stable loadMore (set once at mount)
+  const lastScrollY = useRef(0);
+  const fetchPageRef = useRef(null);    // Always-current fetchPage — read by stable closures
+  const abortRef = useRef(null);    // AbortController: cancels stale in-flight searches
+  const headerRef = useRef(null);    // Fixed header — DOM-mutated directly, zero re-renders
+  const [headerHeight, setHeaderHeight] = useState(80); // tracked via ResizeObserver
 
 
 
   // 450ms debounce — feels instant, avoids API call on every keystroke
   const debounced = useDebounce(query, 450);
+
+  // ─── ResizeObserver: track header height for content paddingTop ────
+  useEffect(() => {
+    if (!headerRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setHeaderHeight(Math.ceil(entry.contentRect.height));
+      }
+    });
+    ro.observe(headerRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   // ─── Close filter sheet on outside tap ──────────────────────────
   useEffect(() => {
@@ -122,7 +135,7 @@ export default function Browse() {
 
   // ─── Resolve sort / filter overrides for category context ────────
   const resolveQueryParams = useCallback((overrideFormat = format, overrideStatus = status) => {
-    let sortVal   = 'POPULARITY_DESC';
+    let sortVal = 'POPULARITY_DESC';
     let formatVal = overrideFormat;
     let statusVal = overrideStatus;
     if (category === 'trending') {
@@ -166,13 +179,13 @@ export default function Browse() {
       }
     } else if (category) {
       const { season, year } = getCurrentSeason();
-      if      (category === 'airing')       rows = await getAiring(pg, PER_PAGE);
+      if (category === 'airing') rows = await getAiring(pg, PER_PAGE);
       else if (category === 'new-releases') rows = [...(await getAiring(pg, PER_PAGE))].reverse();
-      else if (category === 'trending')     rows = await getTrending(pg, PER_PAGE);
-      else if (category === 'seasonal')     rows = await getSeasonal(season, year, pg, PER_PAGE);
-      else if (category === 'popular')      rows = await getMostPopular(pg, PER_PAGE);
-      else if (category === 'top-rated')    rows = (await getTopRated(pg, PER_PAGE)).filter(a => a.format === 'TV');
-      else if (category === 'movies')       rows = await getMovies(pg, PER_PAGE);
+      else if (category === 'trending') rows = await getTrending(pg, PER_PAGE);
+      else if (category === 'seasonal') rows = await getSeasonal(season, year, pg, PER_PAGE);
+      else if (category === 'popular') rows = await getMostPopular(pg, PER_PAGE);
+      else if (category === 'top-rated') rows = (await getTopRated(pg, PER_PAGE)).filter(a => a.format === 'TV');
+      else if (category === 'movies') rows = await getMovies(pg, PER_PAGE);
       rawCount = rows.length;
       hasNextPage = rows.length >= PER_PAGE;
     } else {
@@ -208,11 +221,12 @@ export default function Browse() {
 
     // Reset ALL sync state before any async work
     const gen = ++generationRef.current;
-    loadingRef.current   = true;
-    pageRef.current      = 1;
-    hasMoreRef.current   = true;
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    loadingRef.current = true;
+    pageRef.current = 1;
+    hasMoreRef.current = true;
+    // NOTE: No scroll-to-top — search bar slides in from top (YouTube style) on scroll-up
     setLoading(true);
+
     setHasMore(true);
     setResults([]);
 
@@ -281,7 +295,7 @@ export default function Browse() {
   // fetchPageRef is updated BEFORE this fires (declared first above).
   useEffect(() => {
     doSearch();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced, selectedGenres, format, status, category]);
 
   // ─── TRIGGER 1: IntersectionObserver (primary, async, zero layout cost) ──
@@ -312,46 +326,51 @@ export default function Browse() {
   useEffect(() => {
     if (loading || !hasMore) return;
     const timer = setTimeout(() => {
-      const isNearBottom =
-        window.scrollY + window.innerHeight >=
-        document.documentElement.scrollHeight - 700;
-      if (isNearBottom) loadMoreRef.current?.();
+      const y = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+      const sh = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      if (y + window.innerHeight >= sh - 700) loadMoreRef.current?.();
     }, 250);
     return () => clearTimeout(timer);
   }, [loading, hasMore]);
 
   // ─── TRIGGER 3: Scroll listener (rAF-throttled, fast-scroller backup) ──
-  // Throttled with requestAnimationFrame: runs at most once per display frame
-  // (≤16ms / 60fps) instead of firing 5-10x per scroll tick.
-  // Also drives the header show/hide animation.
+  // Throttled with requestAnimationFrame: runs at most once per display frame.
+  // YouTube-style: hide header on scroll-down, show immediately on scroll-up.
   useEffect(() => {
     let rafId = null;
+    const getScrollY = () => window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+    const getScrollH = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
     const handleScroll = () => {
-      if (rafId) return; // already scheduled for this frame, skip
+      if (rafId) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        const y = window.scrollY;
-        // Header show/hide — direct DOM mutation, zero React re-renders during scroll
+        const y = getScrollY();
+        // YouTube-style header: always show when near top, hide on down, show on up
         if (headerRef.current) {
-          if (y < 10 || y < lastScrollY.current) {
-            headerRef.current.style.transform = 'translateY(0)';
+          if (y < 10) {
+            // Near top — always fully visible
+            headerRef.current.style.transform = 'translateX(-50%) translateY(0)';
+          } else if (y < lastScrollY.current - 2) {
+            // Scrolling UP (even tiny) → slide in immediately
+            headerRef.current.style.transform = 'translateX(-50%) translateY(0)';
           } else if (y > lastScrollY.current + 5) {
-            headerRef.current.style.transform = 'translateY(-100%)';
+            // Scrolling DOWN past threshold → slide out above viewport
+            headerRef.current.style.transform = 'translateX(-50%) translateY(-110%)';
           }
         }
         lastScrollY.current = y;
-        // Infinite scroll backup
+        // Infinite scroll backup — Android-compatible
         if (!loadingRef.current && hasMoreRef.current) {
-          const isNearBottom =
-            y + window.innerHeight >=
-            document.documentElement.scrollHeight - 700;
-          if (isNearBottom) loadMoreRef.current?.();
+          if (y + window.innerHeight >= getScrollH() - 700) loadMoreRef.current?.();
         }
       });
     };
+    // Listen on both window AND document for maximum Android WebView compatibility
     window.addEventListener('scroll', handleScroll, { passive: true });
+    document.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
       window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('scroll', handleScroll);
       if (rafId) cancelAnimationFrame(rafId);
     };
   }, []); // Attach once — state read from refs so always current
@@ -361,27 +380,29 @@ export default function Browse() {
   const personalizedResults = results;
 
   return (
-    <div className="page" style={{ background: 'var(--bg-primary)', minHeight: '100vh' }}>
+    <div className="page" style={{ background: 'var(--bg-primary)', minHeight: '100vh', paddingTop: headerHeight }}>
 
-      {/* ── Sticky Header ── */}
-      <div 
+      {/* ── YouTube-style Fixed Header: hides on scroll-down, shows on scroll-up ── */}
+      <div
         ref={headerRef}
-        className="sticky-header" 
-        style={{ 
-          background: 'rgba(15, 15, 15, 0.82)',
-          backdropFilter: 'blur(35px) saturate(200%)',
-          WebkitBackdropFilter: 'blur(35px) saturate(200%)',
-          position: 'sticky',
+        style={{
+          position: 'fixed',
           top: 0,
-          left: 0,
-          right: 0,
+          left: '50%',
+          transform: 'translateX(-50%) translateY(0)',
+          width: '100%',
+          maxWidth: 480,
           zIndex: 100,
-          transform: 'translateY(0)',
-          transition: 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+          background: 'rgba(12, 12, 14, 0.96)',
+          backdropFilter: 'blur(40px) saturate(200%)',
+          WebkitBackdropFilter: 'blur(40px) saturate(200%)',
+          borderBottom: '0.5px solid var(--border)',
+          // Smooth spring animation matching Home/Schedule headers
+          transition: 'transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
           willChange: 'transform',
         }}
       >
-        <div style={{ padding: '10px 14px 8px', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ padding: '10px 14px 8px', paddingTop: 'var(--sat)', display: 'flex', gap: 10, alignItems: 'center' }}>
 
           {/* Search Box */}
           <div style={{
@@ -763,9 +784,9 @@ function FilterChip({ label, active, onClick }) {
 // Wrapped in memo to prevent redundant re-renders during scroll header changes
 const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
   const navigate = useNavigate();
-  const title  = getTitle(anime);
-  const cover  = getCover(anime);
-  const score  = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
+  const title = getTitle(anime);
+  const cover = getCover(anime);
+  const score = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
   const status = anime.status;
   // Pass activeGenres so filtered tags are always shown & highlighted
   const allGenres = getDisplayGenresOrTags(anime, activeGenres);

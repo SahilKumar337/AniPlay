@@ -5,13 +5,49 @@ import { CapacitorHttp, CapacitorCookies, registerPlugin } from '@capacitor/core
 import {
   Play, Pause, Volume2, VolumeX, Volume1,
   Maximize, Minimize, Settings, Subtitles,
-  RotateCcw, RotateCw, ArrowLeft, Clock, SkipForward, SkipBack
+  RotateCcw, RotateCw, ArrowLeft, Clock, SkipForward, SkipBack, X
 } from 'lucide-react';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
 import './AniPlayer.css';
 
 const EmbedScraper = registerPlugin('EmbedScraper');
+
+/* ─── Native Brightness plugin ─────────────────────────────────
+   Uses LAZY initialization so the plugin is only resolved after
+   Capacitor is fully loaded (avoids "plugin not found" at import time).
+──────────────────────────────────────────────────────────────── */
+let _BrightnessPlugin = undefined; // lazy-loaded on first use
+
+function getBrightnessPlugin() {
+  if (_BrightnessPlugin !== undefined) return _BrightnessPlugin;
+  // Only attempt on native platforms
+  if (!window.Capacitor?.isNativePlatform?.()) {
+    _BrightnessPlugin = null;
+    return null;
+  }
+  try {
+    _BrightnessPlugin = registerPlugin('Brightness');
+  } catch (e) {
+    _BrightnessPlugin = null;
+  }
+  return _BrightnessPlugin;
+}
+
+async function setDeviceBrightness(value) {
+  const v = Math.min(1, Math.max(0.01, value));
+  const plugin = getBrightnessPlugin();
+  if (plugin) {
+    try { await plugin.setBrightness({ value: v }); } catch (_) {}
+  }
+}
+
+async function resetDeviceBrightness() {
+  const plugin = getBrightnessPlugin();
+  if (plugin) {
+    try { await plugin.resetBrightness(); } catch (_) {}
+  }
+}
 
 
 /* ─── Way 4: CapacitorHttp hls.js loader ──────────────────────
@@ -223,9 +259,10 @@ export default function AniPlayer({
   autoplay = true,
   subtitleSettings = null,
   loading = false,
-  onStreamExpired = null,  // Called when CDN token expires mid-play — parent should refresh stream URL
-  startInFs = false,       // If true, immediately enter fullscreen on mount (episode transition)
-  keepFsOnEpChange = null, // Ref<boolean> — parent sets true before triggering episode change so unmount skips orientation restore
+  onStreamExpired = null,
+  startInFs = false,
+  keepFsOnEpChange = null,
+  isLocal = false,    // NEW: true = local file (content:// URI), skip HLS.js entirely
 }) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
@@ -254,10 +291,14 @@ export default function AniPlayer({
   const [subs,      setSubs]      = useState(subtitles || []);
   const [activeSub, setActiveSub] = useState(-1);
   const [cues,      setCues]      = useState([]);
-  const [showQ,     setShowQ]     = useState(false);
-  const [showSub,   setShowSub]   = useState(false);
-  const [subDelay,  setSubDelay]  = useState(0);      // subtitle sync offset in seconds
-  const [showSync,  setShowSync]  = useState(false);  // subtitle sync delay menu visibility
+  // Single mutual-exclusive panel state — prevents two menus overlapping at once
+  // null = closed, 'quality' | 'subtitles' | 'sync' | 'speed' = open panel
+  const [activePanel, setActivePanel] = useState(null);
+  const showQ    = activePanel === 'quality';
+  const showSub  = activePanel === 'subtitles';
+  const showSync = activePanel === 'sync';
+  const showSpeed_inner = activePanel === 'speed';
+  const [subDelay, setSubDelay] = useState(0); // subtitle sync offset in seconds
   const [ripple,    setRipple]    = useState(null);
   const [swipeVol,  setSwipeVol]  = useState(false);
   const [swipeBri,  setSwipeBri]  = useState(false);
@@ -276,8 +317,9 @@ export default function AniPlayer({
   const outroSkippedRef = useRef(false);
 
   // Playback speed
-  const [speed,     setSpeed]     = useState(1);
-  const [showSpeed, setShowSpeed] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  // showSpeed is derived from activePanel above (showSpeed_inner)
+  const showSpeed = showSpeed_inner;
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   // Debug & Diagnostics
@@ -300,6 +342,10 @@ export default function AniPlayer({
 
     log(`Initializing stream: ${url.slice(0, 100)}...`);
 
+    // Save current playback position so we can resume at the same point
+    // when switching servers mid-episode (not for episode changes — those start fresh)
+    const savedTime = (videoRef.current?.currentTime > 2) ? videoRef.current.currentTime : 0;
+
     // Reset all state on URL change
     introSkippedRef.current = false;
     outroSkippedRef.current = false;
@@ -314,8 +360,7 @@ export default function AniPlayer({
     setActiveQ(-1);
     setSubs(subtitles || []);
     setActiveSub(-1);
-    setShowQ(false);
-    setShowSub(false);
+    setActivePanel(null); // close all menus when URL/server changes
     setStuckCount(0);
 
     v.removeAttribute('src');
@@ -326,6 +371,11 @@ export default function AniPlayer({
       v.play().then(() => {
         log('video.play() SUCCEEDED');
         setNeedsTap(false);
+        // Resume at same position when switching servers mid-episode
+        if (savedTime > 0) {
+          log(`Resuming from saved position: ${savedTime.toFixed(1)}s`);
+          v.currentTime = savedTime;
+        }
       }).catch(err => {
         log(`video.play() FAILED: ${err.name} - ${err.message}`);
         // NotAllowedError = browser blocked autoplay → show tap-to-play
@@ -341,6 +391,20 @@ export default function AniPlayer({
     let hls;
     let mediaErrRetries = 0;
     let networkErrRetries = 0;
+
+    // ── LOCAL FILE MODE: bypass HLS.js, use native video element directly ──
+    // content:// MediaStore URIs work natively in Capacitor's Android WebView
+    // but HLS.js cannot handle them (it would try to fetch them via XHR which fails).
+    if (isLocal) {
+      log('Local file mode: setting src directly on native video element');
+      v.src = url;
+      v.load();
+      tryPlay();
+      return () => {
+        v.removeAttribute('src');
+        v.load();
+      };
+    }
 
     if (Hls.isSupported()) {
       log('Hls.js is supported. Spawning player...');
@@ -388,7 +452,11 @@ export default function AniPlayer({
           hls.recoverMediaError();
         } else {
           log('Fatal HLS error unrecoverable. Displaying error overlay.');
-          setHlsErr(`Stream error: ${data.details || data.type}. Tap retry.`);
+          // Pass error type key so JSX can show the right contextual message
+          const errKey = data.type === Hls.ErrorTypes.NETWORK_ERROR ? 'network'
+            : data.type === Hls.ErrorTypes.MEDIA_ERROR ? 'media'
+            : 'unknown';
+          setHlsErr(errKey);
           setWaiting(false);
         }
       });
@@ -511,11 +579,7 @@ export default function AniPlayer({
 
   // Close menus when controls fade out
   useEffect(() => {
-    if (!ctrlVis) {
-      setShowQ(false);
-      setShowSub(false);
-      setShowSync(false);
-    }
+    if (!ctrlVis) setActivePanel(null);
   }, [ctrlVis]);
   // Fetch and parse subtitles when activeSub changes
   useEffect(() => {
@@ -678,7 +742,7 @@ export default function AniPlayer({
     const onEnded = () => {
       log('Video ended');
       if (autoplay && onEpisodeChange && currentEpisode < totalEpisodes) {
-        setAutoplayCountdown(5);
+        setAutoplayCountdown(3); // 3 seconds — faster, more premium
       }
     };
     const onPlay = (e) => {
@@ -687,12 +751,24 @@ export default function AniPlayer({
       if (e.type === 'playing') {
         setNeedsTap(false);
         setHasStarted(true);
+        schedHide(); // ← auto-hide HUD when video actually starts playing
+      }
+    };
+    // Also trigger auto-hide from timeupdate when playing starts (covers autoplay case)
+    let _lastPlaying = false;
+    const onTimeUpdate = () => {
+      if (!v.paused && !_lastPlaying) {
+        _lastPlaying = true;
+        schedHide();
+      } else if (v.paused) {
+        _lastPlaying = false;
       }
     };
 
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
     v.addEventListener('timeupdate',      sync);
+    v.addEventListener('timeupdate',      onTimeUpdate);
     v.addEventListener('loadedmetadata',  onMeta);
     v.addEventListener('waiting',         onWait);
     v.addEventListener('playing',         onPlay);
@@ -702,6 +778,7 @@ export default function AniPlayer({
       v.removeEventListener('play',           sync);
       v.removeEventListener('pause',          sync);
       v.removeEventListener('timeupdate',     sync);
+      v.removeEventListener('timeupdate',     onTimeUpdate);
       v.removeEventListener('loadedmetadata', onMeta);
       v.removeEventListener('waiting',        onWait);
       v.removeEventListener('playing',        onPlay);
@@ -789,6 +866,9 @@ export default function AniPlayer({
   // so the next episode can immediately re-enter fullscreen without a portrait flash.
   useEffect(() => {
     return () => {
+      // Always reset screen brightness when player closes
+      resetDeviceBrightness();
+
       if (isNative && !(keepFsOnEpChange?.current)) {
         ScreenOrientation.lock({ orientation: 'portrait' })
           .then(() => ScreenOrientation.unlock())
@@ -848,6 +928,19 @@ export default function AniPlayer({
     else          { v.pause(); setCtrlVis(true); clearTimeout(hideTimer.current); }
   }, [schedHide]);
 
+  // Silent skip — shows ripple feedback but does NOT show the full HUD
+  // Used for double-tap. For button taps, use skip() which also shows controls.
+  const skipSilent = useCallback((s) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = clamp(v.currentTime + s, 0, v.duration || 0);
+    const id = Date.now();
+    setRipple({ side: s < 0 ? 'left' : 'right', label: `${Math.abs(s)}s`, id });
+    setTimeout(() => setRipple(r => r?.id === id ? null : r), 750);
+    // schedHide only if HUD is already visible — don't bring it up
+    if (ctrlVis) schedHide();
+  }, [ctrlVis, schedHide]);
+
   const skip = useCallback((s) => {
     const v = videoRef.current;
     if (!v) return;
@@ -896,7 +989,7 @@ export default function AniPlayer({
 
   const applySpeed = useCallback((s) => {
     setSpeed(s);
-    setShowSpeed(false);
+    setActivePanel(null);
     showCtrl();
   }, [showCtrl]);
 
@@ -917,11 +1010,12 @@ export default function AniPlayer({
     const xPct = (cx - left) / width;
     const now  = Date.now();
     if (now - lastTap.current < 300 && now - lastTap.current > 0) {
+      // Double-tap: skip silently — no HUD flash
       clearTimeout(tapTimer.current);
       lastTap.current = 0;
-      if (xPct < 0.35) skip(-10);
-      else if (xPct > 0.65) skip(10);
-      else togglePlay();
+      if (xPct < 0.35) skipSilent(-10);
+      else if (xPct > 0.65) skipSilent(10);
+      else togglePlay(); // center double-tap = play/pause (HUD toggle is fine here)
     } else {
       lastTap.current = now;
       tapTimer.current = setTimeout(() => {
@@ -933,7 +1027,7 @@ export default function AniPlayer({
         });
       }, 300);
     }
-  }, [skip, togglePlay, schedHide]);
+  }, [skipSilent, togglePlay, schedHide]);
 
   /* ── Swipe gesture ────────────────────────────────────────── */
   const onGestureStart = useCallback((cx, cy) => {
@@ -953,18 +1047,22 @@ export default function AniPlayer({
     const dx = Math.abs(cx - gesture.current.startX);
     const dy = Math.abs(cy - gesture.current.startY);
     if (!gesture.current.moved) {
-      if (dx > 10 || dy > 10) {
-        if (dx > dy) { gesture.current = null; return; } // horizontal = skip, handled by double-tap
+      if (dx > 8 || dy > 8) {
+        // If predominantly horizontal, cancel swipe (handled by double-tap skip)
+        if (dx > dy * 1.2) { gesture.current = null; return; }
         gesture.current.moved = true;
       } else return;
     }
-    const delta = (gesture.current.startY - cy) / 200;
+    // Sensitivity: 180px swipe = full range
+    const delta = (gesture.current.startY - cy) / 180;
     if (gesture.current.isLeft) {
-      const nb = clamp(gesture.current.startBri + delta, 0.1, 2);
+      // LEFT side = screen brightness (native phone brightness)
+      const nb = clamp(gesture.current.startBri + delta, 0.05, 1.0);
       setBright(nb);
-      if (videoRef.current) videoRef.current.style.filter = `brightness(${nb})`;
+      setDeviceBrightness(nb); // sets ACTUAL phone screen brightness
       setSwipeBri(true);
     } else {
+      // RIGHT side = volume
       applyVol(clamp(gesture.current.startVol + delta, 0, 1));
       setSwipeVol(true);
     }
@@ -974,6 +1072,7 @@ export default function AniPlayer({
     const g = gesture.current;
     gesture.current = null;
     if (!g?.moved) handleTap(cx, cy);
+    // Keep brightness set — do NOT reset (user wants it to stay)
     setTimeout(() => { setSwipeBri(false); setSwipeVol(false); }, 900);
   }, [handleTap]);
 
@@ -983,6 +1082,11 @@ export default function AniPlayer({
     if (!el) return;
 
     const handleTouchStart = (e) => {
+      // Ignore multi-touch (pinch-to-zoom etc)
+      if (e.touches.length > 1) {
+        gesture.current = null;
+        return;
+      }
       if (!isGestureTarget(e.target)) return;
       lastTouchTime.current = Date.now();
       const t = e.touches[0];
@@ -990,6 +1094,11 @@ export default function AniPlayer({
     };
 
     const handleTouchMove = (e) => {
+      // Cancel gesture on multi-touch
+      if (e.touches.length > 1) {
+        gesture.current = null;
+        return;
+      }
       if (!isGestureTarget(e.target)) return;
       // Prevent Android scroll/bounce if actively swiping volume/brightness or dragging seek
       if (seekDrag.current || (gesture.current && gesture.current.moved)) {
@@ -1005,8 +1114,7 @@ export default function AniPlayer({
         return;
       }
       lastTouchTime.current = Date.now();
-      // ── Fix: if we were dragging the seek bar, consume the event and return ──
-      // Without this guard, the outer touchend fires after seek and triggers handleTap
+      // Fix: if we were dragging the seek bar, consume and return
       if (seekDrag.current) {
         seekDrag.current = false;
         return;
@@ -1020,14 +1128,16 @@ export default function AniPlayer({
       }
     };
 
-    el.addEventListener('touchstart', handleTouchStart, { passive: true });
-    el.addEventListener('touchmove', handleTouchMove, { passive: false });
-    el.addEventListener('touchend', handleTouchEnd, { passive: true });
+    // NOTE: touchstart must be { passive: false } so we can preventDefault()
+    // during brightness/volume swipes to prevent Android's scroll interference.
+    el.addEventListener('touchstart', handleTouchStart, { passive: false });
+    el.addEventListener('touchmove',  handleTouchMove,  { passive: false });
+    el.addEventListener('touchend',   handleTouchEnd,   { passive: true  });
 
     return () => {
       el.removeEventListener('touchstart', handleTouchStart);
-      el.removeEventListener('touchmove', handleTouchMove);
-      el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('touchmove',  handleTouchMove);
+      el.removeEventListener('touchend',   handleTouchEnd);
     };
   }, [onGestureStart, onGestureMove, onGestureEnd]);
 
@@ -1110,68 +1220,65 @@ export default function AniPlayer({
         </div>
       )}
 
-      {/* ── Fatal HLS error overlay (Generic non-technical message with soft gradient retry button) ── */}
-      {hlsErr && (
-        <div className="anip__error" style={{ background: '#0c0c0e', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          <p className="anip__error__msg" style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, textAlign: 'center', maxWidth: 280 }}>
-            Playback error. Please try again or select another server.
-          </p>
-          <button
-            className="anip__error__retry"
-            style={{
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-              color: '#fff',
-              border: 'none',
-              padding: '10px 24px',
-              borderRadius: 20,
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)',
-            }}
-            onClick={() => {
-              // Full HLS re-init: destroy old instance so fresh manifest+CDN URLs are fetched
-              const v = videoRef.current;
-              if (!v) return;
-              setHlsErr(null);
-              setNeedsTap(false);
-              setWaiting(true);
-              const oldHls = hlsRef.current;
-              if (oldHls) { try { oldHls.destroy(); } catch {} hlsRef.current = null; }
-              const newHls = new Hls({
-                enableWorker: false,
-                startLevel: -1,
-                maxMaxBufferLength: 60,
-                manifestLoadingMaxRetry: 5,
-                manifestLoadingRetryDelay: 1500,
-                levelLoadingMaxRetry: 5,
-                levelLoadingRetryDelay: 1500,
-                fragLoadingMaxRetry: 5,
-                fragLoadingRetryDelay: 1500,
-                highBufferWatchdogPeriod: 2,
-                nudgeOffset: 0.1,
-                nudgeMaxRetries: 10,
-                pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
-                fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
-              });
-              hlsRef.current = newHls;
-              newHls.attachMedia(v);
-              newHls.on(Hls.Events.MEDIA_ATTACHED, () => {
-                newHls.loadSource(url);
-              });
-              newHls.on(Hls.Events.MANIFEST_PARSED, () => {
-                setWaiting(false);
-                v.play().catch(() => {});
-              });
-              newHls.on(Hls.Events.ERROR, (_, d) => {
-                if (d.fatal) { setHlsErr(`Stream error: ${d.details || d.type}. Tap retry.`); setWaiting(false); }
-              });
-            }}
-          >
-            ↺ Retry
-          </button>
-        </div>
-      )}
+      {/* ── Fatal HLS error overlay ─────────────────────────────── */}
+      {hlsErr && (() => {
+        // Context-aware error messages
+        const errMessages = {
+          network: { icon: '📡', title: 'Connection Issue', body: 'Could not reach the stream. Check your connection or try a different server.' },
+          media:   { icon: '⚠️', title: 'Decode Error',      body: 'This stream format isn\'t supported. Try switching to another server.' },
+          unknown: { icon: '🎬', title: 'Stream Unavailable', body: 'This stream couldn\'t load. Select another server to continue watching.' },
+        };
+        const msg = errMessages[hlsErr] || errMessages.unknown;
+        const doRetry = () => {
+          const v = videoRef.current;
+          if (!v) return;
+          setHlsErr(null);
+          setNeedsTap(false);
+          setWaiting(true);
+          const oldHls = hlsRef.current;
+          if (oldHls) { try { oldHls.destroy(); } catch {} hlsRef.current = null; }
+          const newHls = new Hls({
+            enableWorker: false,
+            startLevel: -1,
+            maxMaxBufferLength: 60,
+            manifestLoadingMaxRetry: 5,
+            manifestLoadingRetryDelay: 1500,
+            levelLoadingMaxRetry: 5,
+            levelLoadingRetryDelay: 1500,
+            fragLoadingMaxRetry: 5,
+            fragLoadingRetryDelay: 1500,
+            highBufferWatchdogPeriod: 2,
+            nudgeOffset: 0.1,
+            nudgeMaxRetries: 10,
+            pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+            fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+          });
+          hlsRef.current = newHls;
+          newHls.attachMedia(v);
+          newHls.on(Hls.Events.MEDIA_ATTACHED, () => { newHls.loadSource(url); });
+          newHls.on(Hls.Events.MANIFEST_PARSED, () => { setWaiting(false); v.play().catch(() => {}); });
+          newHls.on(Hls.Events.ERROR, (_, d) => {
+            if (d.fatal) { setHlsErr('unknown'); setWaiting(false); }
+          });
+        };
+        return (
+          <div className="anip__error">
+            <span className="anip__error__icon">{msg.icon}</span>
+            <p className="anip__error__msg">
+              <strong style={{ display: 'block', marginBottom: 4, fontSize: 15, fontWeight: 700, color: '#fff' }}>
+                {msg.title}
+              </strong>
+              {msg.body}
+            </p>
+            <button className="anip__error__retry" onClick={doRetry}>
+              ↺ Retry
+            </button>
+            <button className="anip__error__secondary" onClick={onBack}>
+              ← Try Another Server
+            </button>
+          </div>
+        );
+      })()}
 
       {/* ── buffering spinner / loading spinner ─────────────── */}
       {(waiting || !hasStarted || needsTap || loading) && !hlsErr && (
@@ -1180,45 +1287,57 @@ export default function AniPlayer({
         </div>
       )}
 
-      {/* ── Autoplay countdown overlay ────────────────────────── */}
+      {/* ── Auto-next episode — minimalist premium pill ───────── */}
       {autoplayCountdown !== null && (
         <div style={{
-          position: 'absolute', inset: 0, zIndex: 28,
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)',
+          position: 'absolute', bottom: 80, right: 12, zIndex: 28,
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: 'rgba(0,0,0,0.82)',
+          backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 14, padding: '10px 12px 10px 10px',
+          boxShadow: '0 4px 24px rgba(0,0,0,0.55)',
+          animation: 'anipNext_in 0.3s cubic-bezier(0.16,1,0.3,1) both',
         }}>
-          <div style={{
-            background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)',
-            borderRadius: 16, padding: '24px 32px', textAlign: 'center',
-            backdropFilter: 'blur(8px)',
-          }}>
-            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 6 }}>Up Next</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: '#fff', marginBottom: 16 }}>
-              Episode {currentEpisode + 1}
-            </div>
-            <div style={{
-              width: 64, height: 64, borderRadius: '50%', margin: '0 auto 16px',
-              border: '3px solid rgba(255,255,255,0.2)',
-              borderTopColor: 'var(--accent)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 24, fontWeight: 800, color: '#fff',
-              animation: 'spin 1s linear infinite',
-            }}>
-              {autoplayCountdown}
-            </div>
-            <button
-              onClick={() => setAutoplayCountdown(null)}
-              style={{
-                background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
-                color: '#fff', borderRadius: 8, padding: '8px 20px',
-                fontSize: 13, fontWeight: 600, cursor: 'pointer',
-              }}
-            >
-              Cancel
-            </button>
+          {/* SVG circular countdown ring */}
+          <div style={{ position: 'relative', width: 38, height: 38, flexShrink: 0 }}>
+            <svg width="38" height="38" style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)' }}>
+              <circle cx="19" cy="19" r="15" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2.5" />
+              <circle
+                cx="19" cy="19" r="15" fill="none"
+                stroke="var(--accent)" strokeWidth="2.5"
+                strokeDasharray={`${2 * Math.PI * 15}`}
+                strokeDashoffset={`${2 * Math.PI * 15 * (1 - autoplayCountdown / 3)}`}
+                strokeLinecap="round"
+                style={{ transition: 'stroke-dashoffset 0.95s linear' }}
+              />
+            </svg>
+            <span style={{
+              position: 'absolute', inset: 0, display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              fontSize: 13, fontWeight: 800, color: '#fff',
+            }}>{autoplayCountdown}</span>
           </div>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          {/* Text */}
+          <div>
+            <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.07em', textTransform: 'uppercase', fontWeight: 700 }}>Up Next</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>Episode {currentEpisode + 1}</div>
+          </div>
+          {/* Cancel X */}
+          <button
+            onClick={() => setAutoplayCountdown(null)}
+            aria-label="Cancel auto-next"
+            style={{
+              width: 26, height: 26, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.1)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', marginLeft: 2,
+            }}
+          >
+            <X size={12} color="rgba(255,255,255,0.75)" />
+          </button>
+          <style>{`@keyframes anipNext_in { from{opacity:0;transform:translateX(14px) scale(0.9)} to{opacity:1;transform:none} }`}</style>
         </div>
       )}
 
@@ -1226,7 +1345,7 @@ export default function AniPlayer({
       {ripple && <SkipRipple key={ripple.id} side={ripple.side} label={ripple.label} />}
 
       {/* ── swipe indicators ────────────────────────────────── */}
-      <SwipeBar type="brightness" value={clamp(bright/2,0,1)} visible={swipeBri} />
+      <SwipeBar type="brightness" value={clamp(bright, 0, 1)} visible={swipeBri} />
       <SwipeBar type="volume"     value={muted ? 0 : volume}  visible={swipeVol} />
 
 
@@ -1268,7 +1387,7 @@ export default function AniPlayer({
           <div className="anip__menu-anchor" style={{ zIndex: 10 }}>
             <button
               className={`anip__btn ${subDelay !== 0 ? 'anip__btn--active' : ''}`}
-              onClick={e => { e.stopPropagation(); setShowSync(x => !x); setShowQ(false); setShowSub(false); }}
+              onClick={e => { e.stopPropagation(); setActivePanel(p => p === 'sync' ? null : 'sync'); schedHide(); }}
               title="Subtitle Delay"
               style={{
                 display: 'flex',
@@ -1411,7 +1530,7 @@ export default function AniPlayer({
               <div className="anip__menu-anchor">
                 <button
                   className={`anip__btn ${activeSub !== -1 ? 'anip__btn--active' : ''}`}
-                  onClick={e => { e.stopPropagation(); setShowSub(x => !x); setShowQ(false); }}
+                  onClick={e => { e.stopPropagation(); setActivePanel(p => p === 'subtitles' ? null : 'subtitles'); schedHide(); }}
                   title="Subtitles"
                 >
                   <Subtitles size={17} />
@@ -1422,7 +1541,7 @@ export default function AniPlayer({
                     {[{ id:-1, label:'Off' }, ...subs].map(s => (
                       <button key={s.id}
                         className={`anip__menu-item ${activeSub===s.id ? 'anip__menu-item--on':''}`}
-                        onClick={e => { e.stopPropagation(); setActiveSub(s.id); setShowSub(false); }}
+                        onClick={e => { e.stopPropagation(); setActiveSub(s.id); setActivePanel(null); schedHide(); }}
                       >
                         {activeSub===s.id && <span className="anip__chk">✓</span>}{s.label}
                       </button>
@@ -1435,7 +1554,7 @@ export default function AniPlayer({
               {/* Quality */}
               <div className="anip__menu-anchor">
                 <button className="anip__btn"
-                  onClick={e => { e.stopPropagation(); setShowQ(x => !x); setShowSub(false); }}
+                  onClick={e => { e.stopPropagation(); setActivePanel(p => p === 'quality' ? null : 'quality'); schedHide(); }}
                   title="Quality"
                 >
                   <Settings size={17} />
@@ -1447,7 +1566,7 @@ export default function AniPlayer({
                     {[{ id:-1, label:'Auto' }, ...[...qualities].reverse()].map(q => (
                       <button key={q.id}
                         className={`anip__menu-item ${activeQ===q.id ? 'anip__menu-item--on':''}`}
-                        onClick={e => { e.stopPropagation(); setActiveQ(q.id); setShowQ(false); }}
+                        onClick={e => { e.stopPropagation(); setActiveQ(q.id); setActivePanel(null); schedHide(); }}
                       >
                         {activeQ===q.id && <span className="anip__chk">✓</span>}{q.label}
                       </button>
@@ -1461,7 +1580,7 @@ export default function AniPlayer({
               <div className="anip__menu-anchor">
                 <button
                   className="anip__btn"
-                  onClick={e => { e.stopPropagation(); setShowSpeed(x => !x); setShowQ(false); setShowSub(false); setShowSync(false); }}
+                  onClick={e => { e.stopPropagation(); setActivePanel(p => p === 'speed' ? null : 'speed'); schedHide(); }}
                   title="Playback Speed"
                 >
                   <span className="anip__badge-visible" style={{ fontSize: '10px', fontWeight: 800 }}>

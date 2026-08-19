@@ -4,7 +4,9 @@
    ============================================================ */
 
 /* ---------- Reset & Base ---------- */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -28,68 +30,90 @@ video::-webkit-media-controls,
   outline: none !important;
 }
 
-/* ---------- Apple Design Tokens ---------- */
+/* ═══════════════════════════════════════════════════════════════
+   AniPlay — Ultra Premium Liquid Glass Design System
+   Inspired by: Apple visionOS / iOS 18 glassmorphism
+═══════════════════════════════════════════════════════════════ */
 :root {
-  /* Apple dark background hierarchy */
-  --bg-primary:     #000000;          /* True black — iOS base */
-  --bg-secondary:   #1C1C1E;          /* Apple system gray 6 */
-  --bg-card:        #1C1C1E;          /* Card surface */
-  --bg-elevated:    #2C2C2E;          /* Elevated surface */
-  --bg-hover:       #3A3A3C;          /* Apple system gray 4 */
+  /* ── Deep space background hierarchy ── */
+  --bg-primary:   #04040a;    /* Rich near-black with blue undertone */
+  --bg-secondary: #0d0d14;    /* Cards & sheets */
+  --bg-card:      #12121c;    /* Card surface — slightly elevated */
+  --bg-elevated:  #1a1a28;    /* Popovers, dropdowns */
+  --bg-hover:     #22223a;    /* Hover highlight */
 
-  /* Apple blue accent */
-  --accent:         #0A84FF;          /* Apple Blue (dark) */
-  --accent-hover:   #409CFF;
-  --accent-dim:     rgba(10,132,255,0.15);
+  /* ── Premium gradient surfaces ── */
+  --glass-bg:        rgba(255, 255, 255, 0.04);
+  --glass-border:    rgba(255, 255, 255, 0.10);
+  --glass-blur:      saturate(180%) blur(32px);
+  --glass-bg-strong: rgba(255, 255, 255, 0.08);
 
-  /* Apple typography colors */
-  --text-primary:   #FFFFFF;          /* Primary label */
-  --text-secondary: #EBEBF5;          /* Secondary label — 60% opacity on white */
-  --text-tertiary:  #8E8E93;          /* Tertiary label */
-  --text-muted:     #636366;          /* Quaternary label */
+  /* ── Accent — vivid indigo-violet (anime-premium) ── */
+  --accent:        hsl(246, 100%, 64%);   /* #6C63FF → premium indigo */
+  --accent-hover:  hsl(246, 100%, 72%);
+  --accent-dim:    rgba(108, 99, 255, 0.18);
+  --accent-glow:   rgba(108, 99, 255, 0.35);
 
-  /* Apple hairline separators */
-  --border:         rgba(255,255,255,0.10);
-  --border-strong:  rgba(255,255,255,0.16);
+  /* ── Secondary accent — neon magenta for highlights ── */
+  --accent2:       hsl(310, 100%, 58%);
+  --accent2-dim:   rgba(255, 37, 197, 0.15);
 
-  /* Radius — Apple HIG standard */
-  --radius-sm:    10px;
-  --radius-md:    13px;
-  --radius-lg:    18px;
-  --radius-xl:    22px;
-  --radius-sheet: 22px;
+  /* ── Typography ── */
+  --text-primary:   #F0F0FF;
+  --text-secondary: rgba(240, 240, 255, 0.72);
+  --text-tertiary:  rgba(240, 240, 255, 0.45);
+  --text-muted:     rgba(240, 240, 255, 0.28);
 
-  /* Shadows — depth without color */
-  --shadow-card:  0 2px 12px rgba(0,0,0,0.6);
-  --shadow-sheet: 0 -4px 40px rgba(0,0,0,0.6);
+  /* ── Hairline separators ── */
+  --border:        rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
 
-  /* Layout */
-  --nav-height:   56px;
-  --transition:   0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  /* ── Radius — generous for premium feel ── */
+  --radius-sm:     12px;
+  --radius-md:     16px;
+  --radius-lg:     22px;
+  --radius-xl:     28px;
+  --radius-sheet:  28px;
 
-  /* Typography */
-  --font-main:    'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  --font-brand:   'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  /* ── Premium shadows ── */
+  --shadow-card:   0 4px 24px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255,255,255,0.04) inset;
+  --shadow-sheet:  0 -8px 48px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255,255,255,0.06) inset;
+  --shadow-glow:   0 0 32px -4px var(--accent-glow);
 
-  /* Status bar */
-  --sb-height:    0px;
+  /* ── Layout ── */
+  --nav-height:   60px;
+  --transition:   0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --spring:       0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ── Typography — load Inter from Google Fonts (see index.html) ── */
+  --font-main:  'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  --font-brand: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+
+  /* ── Status bar ── */
+  --sb-height: 0px;
+
+  /* ── Safe-area top: 52px clears punch-hole cameras; env() wins on notch devices ── */
+  --sat: max(52px, env(safe-area-inset-top));
 }
 
-/* ---------- Light theme (Apple light) ---------- */
+/* ---------- Light theme ---------- */
 body.theme-light {
-  --bg-primary:     #F2F2F7;          /* Apple system background */
-  --bg-secondary:   #FFFFFF;
-  --bg-card:        #FFFFFF;
-  --bg-elevated:    #FFFFFF;
-  --bg-hover:       #E5E5EA;
-  --text-primary:   #000000;
-  --text-secondary: #3C3C43;
-  --text-tertiary:  #3C3C43;
-  --text-muted:     #8E8E93;
-  --border:         rgba(60,60,67,0.1);
-  --border-strong:  rgba(60,60,67,0.2);
-  --shadow-card:    0 2px 12px rgba(0,0,0,0.08);
-  --shadow-sheet:   0 -4px 40px rgba(0,0,0,0.12);
+  --bg-primary:   #F0F0F8;
+  --bg-secondary: #FFFFFF;
+  --bg-card:      #FFFFFF;
+  --bg-elevated:  #F5F5FF;
+  --bg-hover:     #E8E8F0;
+  --glass-bg:        rgba(0, 0, 0, 0.03);
+  --glass-border:    rgba(0, 0, 0, 0.10);
+  --glass-bg-strong: rgba(0, 0, 0, 0.06);
+  --text-primary:   #060610;
+  --text-secondary: rgba(6, 6, 16, 0.72);
+  --text-tertiary:  rgba(6, 6, 16, 0.45);
+  --text-muted:     rgba(6, 6, 16, 0.30);
+  --border:        rgba(60, 60, 90, 0.10);
+  --border-strong: rgba(60, 60, 90, 0.18);
+  --shadow-card:   0 2px 14px rgba(0, 0, 0, 0.09), 0 1px 0 rgba(255,255,255,0.9) inset;
+  --shadow-sheet:  0 -4px 40px rgba(0, 0, 0, 0.10);
 }
 
 html {
@@ -107,54 +131,246 @@ body {
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   user-select: none;
   overscroll-behavior-y: none;
   overscroll-behavior: none;
+  transition: background-color 0.4s cubic-bezier(0.16, 1, 0.3, 1), color 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-img { display: block; max-width: 100%; }
-a  { text-decoration: none; color: inherit; outline: none; }
-button { cursor: pointer; border: none; background: none; font-family: inherit; outline: none; }
+img {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+  outline: none;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+  outline: none;
+  /* Eliminate 300ms tap delay + pre-promote to GPU */
+  touch-action: manipulation;
+  /* Immediate GPU layer for all buttons at startup */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   APP-WIDE GPU ACCELERATION — Pre-promotes every animated/interactive
+   element to its own GPU compositing layer immediately at page load.
+
+   WHY: Without this, Android WebView creates GPU layers LAZILY on first
+   interaction — causing a 1-frame stutter every time a new element
+   animates for the first time or after being evicted from GPU memory.
+
+   This is what Crunchyroll/YouTube/Netflix do. Every tappable element
+   is pre-promoted so there is ZERO GPU promotion cost on any interaction.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── All tappable/interactive elements ─────────────────────────── */
+a,
+[role="button"],
+.anime-card,
+.anime-card-wrap,
+.btn,
+.btn-primary,
+.btn-outline,
+.see-all,
+.card-overlay,
+.tag-chip,
+.filter-btn,
+.genre-chip {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* ── Anime cards specifically — heavy animations ─────────────── */
+.anime-card,
+.anime-card-wrap {
+  will-change: transform;
+}
+
+/* ── All images — prevent repaint flash on lazy load ─────────── */
+img {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* ── Scroll containers — momentum scrolling ──────────────────── */
+/* NOTE: Do NOT add contain:layout to generic scroll selectors — it would
+   trap any position:fixed header inside the container, making it scroll
+   instead of staying fixed. Only .h-scroll (horizontal, no fixed children)
+   gets containment. */
+.h-scroll {
+  -webkit-overflow-scrolling: touch;
+  contain: layout style;
+}
+
+/* ── Modals, bottom sheets, overlays ─────────────────────────── */
+[class*="modal"],
+[class*="sheet"],
+[class*="portal"],
+[class*="drawer"],
+[class*="popup"],
+[class*="toast"] {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* ── All elements using CSS transition on transform/opacity ───── */
+[class*="fade"],
+[class*="slide"],
+[class*="enter"],
+[class*="anim"],
+[class*="transition"] {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
 /* ── Text inputs: must allow long-press Paste menu on Android ─────────── */
-input, textarea, [contenteditable] {
+input,
+textarea,
+[contenteditable] {
   font-family: inherit;
   outline: none;
   -webkit-user-select: text !important;
   -moz-user-select: text !important;
   user-select: text !important;
-  -webkit-touch-callout: default !important;  /* iOS/Android: show copy/paste popup */
-  touch-action: auto !important;              /* don't suppress native gestures  */
+  -webkit-touch-callout: default !important;
+  /* iOS/Android: show copy/paste popup */
+  touch-action: auto !important;
+  /* don't suppress native gestures  */
   cursor: text !important;
 }
-ul, ol { list-style: none; }
 
-/* ---------- Hide Scrollbars ---------- */
-::-webkit-scrollbar { display: none !important; }
+ul,
+ol {
+  list-style: none;
+}
 
-/* ---------- Layout ---------- */
+/* ---------- Hide ALL Scrollbars (every element, every browser) ---------- */
+*,
+*::before,
+*::after {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+*::-webkit-scrollbar,
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-thumb,
+*::-webkit-scrollbar-corner {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+  -webkit-appearance: none !important;
+}
+
+html,
+body,
+.app-container,
+.page {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
 .app-container {
   width: 100%;
   max-width: 100%;
   margin: 0;
-  background: var(--bg-primary);
+  /* Deep space gradient tracks body */
+  background: transparent;
   min-height: 100vh;
   min-height: 100dvh;
   position: relative;
-  overflow: hidden;
+  /* CRITICAL: overflow:clip (NOT overflow:hidden) — both clip horizontal overflow
+     but overflow:clip does NOT create a paint containment stacking context.
+     overflow:hidden breaks backdrop-filter on position:fixed children in
+     Android WebView (Chromium bug).
+     overflow:clip avoids this while still clipping overflowing content.
+     This does NOT block nested .h-scroll because clip only clips paint, not scroll. */
+  overflow: clip;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   box-sizing: border-box;
 }
 
-@media (min-width: 768px) {
+/* On tablets/desktop — center the app in a phone-sized column */
+@media (min-width: 520px) {
   .app-container:not(.app-container--native) {
     max-width: 480px;
     margin: 0 auto;
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
+    border-left: 1px solid rgba(255,255,255,0.06);
+    border-right: 1px solid rgba(255,255,255,0.06);
+    min-height: 100dvh;
   }
+}
+
+/* ---------- Premium Apple HIG Animations ---------- */
+/* pageEnter: opacity-ONLY on .page so position:fixed children
+   are NOT affected (transform on parent breaks fixed positioning in CSS spec) */
+@keyframes pageEnter {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* pageContentEnter: opacity-only entrance (translateY handled by child sectionFadeUp) */
+@keyframes pageContentEnter {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes playerEnter {
+  0% {
+    opacity: 0;
+    transform: scale(0.96) translateY(20px);
+    filter: blur(8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes tabContentSlide {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sectionFadeUp {
+  0%   { transform: translateY(8px); }
+  100% { transform: translateY(0);   }
 }
 
 /* ---------- Page ---------- */
@@ -162,36 +378,73 @@ ul, ol { list-style: none; }
   padding-bottom: calc(var(--nav-height) + 32px + var(--android-safe-bottom, env(safe-area-inset-bottom)));
   min-height: 100vh;
   position: relative;
+  /* opacity-ONLY animation — never add transform here or all fixed children lose viewport pin */
+  animation: pageEnter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* ---------- Buttons — Apple Style ---------- */
+/* ── Page Transition Wrapper — smooth fade on every tab switch ──────── */
+.page-transition-wrapper {
+  animation: pageEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity;
+}
+
+/* Scrollable page content wrapper */
+.page-content {
+  animation: pageContentEnter 0.36s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 0.04s;
+}
+
+/* Staggered section entrance */
+.section-enter {
+  animation: sectionFadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.player-overlay-anim {
+  animation: playerEnter 0.38s cubic-bezier(0.2, 0.9, 0.3, 1);
+  will-change: transform, opacity, filter;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* ── Premium Buttons ─────────────────────────────────────────────── */
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 12px 22px;
   border-radius: var(--radius-md);
   font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.2px;
-  transition: all var(--transition);
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  transition: all var(--spring);
   white-space: nowrap;
+  position: relative;
+  overflow: hidden;
 }
 
 .btn-primary {
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
   color: #fff;
+  box-shadow: 0 4px 20px -4px var(--accent-glow), 0 1px 0 rgba(255,255,255,0.25) inset;
+  border: 1px solid rgba(255,255,255,0.15);
 }
-.btn-primary:active { opacity: 0.85; transform: scale(0.98); }
+
+.btn-primary:active {
+  transform: scale(0.96);
+}
 
 .btn-outline {
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
-  border: 1px solid var(--border-strong);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
-.btn-outline:active { opacity: 0.8; transform: scale(0.98); }
 
-.btn-sm { padding: 8px 16px; font-size: 13px; }
+.btn-outline:active {
+  opacity: 0.75;
+  transform: scale(0.96);
+}
 
 /* ---------- Section Header ---------- */
 .section-header {
@@ -201,45 +454,65 @@ ul, ol { list-style: none; }
   padding: 0 16px;
   margin-bottom: 12px;
 }
+
 .section-title {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.4px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
   color: var(--text-primary);
 }
+
 .see-all {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--accent);
-  font-weight: 500;
+  font-weight: 600;
   transition: opacity var(--transition);
+  letter-spacing: -0.2px;
 }
-.see-all:active { opacity: 0.6; }
+
+.see-all:active {
+  opacity: 0.6;
+}
 
 /* ---------- Horizontal Scroll Row ---------- */
 .h-scroll {
   display: flex;
   gap: 10px;
   overflow-x: auto;
-  padding: 0 16px 4px;
+  /* 4px top padding so card shadows/borders aren't clipped at top.
+     16px left/right so first and last card have proper breathing room.
+     8px bottom for shadow space. */
+  padding: 4px 16px 8px;
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
+  /* NOTE: Do NOT set touch-action:pan-x here — it blocks vertical page scrolling
+     when the user's finger starts on a scroll row (most of the home page).
+     The browser handles horizontal/vertical scroll direction natively. */
 }
-.h-scroll::-webkit-scrollbar { display: none; }
-.h-scroll > * { scroll-snap-align: start; flex-shrink: 0; }
 
-/* ---------- Anime Card — Apple App Store Style ---------- */
+.h-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.h-scroll>* {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+}
+
+/* ── Premium Anime Card ─────────────────────────────────────────── */
 .anime-card {
   position: relative;
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg-card);
   cursor: pointer;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-              box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   will-change: transform;
-}
-.anime-card:active {
-  transform: scale(0.96);
+  touch-action: manipulation;
+  /* Subtle inner rim light */
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset, var(--shadow-card);
+  transform: translateZ(0);
 }
 
 .anime-card img {
@@ -248,23 +521,26 @@ ul, ol { list-style: none; }
   object-fit: cover;
 }
 
+/* Card wrap — flex column container for card + label below */
+.anime-card-wrap {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
 .anime-card .card-overlay {
   position: absolute;
-  bottom: 0; left: 0; right: 0;
-  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%);
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, transparent 100%);
   padding: 24px 8px 8px;
 }
 
+/* Legacy small rank — hidden, replaced by Netflix-style .rank-number */
 .card-rank {
-  position: absolute;
-  bottom: 6px;
-  left: 8px;
-  font-size: 28px;
-  font-weight: 800;
-  letter-spacing: -1px;
-  color: #fff;
-  text-shadow: 0 2px 8px rgba(0,0,0,0.8);
-  line-height: 1;
+  display: none;
 }
 
 .card-badge {
@@ -278,10 +554,17 @@ ul, ol { list-style: none; }
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
-.badge-hd   { background: var(--accent); color: #fff; }
-.badge-pg   { background: rgba(255,255,255,0.15); color: #fff; border: 1px solid rgba(255,255,255,0.25); }
-.badge-sub  { background: #0A84FF; color: #fff; }
-.badge-dub  { background: #30D158; color: #000; }
+
+.badge-hd {
+  background: var(--accent);
+  color: #fff;
+}
+
+.badge-pg {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
 
 .card-badges {
   position: absolute;
@@ -291,159 +574,15 @@ ul, ol { list-style: none; }
   gap: 4px;
 }
 
-/* ---------- Genre Quick Row (Home page) ---------- */
-.genre-quick-row {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 12px 16px 4px;
-  scroll-snap-type: x mandatory;
-}
-.genre-quick-row::-webkit-scrollbar { display: none; }
-.genre-quick-pill {
-  padding: 6px 14px;
-  border-radius: 20px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  flex-shrink: 0;
-  scroll-snap-align: start;
-  transition: all var(--transition);
-  color: var(--text-secondary);
-  letter-spacing: -0.1px;
-}
-.genre-quick-pill:active, .genre-quick-pill.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
 /* ---------- Player Page ---------- */
-.player-container {
-  position: relative;
-  width: 100%;
-  background: #000;
-  aspect-ratio: 16/9;
-}
-.player-iframe {
-  width: 100%; height: 100%; border: none; display: block;
-}
-.player-back {
-  position: absolute;
-  top: 10px; left: 10px;
-  width: 32px; height: 32px; border-radius: 50%;
-  background: rgba(0,0,0,0.5);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer; z-index: 5;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,0.1);
-}
-.player-info { padding: 14px 16px; }
-.player-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 4px; }
-.player-ep-info { font-size: 13px; color: var(--text-tertiary); margin-bottom: 14px; }
 
-/* ---------- Welcome Screen ---------- */
-.welcome-screen {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: var(--bg-primary);
-  display: flex;
-  flex-direction: column;
-}
-.welcome-hero {
-  flex: 1;
-  position: relative;
-  overflow: hidden;
-}
-.welcome-collage {
-  display: grid;
-  grid-template-rows: 1fr 1fr 1fr;
-  gap: 2px;
-  height: 100%;
-}
-.welcome-collage-row {
-  display: flex;
-  gap: 2px;
-  overflow: hidden;
-}
-.welcome-collage-row img {
-  flex: 1;
-  object-fit: cover;
-  height: 100%;
-  width: 0;
-}
-.welcome-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    to bottom,
-    rgba(0,0,0,0.15) 0%,
-    rgba(0,0,0,0.55) 50%,
-    rgba(0,0,0,1) 90%
-  );
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding: 28px 24px;
-}
-.welcome-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.welcome-logo-icon {
-  width: 44px;
-  height: 44px;
-  background: var(--accent);
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  font-weight: 900;
-  color: #fff;
-}
-.welcome-text h1 {
-  font-size: 34px;
-  font-weight: 800;
-  letter-spacing: -0.8px;
-  line-height: 1.1;
-}
-.welcome-text h1 span { color: var(--accent); }
-.welcome-text p {
-  font-size: 15px;
-  color: rgba(255,255,255,0.6);
-  margin-top: 6px;
-  letter-spacing: -0.1px;
-}
-.welcome-dots {
-  display: flex;
-  gap: 6px;
-  margin-top: 18px;
-}
-.welcome-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.25);
-  transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
-}
-.welcome-dot.active { background: #fff; width: 18px; border-radius: 3px; }
-.welcome-actions {
-  padding: 20px 24px 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: var(--bg-primary);
-}
-.welcome-actions .btn { width: 100%; justify-content: center; padding: 15px; font-size: 16px; }
+/* ---------- Welcome Screen — styles live in WelcomeScreen.jsx (component-scoped) ---------- */
 
-/* ---------- Navbar — Premium Frosted Glass Tab Bar ---------- */
+/* ── Premium Liquid Glass Navbar ─────────────────────────────────── */
+body.has-native-bottom-nav .navbar {
+  display: none !important;
+}
+
 .navbar {
   position: fixed;
   bottom: 0;
@@ -454,30 +593,105 @@ ul, ol { list-style: none; }
   height: calc(var(--nav-height) + var(--android-safe-bottom, env(safe-area-inset-bottom)));
   padding-bottom: var(--android-safe-bottom, env(safe-area-inset-bottom));
 
-  /* Premium frosted glass — opaque enough to block content but still glassy */
-  background: rgba(14, 14, 16, 0.94);
-  backdrop-filter: blur(40px) saturate(180%) brightness(1.05);
-  -webkit-backdrop-filter: blur(40px) saturate(180%) brightness(1.05);
+  /* Liquid glass base — dark deep purple */
+  background: rgba(6, 5, 20, 0.72);
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
 
-  /* Glass edge: subtle top shimmer border */
-  border-top: 0.5px solid rgba(255, 255, 255, 0.18);
-
-  /* Soft inner glow along the top edge for depth */
+  /* Multi-layer glow: purple ambient + upward shadow */
   box-shadow:
-    0 -1px 0 0 rgba(255, 255, 255, 0.06) inset,
-    0 -12px 32px rgba(0, 0, 0, 0.45);
+    0 -1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 -8px 48px rgba(0, 0, 0, 0.65),
+    0 -1px 80px rgba(108, 99, 255, 0.10);
 
-  border-radius: 0;
   display: flex;
   align-items: center;
   z-index: 100;
-  padding-left: 0;
-  padding-right: 0;
-  transition: none;
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  isolation: isolate;
+  overflow: hidden;
+  /* transform:translate3d already forces GPU layer — no will-change needed.
+     No contain:layout here either — it would affect stacking/paint of siblings. */
 }
 
-@media (max-height: 500px) {
-  .navbar { display: none !important; }
+/* ── Hide navbar when software keyboard is open ———————──────────────── */
+/* visualViewport resize listener in App.jsx adds .keyboard-open to body   */
+body.keyboard-open .navbar {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+/* Primary glass blur layer */
+.navbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(180deg,
+      rgba(120, 110, 255, 0.06) 0%,
+      rgba(6, 5, 20, 0.08) 40%,
+      rgba(6, 5, 20, 0.0) 100%),
+    rgba(8, 8, 22, 0.62);
+  backdrop-filter: blur(48px) saturate(220%) brightness(0.68);
+  -webkit-backdrop-filter: blur(48px) saturate(220%) brightness(0.68);
+}
+
+/* Specular glass highlight — top rim sheen */
+.navbar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.18) 20%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.18) 80%,
+    transparent 100%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.navbar .nav-items {
+  position: relative;
+  z-index: 1;
+}
+
+/* Light theme navbar override */
+body.theme-light .navbar {
+  background: rgba(240, 240, 248, 0.62);
+  backdrop-filter: blur(48px) saturate(200%) brightness(1.06);
+  -webkit-backdrop-filter: blur(48px) saturate(200%) brightness(1.06);
+  border-top: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 -12px 40px rgba(0, 0, 0, 0.09),
+    0 -1px 0 rgba(0, 0, 0, 0.10);
+}
+
+/* Hide navbar only in true landscape orientation — NOT when keyboard opens in portrait */
+@media (orientation: landscape) and (max-height: 500px) {
+  .navbar {
+    display: none !important;
+  }
+}
+
+/* When the soft keyboard is open (class injected by MainActivity.java IME insets listener):
+   - Hide the bottom nav bar so it doesn't float above the keyboard eating screen space
+   - Remove page padding-bottom so all content is visible while typing */
+body.keyboard-open .navbar {
+  display: none !important;
+  pointer-events: none;
+}
+
+body.keyboard-open .page,
+body.keyboard-open main {
+  padding-bottom: 0 !important;
 }
 
 @media (min-width: 768px) {
@@ -485,8 +699,8 @@ ul, ol { list-style: none; }
     left: 50%;
     transform: translateX(-50%);
     max-width: 480px;
-    border-left: 0.5px solid rgba(255,255,255,0.12);
-    border-right: 0.5px solid rgba(255,255,255,0.12);
+    border-left: 0.5px solid rgba(255, 255, 255, 0.09);
+    border-right: 0.5px solid rgba(255, 255, 255, 0.09);
   }
 }
 
@@ -497,50 +711,144 @@ ul, ol { list-style: none; }
   align-items: center;
   justify-content: space-around;
   padding: 0 4px;
+  padding-bottom: 2px;
 }
 
-/* iOS-style tab bar items */
+/* ── Nav item button ────────────────────────────────────────────────── */
 .nav-item {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  height: 100%;
-  cursor: pointer;
+  gap: 4px;
   flex: 1;
+  height: 100%;
   background: transparent !important;
   border: none;
   outline: none !important;
   box-shadow: none !important;
   padding-bottom: 2px;
-  transition: opacity 0.15s ease;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  /* Pre-promote every nav button to its own GPU layer at startup.
+     Without this, the FIRST tap causes a 1-frame stutter as the
+     browser creates the layer on-demand (lazy promotion). */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
-.nav-item:focus, .nav-item:hover {
+
+.nav-item:focus,
+.nav-item:hover {
   background: transparent !important;
   outline: none !important;
   box-shadow: none !important;
 }
-.nav-item:active { opacity: 0.7; }
 
-.nav-item span {
+/* ══════════════════════════════════════════════════════════════════
+   NAV BAR — Silky smooth with TRANSITIONS ONLY, zero @keyframes
+   Root cause of jank: @keyframes re-fires on every .active class
+   toggle, fighting the existing transition on the same property.
+   Pure transitions = GPU compositor only = true 60fps.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Tap press — instant scale down, GPU-smooth release */
+.nav-item:active .nav-icon-wrap {
+  transform: scale(0.88) translateY(-2px);
+  transition: transform 0.06s ease-out;
+}
+
+/* ── Icon wrapper ─────────────────────────────────────────────────── */
+.nav-icon-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 32px;
+  border-radius: 16px;
+  will-change: transform;
+  /* Force immediate GPU layer — no lazy promotion on first tap */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Active pill: background/shadow appear instantly, position shifts smoothly */
+.nav-item.active .nav-icon-wrap {
+  transform: translateY(-2px);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 2px 8px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+body.theme-light .nav-item.active .nav-icon-wrap {
+  background: color-mix(in srgb, var(--accent) 14%, rgba(255,255,255,0.5));
+}
+
+/* ── Icon SVG ─────────────────────────────────────────────────────── */
+.nav-item svg {
+  width: 22px;
+  height: 22px;
+  color: rgba(255, 255, 255, 0.42);
+  will-change: transform;
+  /* Immediate GPU layer promotion */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nav-item.active svg {
+  color: var(--accent);     /* instant — no color transition */
+  transform: scale(1.1);    /* GPU smooth */
+  /* NO filter: drop-shadow — requires full repaint every frame on Android */
+}
+
+/* ── Label text ───────────────────────────────────────────────────── */
+.nav-label {
   font-size: 10px;
   font-weight: 500;
-  color: var(--text-muted);
-  letter-spacing: 0.1px;
-  transition: color 0.15s ease;
+  font-family: var(--font-main, sans-serif);
+  letter-spacing: 0.15px;
+  color: rgba(255, 255, 255, 0.38);
+  /* ONLY transform is GPU-compositable — color/opacity change is instant */
+  will-change: transform;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateY(0);
+  opacity: 0.85;
 }
-.nav-item svg {
-  color: var(--text-muted);
-  transition: color 0.15s ease;
+
+.nav-item.active .nav-label {
+  color: var(--accent);     /* instant */
+  font-weight: 700;
+  transform: translateY(-1px); /* GPU smooth */
+  opacity: 1;               /* instant */
 }
-.nav-item.active svg {
-  color: var(--accent);
+
+/* ── Notification badge ───────────────────────────────────────────── */
+.nav-badge {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+  border-radius: 50%;
+  border: 1.5px solid rgba(8, 8, 22, 0.92);
+  animation: badgePop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
 }
-.nav-item.active span {
-  color: var(--accent);
-  font-weight: 600;
+
+@keyframes badgePop {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
 }
+
 
 /* ---------- Top Header ---------- */
 .top-header {
@@ -551,41 +859,55 @@ ul, ol { list-style: none; }
   position: relative;
   z-index: 10;
 }
+
 .top-header .logo {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.logo-badge {
-  width: 32px; height: 32px;
-  background: var(--accent);
-  border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; font-weight: 900;
-  color: #fff;
-}
-.header-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-.icon-btn {
-  width: 34px; height: 34px;
-  border-radius: 50%;
-  background: var(--bg-elevated);
-  display: flex; align-items: center; justify-content: center;
-  transition: opacity var(--transition);
-  border: 0.5px solid var(--border);
-}
-.icon-btn:active { opacity: 0.7; }
 
 /* ---------- Home Sections ---------- */
-.home-section { margin-bottom: 28px; }
+.home-section {
+  margin-bottom: 28px;
+  animation: sectionFadeUp 0.48s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Sequential section stagger — caps at 6 sections to keep last one quick */
+.home-section:nth-child(1) {
+  animation-delay: 0.02s;
+}
+
+.home-section:nth-child(2) {
+  animation-delay: 0.07s;
+}
+
+.home-section:nth-child(3) {
+  animation-delay: 0.12s;
+}
+
+.home-section:nth-child(4) {
+  animation-delay: 0.17s;
+}
+
+.home-section:nth-child(5) {
+  animation-delay: 0.22s;
+}
+
+.home-section:nth-child(n+6) {
+  animation-delay: 0.27s;
+}
 
 /* Card size presets */
-.top-hits-card { width: 130px; height: 180px; position: relative; }
-.episode-card  { width: 130px; height: 160px; position: relative; }
-.std-card      { width: 120px; height: 165px; }
+.top-hits-card {
+  width: 130px;
+  height: 180px;
+  position: relative;
+}
+
+.std-card {
+  width: 120px;
+  height: 165px;
+}
 
 /* ---------- Schedule Page ---------- */
 .schedule-header {
@@ -594,18 +916,24 @@ ul, ol { list-style: none; }
   align-items: center;
   justify-content: space-between;
 }
+
 .schedule-title {
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.5px;
 }
+
 .day-tabs {
   display: flex;
   gap: 8px;
   overflow-x: auto;
   padding: 0 16px 12px;
 }
-.day-tabs::-webkit-scrollbar { display: none; }
+
+.day-tabs::-webkit-scrollbar {
+  display: none;
+}
+
 .day-tab {
   display: flex;
   flex-direction: column;
@@ -620,16 +948,37 @@ ul, ol { list-style: none; }
   flex-shrink: 0;
   border: 0.5px solid transparent;
 }
-.day-tab .day-name { font-size: 11px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.2px; }
-.day-tab .day-num  { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+
+.day-tab .day-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.day-tab .day-num {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
 .day-tab.active {
   background: var(--accent);
 }
-.day-tab.active .day-name,
-.day-tab.active .day-num { color: #fff; }
 
-.schedule-timeline { padding: 8px 16px; }
-.time-group { margin-bottom: 20px; }
+.day-tab.active .day-name,
+.day-tab.active .day-num {
+  color: #fff;
+}
+
+.schedule-timeline {
+  padding: 8px 16px;
+}
+
+.time-group {
+  margin-bottom: 20px;
+}
+
 .time-label {
   display: flex;
   align-items: center;
@@ -641,13 +990,21 @@ ul, ol { list-style: none; }
   margin-bottom: 10px;
   text-transform: uppercase;
 }
+
 .time-line {
   flex: 1;
   height: 0.5px;
   background: var(--border);
 }
-.time-label.current-time { color: var(--accent); }
-.time-label.current-time .time-line { background: var(--accent); }
+
+.time-label.current-time {
+  color: var(--accent);
+}
+
+.time-label.current-time .time-line {
+  background: var(--accent);
+}
+
 .schedule-item {
   display: flex;
   align-items: center;
@@ -660,7 +1017,11 @@ ul, ol { list-style: none; }
   transition: all var(--transition);
   border: 0.5px solid var(--border);
 }
-.schedule-item:active { background: var(--bg-hover); }
+
+.schedule-item:active {
+  background: var(--bg-hover);
+}
+
 .schedule-thumb {
   width: 72px;
   height: 54px;
@@ -668,7 +1029,12 @@ ul, ol { list-style: none; }
   object-fit: cover;
   flex-shrink: 0;
 }
-.schedule-info { flex: 1; min-width: 0; }
+
+.schedule-info {
+  flex: 1;
+  min-width: 0;
+}
+
 .schedule-name {
   font-size: 14px;
   font-weight: 600;
@@ -678,11 +1044,13 @@ ul, ol { list-style: none; }
   text-overflow: ellipsis;
   margin-bottom: 3px;
 }
+
 .schedule-ep {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-bottom: 6px;
 }
+
 .add-mylist-btn {
   display: inline-flex;
   align-items: center;
@@ -690,23 +1058,24 @@ ul, ol { list-style: none; }
   padding: 4px 10px;
   border-radius: 20px;
   background: var(--accent-dim);
-  border: 0.5px solid rgba(10,132,255,0.3);
+  border: 0.5px solid rgba(10, 132, 255, 0.3);
   font-size: 11px;
   font-weight: 600;
   color: var(--accent);
   transition: all var(--transition);
   cursor: pointer;
 }
-.add-mylist-btn:active { opacity: 0.7; }
-.add-mylist-btn.added { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-/* ---------- Browse / Search ---------- */
-.browse-header {
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.add-mylist-btn:active {
+  opacity: 0.7;
 }
+
+.add-mylist-btn.added {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 .search-box {
   flex: 1;
   display: flex;
@@ -718,7 +1087,11 @@ ul, ol { list-style: none; }
   border: 0.5px solid var(--border);
   transition: border-color var(--transition);
 }
-.search-box:focus-within { border-color: var(--accent); }
+
+.search-box:focus-within {
+  border-color: var(--accent);
+}
+
 .search-box input {
   flex: 1;
   background: none;
@@ -728,40 +1101,9 @@ ul, ol { list-style: none; }
   font-size: 15px;
   letter-spacing: -0.2px;
 }
-.search-box input::placeholder { color: var(--text-muted); }
-.filter-btn {
-  width: 40px; height: 40px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
 
-/* Genre filter pills */
-.genre-pills {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 0 16px 12px;
-}
-.genre-pills::-webkit-scrollbar { display: none; }
-.genre-pill {
-  padding: 6px 16px;
-  border-radius: 20px;
-  background: var(--bg-elevated);
-  border: 0.5px solid var(--border);
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all var(--transition);
-  letter-spacing: -0.1px;
-}
-.genre-pill:active, .genre-pill.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+.search-box input::placeholder {
+  color: var(--text-muted);
 }
 
 /* Search result list */
@@ -776,7 +1118,11 @@ ul, ol { list-style: none; }
   transform: translate3d(0, 0, 0);
   -webkit-transform: translate3d(0, 0, 0);
 }
-.search-result-item:active { background: var(--bg-elevated); }
+
+.search-result-item:active {
+  background: var(--bg-elevated);
+}
+
 .search-result-thumb {
   width: 54px;
   height: 72px;
@@ -785,7 +1131,12 @@ ul, ol { list-style: none; }
   flex-shrink: 0;
   background: var(--bg-card);
 }
-.search-result-info { flex: 1; min-width: 0; }
+
+.search-result-info {
+  flex: 1;
+  min-width: 0;
+}
+
 .search-result-title {
   font-size: 15px;
   font-weight: 600;
@@ -795,6 +1146,7 @@ ul, ol { list-style: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .search-result-meta {
   font-size: 12px;
   color: var(--text-tertiary);
@@ -803,124 +1155,40 @@ ul, ol { list-style: none; }
   flex-wrap: wrap;
 }
 
-/* ---------- Anime Detail Page ---------- */
-.anime-detail-hero {
-  position: relative;
-  width: 100%;
-  height: 260px;
-  overflow: hidden;
-}
-.anime-detail-hero img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.anime-detail-hero .hero-gradient {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(0,0,0,1) 100%);
-}
 .back-btn {
   position: absolute;
-  top: 16px; left: 16px;
-  width: 34px; height: 34px;
-  background: rgba(0,0,0,0.45);
+  top: 16px;
+  left: 16px;
+  width: 34px;
+  height: 34px;
+  background: rgba(0, 0, 0, 0.45);
   border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border: 0.5px solid rgba(255,255,255,0.12);
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
 }
+
 .share-btn {
   position: absolute;
-  top: 16px; right: 16px;
-  width: 34px; height: 34px;
-  background: rgba(0,0,0,0.45);
+  top: 16px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  background: rgba(0, 0, 0, 0.45);
   border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border: 0.5px solid rgba(255,255,255,0.12);
-}
-.bookmark-btn {
-  position: absolute;
-  top: 16px; right: 60px;
-  width: 34px; height: 34px;
-  background: rgba(0,0,0,0.45);
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 0.5px solid rgba(255,255,255,0.12);
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
 }
 
-.anime-detail-info { padding: 0 16px; }
-.anime-detail-title {
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.6px;
-  margin-bottom: 6px;
-  line-height: 1.2;
-}
-.anime-detail-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
-}
-.meta-rating {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  font-weight: 700;
-  color: #FFD60A; /* Apple yellow */
-}
-.meta-dot { color: var(--text-muted); font-size: 12px; }
-.meta-year, .meta-eps { font-size: 13px; color: var(--text-tertiary); }
-
-.anime-detail-actions {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.anime-detail-actions .btn { flex: 1; justify-content: center; }
-
-.anime-synopsis {
-  font-size: 14px;
-  color: var(--text-secondary);
-  line-height: 1.65;
-  margin-bottom: 20px;
-  position: relative;
-  letter-spacing: -0.1px;
-}
-.anime-synopsis.truncated {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.more-btn {
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  margin-top: 4px;
-  display: inline-block;
-}
-
-/* Episode section */
-.episodes-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-.episodes-header h3 { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
 .ep-search {
   display: flex;
   align-items: center;
@@ -930,88 +1198,62 @@ ul, ol { list-style: none; }
   padding: 6px 12px;
   border: 0.5px solid var(--border);
 }
-.ep-search input {
-  background: none; border: none; outline: none;
-  color: var(--text-primary); font-size: 13px; width: 100px;
-}
-.ep-search input::placeholder { color: var(--text-muted); }
 
-.episodes-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin-bottom: 16px;
+.ep-search input {
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 100px;
 }
-.ep-thumb-card {
-  aspect-ratio: 16/9;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg-card);
-  position: relative;
-  cursor: pointer;
-  transition: opacity var(--transition);
+
+.ep-search input::placeholder {
+  color: var(--text-muted);
 }
-.ep-thumb-card:active { opacity: 0.75; }
-.ep-thumb-card img { width: 100%; height: 100%; object-fit: cover; }
-.ep-thumb-card .ep-num {
-  position: absolute;
-  bottom: 4px; left: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  background: rgba(0,0,0,0.7);
-  padding: 1px 5px;
-  border-radius: 4px;
+
+.anime-card:active .card-play-overlay,
+.mylist-card:active .card-play-overlay {
+  opacity: 1;
 }
-.ep-play-icon {
+
+.anime-card:active .card-title-overlay,
+.mylist-card:active .card-title-overlay {
+  opacity: 1 !important;
+}
+
+.card-play-overlay {
   position: absolute;
   inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.3);
-  opacity: 0;
-  transition: opacity var(--transition);
-}
-.ep-thumb-card:active .ep-play-icon { opacity: 1; }
-.anime-card:active .card-play-overlay, .mylist-card:active .card-play-overlay { opacity: 1; }
-.anime-card:active .card-title-overlay, .mylist-card:active .card-title-overlay { opacity: 1 !important; }
-.card-play-overlay {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
   opacity: 0;
   transition: opacity 0.2s ease;
   z-index: 2;
 }
+
 .card-play-overlay-inner {
-  width: 34px; height: 34px; border-radius: 50%;
-  background: rgba(255,255,255,0.9);
-  display: flex; align-items: center; justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transform: scale(0.8);
-  transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1);
-}
-.card-play-overlay-inner svg { color: #000; }
-.anime-card:active .card-play-overlay-inner, .mylist-card:active .card-play-overlay-inner {
-  transform: scale(1);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.detail-tabs {
-  display: flex;
-  gap: 0;
-  border-bottom: 0.5px solid var(--border);
-  margin-bottom: 16px;
+.card-play-overlay-inner svg {
+  color: #000;
 }
-.detail-tab {
-  flex: 1;
-  text-align: center;
-  padding: 10px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: all var(--transition);
-  letter-spacing: -0.1px;
+
+.anime-card:active .card-play-overlay-inner,
+.mylist-card:active .card-play-overlay-inner {
+  transform: scale(1);
 }
-.detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
 /* ---------- Watch / Player ---------- */
 .player-container {
@@ -1021,60 +1263,66 @@ ul, ol { list-style: none; }
   background: #000;
   overflow: hidden;
 }
+
 .player-iframe {
   width: 100%;
   height: 100%;
   border: none;
 }
+
 .player-back {
   position: absolute;
-  top: 12px; left: 12px;
-  width: 32px; height: 32px;
-  background: rgba(0,0,0,0.5);
+  top: 12px;
+  left: 12px;
+  width: 32px;
+  height: 32px;
+  background: rgba(0, 0, 0, 0.5);
   border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   z-index: 10;
   cursor: pointer;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
-.player-info { padding: 12px 16px; }
-.player-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 4px; }
-.player-ep-info { font-size: 13px; color: var(--text-tertiary); margin-bottom: 12px; }
 
-.ep-navigation {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 16px;
+.player-info {
+  padding: 12px 16px;
 }
-.ep-nav-btn {
-  flex: 1;
-  padding: 10px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  border: 0.5px solid var(--border);
+
+.player-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  margin-bottom: 4px;
+}
+
+.player-ep-info {
   font-size: 13px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: all var(--transition);
-  letter-spacing: -0.1px;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
 }
-.ep-nav-btn:active { background: var(--bg-hover); }
-.ep-nav-btn.current { background: var(--accent-dim); border-color: rgba(10,132,255,0.3); color: var(--accent); }
 
 .server-selector {
   margin-bottom: 12px;
 }
-.server-selector h4 { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; }
+
+.server-selector h4 {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
 .server-btns {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
+
 .server-btn {
   padding: 6px 14px;
   border-radius: 20px;
@@ -1086,8 +1334,16 @@ ul, ol { list-style: none; }
   transition: all var(--transition);
   letter-spacing: -0.1px;
 }
-.server-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.server-btn:active { opacity: 0.75; }
+
+.server-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.server-btn:active {
+  opacity: 0.75;
+}
 
 /* ---------- My List ---------- */
 .mylist-header {
@@ -1096,59 +1352,123 @@ ul, ol { list-style: none; }
   align-items: center;
   justify-content: space-between;
 }
-.mylist-title { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+
+.mylist-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* ---------- My List / Favorites / Watched Page Redesign ---------- */
 .mylist-tabs {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 0 16px 12px;
+  padding: 4px 16px 14px;
+  scrollbar-width: none;
 }
-.mylist-tabs::-webkit-scrollbar { display: none; }
+
+.mylist-tabs::-webkit-scrollbar {
+  display: none;
+}
+
 .mylist-tab {
-  padding: 6px 16px;
+  padding: 7px 18px;
   border-radius: 20px;
-  background: var(--bg-elevated);
-  border: 0.5px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 13px;
   font-weight: 500;
+  color: var(--text-secondary);
   white-space: nowrap;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all var(--transition);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   letter-spacing: -0.1px;
 }
-.mylist-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+.mylist-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(108, 92, 231, 0.35);
+}
 
 .mylist-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  padding: 0 16px;
+  gap: 16px 12px;
+  padding: 16px 16px 120px;
 }
+
+@media (min-width: 480px) {
+  .mylist-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px 14px;
+  }
+}
+
 .mylist-card {
-  aspect-ratio: 2/3;
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  position: relative;
+  display: flex;
+  flex-direction: column;
   cursor: pointer;
-  transition: transform 0.2s cubic-bezier(0.4,0,0.2,1);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   will-change: transform;
 }
-.mylist-card:active {
-  transform: scale(0.95);
+
+.mylist-card-poster {
+  width: 100%;
+  aspect-ratio: 2/3;
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
-.mylist-card img { width: 100%; height: 100%; object-fit: cover; }
-.mylist-card-overlay {
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 60%);
-  padding: 20px 6px 6px;
+
+.mylist-card-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
+
+/* Glassmorphic Action Buttons */
+.mylist-action-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.mylist-action-btn:active {
+  transform: scale(0.85);
+}
+
+/* Clean Card Meta Details Below Poster */
+.mylist-card-info {
+  padding: 8px 2px 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .mylist-card-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: -0.1px;
-  line-height: 1.3;
+  color: var(--text-primary);
+  line-height: 1.35;
+  letter-spacing: -0.15px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1165,20 +1485,81 @@ ul, ol { list-style: none; }
   text-align: center;
   gap: 10px;
 }
-.empty-icon { color: var(--text-muted); opacity: 0.4; }
-.empty-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
-.empty-sub { font-size: 14px; color: var(--text-tertiary); letter-spacing: -0.1px; }
 
-/* ---------- Loading Skeleton ---------- */
-@keyframes shimmer {
-  0%   { background-position: -300px 0; }
-  100% { background-position: 300px 0; }
+.empty-icon {
+  color: var(--text-muted);
+  opacity: 0.4;
 }
+
+.empty-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.empty-sub {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  letter-spacing: -0.1px;
+}
+
+/* ---------- Loading Skeleton — 60fps GPU Hardware Accelerated ---------- */
+/* ── Tab-direction slide: content shifts slightly toward new tab ────── */
+@keyframes tabSlideRight {
+  0%   { opacity: 0; transform: translateX(-10px) scale(0.99); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes tabSlideLeft {
+  0%   { opacity: 0; transform: translateX(10px) scale(0.99); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+.tab-enter-right {
+  animation: tabSlideRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.tab-enter-left {
+  animation: tabSlideLeft 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
 .skeleton {
-  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 50%, var(--bg-card) 75%);
-  background-size: 600px 100%;
-  animation: shimmer 1.5s infinite;
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-sm);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translate3d(-100%, 0, 0);
+  background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.09) 50%,
+      transparent 100%);
+  animation: shimmer 1.6s infinite cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+/* ── Premium glass touch micro-interactions ─────────────────────────── */
+button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
+  transform: scale(0.92);
+  opacity: 0.82;
+  transition: transform 0.1s cubic-bezier(0.4, 0, 1, 1), opacity 0.1s ease;
+}
+
+.anime-card:active {
+  transform: scale(0.90) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6) !important;
 }
 
 /* ---------- Toast — iOS style ---------- */
@@ -1187,46 +1568,27 @@ ul, ol { list-style: none; }
   bottom: calc(var(--nav-height) + 16px);
   left: 50%;
   transform: translateX(-50%) translateY(20px);
-  background: rgba(50,50,52,0.95);
+  background: rgba(50, 50, 52, 0.95);
   color: #fff;
   padding: 10px 20px;
   border-radius: 22px;
   font-size: 14px;
   font-weight: 500;
   letter-spacing: -0.1px;
-  border: 0.5px solid rgba(255,255,255,0.1);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
   opacity: 0;
-  transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
   white-space: nowrap;
   z-index: 200;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
-.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ---------- Genre Quick Filter (Home) ---------- */
-.genre-quick-row {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 0 16px 16px;
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
-.genre-quick-row::-webkit-scrollbar { display: none; }
-.genre-quick-pill {
-  padding: 6px 14px;
-  border-radius: 20px;
-  background: var(--bg-elevated);
-  border: 0.5px solid var(--border);
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all var(--transition);
-  letter-spacing: -0.1px;
-}
-.genre-quick-pill:active { opacity: 0.7; }
 
 /* ---------- Sticky Header ---------- */
 .sticky-header {
@@ -1238,46 +1600,63 @@ ul, ol { list-style: none; }
   -webkit-backdrop-filter: blur(35px) saturate(200%);
   border-bottom: 0.5px solid var(--border);
   transition: all 0.3s ease;
-  padding-top: max(32px, env(safe-area-inset-top));
+  padding-top: var(--sat);
 }
 
-/* ---------- Floating Button ---------- */
+/* ── Premium Liquid Glass Floating Button ────────────────────────── */
 .floating-btn {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: rgba(255,255,255,0.1);
-  border: 0.5px solid rgba(255,255,255,0.1);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* Multi-layer glass effect */
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    0 2px 12px rgba(0,0,0,0.4),
+    0 1px 0 rgba(255,255,255,0.12) inset,
+    0 -1px 0 rgba(0,0,0,0.2) inset;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: opacity var(--transition);
+  transition: transform var(--spring), opacity var(--transition), background var(--transition);
   color: #fff;
 }
-.floating-btn:active { opacity: 0.65; }
+
+.floating-btn:active {
+  transform: scale(0.87);
+  opacity: 0.8;
+  background: rgba(255, 255, 255, 0.15);
+}
 
 /* ---------- Animations ---------- */
-@keyframes fadeInUp {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-.fade-in-up { animation: fadeInUp 0.35s ease forwards; }
-
 @keyframes slideUp {
-  from { transform: translateY(100%); opacity: 0.6; }
-  to   { transform: translateY(0);   opacity: 1; }
+  from {
+    transform: translateY(100%);
+    opacity: 0.6;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
-.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
 
 /* Browse search box focus */
 .browse-search-box:focus-within {
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px rgba(10,132,255,0.12);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.12);
 }
 
 /* Result item hover play overlay */
@@ -1286,68 +1665,505 @@ ul, ol { list-style: none; }
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* Loader spin */
-.spin { animation: spin 1s linear infinite; }
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-/* Page entrance */
-.page {
-  animation: pageSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-@keyframes pageSlideIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+/* ─── GPU-Accelerated Page & Content Animations ────────────────────────────
+   RULES:
+   1. Only animate `transform` and `opacity` — these are GPU-composited and
+      NEVER trigger layout or paint. Everything else causes jitter.
+   2. Use translate3d() instead of translateY() — forces the browser to keep
+      the element on the GPU layer so transitions run at 120fps on Android.
+   3. will-change: transform promotes the element to its own GPU layer BEFORE
+      the animation starts, eliminating the first-frame "pop".
+   4. backface-visibility: hidden prevents ghost pixel repaints on Chromium.
+   5. .page must NOT have transform — it would break position:fixed children.
+─────────────────────────────────────────────────────────────────────────── */
+
+
+/* Scale-up pop entrance (cards, modals, tooltips) */
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
 }
 
-.fade-in { animation: fadeIn 0.25s cubic-bezier(0.16,1,0.3,1) forwards; }
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+.pop-in {
+  animation: popIn 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
 }
 
-/* Compact Cards */
+/* Staggered children entrance — apply to parent, children use nth-child delay */
+.stagger-children>* {
+  animation: fadeInUp 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+.stagger-children>*:nth-child(1) {
+  animation-delay: 0.00s;
+}
+
+.stagger-children>*:nth-child(2) {
+  animation-delay: 0.04s;
+}
+
+.stagger-children>*:nth-child(3) {
+  animation-delay: 0.08s;
+}
+
+.stagger-children>*:nth-child(4) {
+  animation-delay: 0.12s;
+}
+
+.stagger-children>*:nth-child(5) {
+  animation-delay: 0.16s;
+}
+
+.stagger-children>*:nth-child(6) {
+  animation-delay: 0.20s;
+}
+
+.stagger-children>*:nth-child(7) {
+  animation-delay: 0.24s;
+}
+
+.stagger-children>*:nth-child(8) {
+  animation-delay: 0.28s;
+}
+
+.stagger-children>*:nth-child(n+9) {
+  animation-delay: 0.32s;
+}
+
+/* GPU layer prep for ALL interactive cards — prevents compositing on first touch */
+.anime-card,
+.mylist-card,
+[class*="-card"] {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: transform;
+}
+
+/* Smooth press feedback — GPU composited */
+.anime-card:active,
+.mylist-card:active {
+  transform: translateZ(0) scale(0.96);
+  transition: transform 0.18s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* ─── Compact Cards ────────────────────────────────────────────────── */
 body.compact-cards .anime-card,
 body.compact-cards .mylist-card {
   width: 90px !important;
   height: 125px !important;
 }
-body.compact-cards .h-scroll > div { width: 90px !important; }
-body.compact-cards .h-scroll p    { width: 90px !important; }
+
+body.compact-cards .h-scroll>div {
+  width: 90px !important;
+}
+
+body.compact-cards .h-scroll p {
+  width: 90px !important;
+}
+
 body.compact-cards .mylist-grid {
   grid-template-columns: repeat(4, 1fr) !important;
   gap: 6px !important;
   padding: 0 10px !important;
 }
+
 body.compact-cards .mylist-card span,
-body.compact-cards .anime-card span { font-size: 8px !important; }
+body.compact-cards .anime-card span {
+  font-size: 8px !important;
+}
+
 body.compact-cards .mylist-card select {
   font-size: 8px !important;
   padding: 0px 2px !important;
 }
 
-/* ---------- Responsive ---------- */
+/* ─── Responsive ───────────────────────────────────────────────────── */
 @media (max-width: 1024px) {
-  .app-container { max-width: 100%; }
+  .app-container {
+    max-width: 100%;
+  }
 }
 
-/* ---------- Premium Card Entrance Animation ---------- */
+/* ─── Card Entrance Animation — lightweight, GPU-composited ─────────── */
+/* Uses translate3d so it runs on the GPU compositor thread, no jank */
 @keyframes cardEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.94);
+    filter: blur(3px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0.5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.card-entrance {
+  animation: cardEntrance 0.52s cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  will-change: transform, opacity, filter;
+}
+
+/* ─── Card label below card ────────────────────────────────────────── */
+.card-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.15px;
+  line-height: 1.3;
+}
+
+/* ── fade-in-up: opacity-only entrance, NO translateY ────────────────────────
+   translateY is intentionally removed: any vertical shift on a wrapper that
+   contains full-bleed elements (hero banner, etc.) creates a visible dark gap
+   at the seam. Individual sections use sectionFadeUp for their own entrance.
+   ──────────────────────────────────────────────────────────────── */
+@keyframes fadeInUp {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity;
+}
+
+/* ─── fade-in: opacity only (safe for fixed children) ─────────────── */
+@keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.97);
   }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─── Player portal: smooth premium slide-up from bottom ─────────── */
+@keyframes playerPortalIn {
+  from {
+    opacity: 0;
+    transform: translateY(32px) scale(0.98);
+  }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
 }
-.card-entrance {
-  animation: cardEntrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+
+.player-portal-anim {
+  animation: playerPortalIn 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─── Spring scale-in: for menus, modals, bottom sheets ──────────── */
+@keyframes springIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.88) translateY(10px);
+  }
+
+  60% {
+    opacity: 1;
+    transform: scale(1.02) translateY(-2px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.spring-in {
+  animation: springIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* ─── Sheet slide-up: for bottom panels ─────────────────────────── */
+@keyframes sheetUp {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sheet-up {
+  animation: sheetUp 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─── Skeleton loading shimmer ───────────────────────────────────── */
+@keyframes skeletonShimmer {
+  0% {
+    background-position: -200% center;
+  }
+
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg,
+      var(--bg-elevated) 25%,
+      rgba(255, 255, 255, 0.05) 50%,
+      var(--bg-elevated) 75%);
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+  border-radius: 12px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PREMIUM ADDITIONS — Netflix / Hotstar Level UI
+═══════════════════════════════════════════════════════════════════ */
+
+/* ── Scroll Row Edge Fade — hints at more content (Netflix-style) ── */
+.scroll-row-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.scroll-row-wrapper::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 40px;
+  background: linear-gradient(to left, var(--bg-primary) 0%, transparent 100%);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ── Netflix-Style Top 10 Rank Number ──────────────────────────────── */
+.rank-number {
+  position: absolute;
+  left: -2px;
+  bottom: 22px;
+  font-size: 88px;
+  font-weight: 900;
+  font-style: italic;
+  line-height: 0.72;
+  letter-spacing: -8px;
+  color: var(--bg-primary);
+  -webkit-text-stroke: 2.5px rgba(255, 255, 255, 0.45);
+  paint-order: stroke fill;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.7));
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── Hero Play Button Glow Pulse ──────────────────────────────────── */
+@keyframes heroPlayGlow {
+  0%, 100% {
+    box-shadow:
+      0 8px 32px -6px var(--accent-glow),
+      0 1px 0 rgba(255,255,255,0.2) inset;
+  }
+  50% {
+    box-shadow:
+      0 8px 48px -4px rgba(108, 99, 255, 0.55),
+      0 0 24px rgba(108, 99, 255, 0.25),
+      0 1px 0 rgba(255,255,255,0.2) inset;
+  }
+}
+
+.hero-play-glow {
+  animation: heroPlayGlow 3s ease-in-out infinite;
+}
+
+/* ── Continue Watching — show remove button on touch/hover ────────── */
+.continue-watching-card:active .cw-remove-btn,
+.continue-watching-card:hover .cw-remove-btn {
+  opacity: 1 !important;
+}
+
+/* ── Premium Section Subtitle ─────────────────────────────────────── */
+.section-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+}
+
+/* ── Trending Badge (frosted glass) ───────────────────────────────── */
+.trending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 4px 12px;
+  border-radius: 20px;
+  margin-bottom: 8px;
+}
+
+.trending-badge span {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Card Glass Reflection Sweep ──────────────────────────────────── */
+@keyframes cardShine {
+  0% { transform: translateX(-100%) rotate(25deg); }
+  100% { transform: translateX(200%) rotate(25deg); }
+}
+
+.anime-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 50%;
+  height: 200%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.04),
+    transparent
+  );
+  z-index: 4;
+  pointer-events: none;
+  transform: rotate(25deg);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.anime-card:active::before {
+  opacity: 1;
+  animation: cardShine 0.6s ease forwards;
+}
+
+/* ─── fadeScale: micro-animation for dot/pip appearance ─────────── */
+@keyframes fadeScale {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ─── Smooth page entrance for player/streaming page ─────────── */
+@keyframes pageSlideIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.975) translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.page-slide-in {
+  animation: pageSlideIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+/* ─── Soft staggered fade for player content controls ─────────── */
+@keyframes playerContentEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.99);
+    filter: blur(1px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.player-content-soft-fade {
+  animation: playerContentEntrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.08s both;
+  will-change: transform, opacity;
+}
+
+/* ─── Soft content transition for server/episode switching ───── */
+@keyframes softReveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.soft-reveal {
+  animation: softReveal 0.3s cubic-bezier(0.25, 1, 0.3, 1) both;
+}
+
+/* ─── Premium pill glow pulse for active server buttons ────────── */
+@keyframes pillGlow {
+  0%, 100% {
+    box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 2px 18px color-mix(in srgb, var(--accent) 50%, transparent);
+  }
 }

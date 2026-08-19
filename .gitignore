@@ -55,3 +55,22 @@ android/.gradle/
 capacitor-cordova-android-plugins/
 local.properties
 *.apk
+
+# Backups directory
+backups/
+*.broken_bak
+*.v156*
+patch.js
+core_bundle.js
+scratch_test.js
+abyss_player.html
+
+# 🔐 Firebase / Supabase Secrets — NEVER commit these!
+firebase-service-account.json
+aniplay-529fa-e0693d7e6b5c.json
+*-service-account.json
+*.serviceAccount.json
+.env
+.env.*
+!.env.example
+supabase/.env

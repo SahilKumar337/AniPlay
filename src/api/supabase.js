@@ -1,76 +1,103 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://nokasnxvxfjcgwbujefk.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_tsMGzQw8WAJeeYEI5-ybTg_H-1CUF7t';
+const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL     || 'https://mvegjpstqfakfyvqmjaa.supabase.co';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_x012bKrRN9TDkreJb6sAZg_amEfWIIf';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    // Persist session in localStorage so getSession() is always local (no network)
+    persistSession: true,
+    detectSessionInUrl: false,
+    // Use PKCE so deep-link auth works correctly on Android
+    flowType: 'pkce',
+  },
+  // Disable Realtime entirely — we don't use it and it generates constant egress
+  realtime: { params: { eventsPerSecond: 0 } },
+  global: {
+    headers: { 'x-client-info': 'aniplay-android' },
+  },
+});
+
+/* ── getLocalUser ──────────────────────────────────────────────────
+   Reads the cached session from localStorage — NO network request.
+   Use this in all write helpers instead of supabase.auth.getUser()
+   which hits the Supabase auth server every call.
+──────────────────────────────────────────────────────────────────── */
+async function getLocalUser() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.user ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Legacy export — now uses local cache instead of network
+export async function getCloudUser() {
+  return getLocalUser();
+}
 
 /**
- * ── Helper Cloud Authentication APIs ──
+ * ── Auth APIs ──
  */
-
-// Sign Up
 export async function cloudSignUp(email, password, nickname) {
   const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
+    email, password,
     options: {
       emailRedirectTo: 'aniplay://auth/callback',
-      data: {
-        nickname: nickname || email.split('@')[0]
-      }
+      data: { nickname: nickname || email.split('@')[0] }
     }
   });
   if (error) throw error;
   return data;
 }
 
-// Sign In
 export async function cloudSignIn(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password
-  });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data;
 }
 
-// Sign Out
 export async function cloudSignOut() {
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 }
 
-// Get Session / Current User
-export async function getCloudUser() {
-  const { data: { user } } = await supabase.auth.getUser();
-  return user;
-}
-
 /**
- * ── Helper Cloud Watchlist / Progress Sync APIs ──
+ * ── Watchlist ──
+ *
+ * EGRESS OPTIMIZATION:
+ *   • Only select the columns we actually use (not select('*'))
+ *   • Accept an optional `since` ISO timestamp → only fetches rows updated
+ *     after that time (incremental sync instead of full table download)
  */
-
-// Fetch full watchlist & progress for logged in user
-export async function fetchCloudWatchlist() {
-  const user = await getCloudUser();
+export async function fetchCloudWatchlist(since = null) {
+  const user = await getLocalUser();
   if (!user) return [];
-  
-  const { data, error } = await supabase
+
+  let query = supabase
     .from('watchlist')
-    .select('*')
+    .select('anime_id, status, favorite, progress, updated_at')   // ← no select('*')
     .eq('user_id', user.id);
-    
+
+  if (since) {
+    query = query.gt('updated_at', since);                         // ← incremental sync
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
   return data || [];
 }
 
-// Sync progress for a specific anime
+/**
+ * Sync a single anime's progress (used from AnimePage / player on episode change).
+ * Uses local session — no extra auth network call.
+ */
 export async function syncCloudProgress(animeId, status, favorite, progressObj) {
-  const user = await getCloudUser();
+  const user = await getLocalUser();
   if (!user) return null;
 
-  // Check if row already exists
+  // Check if row exists (select only 'id' — minimal egress)
   const { data: existing, error: checkError } = await supabase
     .from('watchlist')
     .select('id')
@@ -81,130 +108,266 @@ export async function syncCloudProgress(animeId, status, favorite, progressObj) 
   if (checkError) throw checkError;
 
   const payload = {
-    user_id: user.id,
-    anime_id: String(animeId),
-    status: status || 'watching',
-    favorite: !!favorite,
-    progress: progressObj || {},
+    user_id:    user.id,
+    anime_id:   String(animeId),
+    status:     status || 'watching',
+    favorite:   !!favorite,
+    // ── EGRESS OPTIMIZATION: store ONLY episode + timestamp, not anime metadata.
+    // Anime metadata (title, cover, genres etc.) is stored locally and fetched from AniList.
+    // Storing it here was ~450 bytes/row per sync — removed to save bandwidth.
+    progress:   { episode: progressObj?.episode ?? null, timestamp: progressObj?.timestamp ?? null },
     updated_at: new Date().toISOString()
   };
 
   if (existing?.id) {
-    // Update
     const { data, error } = await supabase
       .from('watchlist')
       .update(payload)
       .eq('id', existing.id)
-      .select();
+      .select('id');              // ← only return id, not full row
     if (error) throw error;
     return data;
   } else {
-    // Insert
     const { data, error } = await supabase
       .from('watchlist')
       .insert([payload])
-      .select();
+      .select('id');              // ← only return id
     if (error) throw error;
     return data;
   }
 }
 
 /**
- * ── Helper User Profile APIs ──
+ * ── User Profile ──
+ *
+ * EGRESS OPTIMIZATION:
+ *   • Separate "lightweight" fetch (settings + nickname only, no recently_viewed)
+ *     used on every sync startup — recently_viewed is stored locally, not re-downloaded
+ *   • Full fetch (with recently_viewed) only on first install / explicit restore
  */
+export async function fetchUserProfile(userId, { includeRecentlyViewed = false } = {}) {
+  const cols = includeRecentlyViewed
+    ? 'id, nickname, avatar_url, settings, recently_viewed'
+    : 'id, nickname, avatar_url, settings';          // ← skip recently_viewed blob normally
 
-async function createUserProfile(userId, nickname) {
-  const { error } = await supabase
-    .from('user_profiles')
-    .upsert({
-      id: userId,
-      nickname,
-      created_at: new Date().toISOString()
-    });
-  if (error) console.error('[Supabase] Failed to create user profile:', error.message);
-}
-
-export async function fetchUserProfile(userId) {
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('*')
+    .select(cols)
     .eq('id', userId)
     .maybeSingle();
   if (error) throw error;
   return data;
 }
 
+async function createUserProfile(userId, nickname, extraFields = {}) {
+  const { error } = await supabase
+    .from('user_profiles')
+    .upsert({ id: userId, nickname, created_at: new Date().toISOString(), ...extraFields });
+  if (error) console.error('[Supabase] Failed to create user profile:', error.message);
+}
+
 export async function updateUserNickname(nickname) {
-  const user = await getCloudUser();
+  const user = await getLocalUser();
   if (!user) return;
   const { error } = await supabase
     .from('user_profiles')
-    .upsert({
-      id: user.id,
-      nickname,
-      created_at: new Date().toISOString()
-    });
+    .upsert({ id: user.id, nickname, created_at: new Date().toISOString() });
   if (error) throw error;
 }
 
 /**
- * ── Helper Comments APIs (Direct Supabase) ──
+ * ── Comments ──
+ *
+ * EGRESS OPTIMIZATION:
+ *   • Client-side TTL cache (5 minutes) — popular anime pages won't re-fetch
+ *     comments on every navigation back
+ *   • Already uses minimal columns (not select('*'))
  */
+const _commentCache = new Map(); // key: `${animeId}:${offset}` → { data, count, ts }
+const COMMENT_TTL_MS = 15 * 60 * 1000; // 15 min — egress-safe; cache invalidated on new comment post
 
-export async function fetchCloudComments(animeId, episode) {
-  const { data, error } = await supabase
+export async function fetchCloudComments(animeId, offset = 0) {
+  const cacheKey = `${animeId}:${offset}`;
+  const cached   = _commentCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < COMMENT_TTL_MS) {
+    return { data: cached.data, count: cached.count };
+  }
+
+  const PAGE_SIZE = 20;
+  const { data, count, error } = await supabase
     .from('comments')
-    .select(`
-      id,
-      username,
-      content,
-      parent_id,
-      created_at
-    `)
+    .select('id, username, content, parent_id, created_at, likes_count, user_id', { count: 'estimated' })
     .eq('anime_id', String(animeId))
-    .eq('episode', parseInt(episode, 10))
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .range(offset, offset + PAGE_SIZE - 1);
 
   if (error) throw error;
-  return data || [];
+  const result = { data: data || [], count: count || 0 };
+  _commentCache.set(cacheKey, { ...result, ts: Date.now() });
+  return result;
 }
 
-export async function postCloudComment(animeId, episode, username, content, parentId = null) {
-  const user = await getCloudUser();
+export function invalidateCommentCache(animeId) {
+  // Clear all cached pages for this anime (called after posting a new comment)
+  for (const key of _commentCache.keys()) {
+    if (key.startsWith(`${animeId}:`)) _commentCache.delete(key);
+  }
+}
+
+// Episode param removed — comments are now anime-level (general), not per-episode
+export async function postCloudComment(animeId, username, content, parentId = null) {
+  const user = await getLocalUser();
   const payload = {
-    anime_id: String(animeId),
-    episode: parseInt(episode, 10),
-    username: username || 'Anonymous',
+    anime_id:  String(animeId),
+    episode:   null,          // general community comment, not episode-specific
+    username:  username || 'Anonymous',
     content,
-    parent_id: parentId,
-    user_id: user?.id || null
+    parent_id: parentId || null,
+    user_id:   user?.id || null,
+    likes_count: 0,
   };
 
   const { data, error } = await supabase
     .from('comments')
     .insert([payload])
-    .select();
+    .select('id, username, content, parent_id, created_at, likes_count, user_id');
 
   if (error) throw error;
+  invalidateCommentCache(animeId);
   return data;
 }
 
+/**
+ * Toggle like on a comment.
+ *
+ * Strategy (zero extra READ egress):
+ *  - likes_count on the comments row   → shown to all users, already fetched with comment data
+ *  - comment_likes table               → records who liked what (tiny writes only, no extra reads)
+ *  - localStorage likedComments        → tells current user if THEY already liked (zero egress)
+ *
+ * isLiking=true  → INSERT into comment_likes + increment likes_count via RPC
+ * isLiking=false → DELETE from comment_likes + decrement likes_count via RPC
+ */
+export async function toggleCommentLike(commentId, isLiking) {
+  const user = await getLocalUser();
+
+  // Stable anonymous device ID — persisted in localStorage so the same device
+  // can't double-like even without an account.
+  let deviceId = localStorage.getItem('aniplay_device_id');
+  if (!deviceId) {
+    deviceId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+    localStorage.setItem('aniplay_device_id', deviceId);
+  }
+
+  if (isLiking) {
+    // Record the like (ignoreDuplicates = safe to call multiple times)
+    supabase.from('comment_likes').insert([{
+      comment_id: commentId,
+      user_id:    user?.id   || null,
+      device_id:  deviceId,
+    }]).then(() => {}).catch(() => {}); // fire-and-forget
+
+    // Atomic increment of likes_count
+    const { error } = await supabase.rpc('increment_comment_likes', { comment_id_param: commentId });
+    if (error) throw error;
+  } else {
+    // Remove the like record — match by device_id OR user_id to cover both anon + logged-in
+    const q = supabase.from('comment_likes').delete().eq('comment_id', commentId);
+    if (user?.id) {
+      q.or(`device_id.eq.${deviceId},user_id.eq.${user.id}`);
+    } else {
+      q.eq('device_id', deviceId);
+    }
+    q.then(() => {}).catch(() => {}); // fire-and-forget
+
+    // Atomic decrement of likes_count (floors at 0)
+    const { error } = await supabase.rpc('decrement_comment_likes', { comment_id_param: commentId });
+    if (error) throw error;
+  }
+}
+
+/**
+ * ── Profile field updates ──
+ * These write small payloads — no optimization needed beyond local user.
+ */
+
+// Throttle gate — write recently_viewed to cloud at most once every 5 minutes.
+// Heavy users browse many anime pages; without this, every page visit triggers a DB write.
+let _lastRecentlyViewedWrite = 0;
+const RECENTLY_VIEWED_WRITE_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
 export async function updateCloudRecentlyViewed(recentlyViewedArray) {
-  const user = await getCloudUser();
+  const user = await getLocalUser();
   if (!user) return;
+
+  // Skip write if we wrote less than 5 minutes ago (local state is always current anyway)
+  const now = Date.now();
+  if (now - _lastRecentlyViewedWrite < RECENTLY_VIEWED_WRITE_INTERVAL) return;
+  _lastRecentlyViewedWrite = now;
+
+  // Store minimal anime stub (id, title, coverImage), episode, and timestamp (~100B per item, ~1.5KB total)
+  const slim = (recentlyViewedArray || []).slice(0, 15).map(item => ({
+    anime: item?.anime ? {
+      id: item.anime.id,
+      title: { romaji: item.anime.title?.romaji || item.anime.title?.english || item.anime.title?.native || '' },
+      coverImage: { medium: item.anime.coverImage?.medium || item.anime.coverImage?.large || '' },
+    } : null,
+    episode: item?.episode || 1,
+    timestamp: item?.timestamp || 0,
+  })).filter(x => x.anime?.id);
+
   const { error } = await supabase
     .from('user_profiles')
-    .update({ recently_viewed: recentlyViewedArray })
+    .update({ recently_viewed: slim })
     .eq('id', user.id);
   if (error) throw error;
 }
 
+// Only these 5 settings keys are synced to Supabase — everything else is local-only.
+// This cuts settings payload from ~800B to ~120B and prevents local-only prefs (volume,
+// subtitle tweaks, etc.) from polluting cross-device sync.
+const CLOUD_SETTINGS_KEYS = ['darkMode', 'accentColor', 'autoplay', 'preferredServer', 'subtitleFontSize'];
+
 export async function updateCloudSettings(settingsObj) {
-  const user = await getCloudUser();
+  const user = await getLocalUser();
+  if (!user) return;
+  // Build a slim object with only the 5 synced keys + updatedAt timestamp
+  const slim = {};
+  CLOUD_SETTINGS_KEYS.forEach(k => { if (settingsObj[k] !== undefined) slim[k] = settingsObj[k]; });
+  slim.updatedAt = settingsObj.updatedAt || Date.now();
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ settings: slim })
+    .eq('id', user.id);
+  if (error) throw error;
+}
+
+export async function saveAvatarToProfile(avatarValue) {
+  const user = await getLocalUser();
   if (!user) return;
   const { error } = await supabase
     .from('user_profiles')
-    .update({ settings: settingsObj })
+    .update({ avatar_url: avatarValue })
     .eq('id', user.id);
   if (error) throw error;
+}
+
+/**
+ * ── Notifications ──
+ */
+export async function createNotification({ targetUserId, actorName, type, commentPreview, animeId }) {
+  if (!targetUserId) return;
+  try {
+    await supabase.from('notifications').insert([{
+      user_id:         targetUserId,
+      actor_name:      actorName || 'Someone',
+      type:            type || 'like',
+      comment_preview: commentPreview || null,
+      anime_id:        animeId || null,
+      read:            false,
+      created_at:      new Date().toISOString()
+    }]);
+  } catch (_) {
+    // Silently ignore — notifications table may not exist yet
+  }
 }

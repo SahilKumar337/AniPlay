@@ -1,18 +1,19 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import {
   User, Info, Shield, LogOut, ChevronRight, Heart, Bookmark, Clock,
   Save, Check, X, AlertTriangle, Cloud, CloudLightning,
   Play, SkipForward, Server, Moon, Palette, LayoutGrid,
   Type, Sliders, Captions, Download, Upload,
-  Settings, ChevronDown, Camera, Globe,
+  Settings, ChevronDown, Camera, Globe, Bell, RefreshCw,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App as CapApp } from "@capacitor/app";
 import AuthModal from "../components/AuthModal";
-import { cloudSignOut, supabase } from "../api/supabase";
+import { cloudSignOut, supabase, fetchUserProfile, saveAvatarToProfile } from "../api/supabase";
+import { getTitle } from "../api/anilist";
 
 const APKUpdater = registerPlugin("APKUpdater");
 
@@ -67,6 +68,24 @@ const GLOBAL_STYLES = `
   @keyframes slideUp   { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes fadeInUp  { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes dropIn    { from { transform: translateY(-8px) scale(0.95); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
+  @keyframes fadeInOverlay {
+    0% { opacity: 0; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); }
+    100% { opacity: 1; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+  }
+  @keyframes spinSlow {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  .btn-press-anim {
+    transition: transform 0.16s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s, box-shadow 0.2s, filter 0.2s !important;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-press-anim:active {
+    transform: scale(0.94) !important;
+    filter: brightness(0.9) !important;
+  }
 
   .settings-card-anim { animation: fadeInUp 0.4s cubic-bezier(0.34,1.2,0.64,1) both; }
   .settings-card-anim:nth-child(1) { animation-delay: 0.05s; }
@@ -207,8 +226,8 @@ function PillSelector({ value, options, onChange }) {
 /* ── Setting Row ─────────────────────────────────────────────────────────── */
 function SettingRow({ icon: Icon, label, sub, children, iconColor = "var(--accent)", last, onClick }) {
   return (
-    <div 
-      className="srow" 
+    <div
+      className="srow"
       onClick={onClick}
       style={{
         display: "flex", alignItems: "center", gap: 14, padding: "13px 8px",
@@ -270,8 +289,8 @@ function SettingsPanel({ onBack }) {
 
   const ACCENT_COLORS = [
     { value: "#7c3aed", label: "Violet" }, { value: "#e11d48", label: "Rose" },
-    { value: "#0ea5e9", label: "Sky" },    { value: "#10b981", label: "Emerald" },
-    { value: "#f59e0b", label: "Amber" },  { value: "#ec4899", label: "Pink" },
+    { value: "#0ea5e9", label: "Sky" }, { value: "#10b981", label: "Emerald" },
+    { value: "#f59e0b", label: "Amber" }, { value: "#ec4899", label: "Pink" },
     { value: "#6366f1", label: "Indigo" }, { value: "#14b8a6", label: "Teal" },
   ];
 
@@ -306,7 +325,7 @@ function SettingsPanel({ onBack }) {
           if (res && res.data) {
             const data = JSON.parse(res.data);
             if (data.version !== 1) { alert("Unsupported format"); return; }
-            
+
             const { Preferences } = await import('@capacitor/preferences');
             if (data.watchlist) await Preferences.set({ key: 'aniplay_watchlist', value: JSON.stringify(data.watchlist) });
             if (data.favorites) await Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify(data.favorites) });
@@ -328,7 +347,7 @@ function SettingsPanel({ onBack }) {
         try {
           const text = await file.text(); const data = JSON.parse(text);
           if (data.version !== 1) { alert("Unsupported format"); return; }
-          
+
           const { Preferences } = await import('@capacitor/preferences');
           if (data.watchlist) await Preferences.set({ key: 'aniplay_watchlist', value: JSON.stringify(data.watchlist) });
           if (data.favorites) await Preferences.set({ key: 'aniplay_favorites', value: JSON.stringify(data.favorites) });
@@ -366,41 +385,51 @@ function SettingsPanel({ onBack }) {
   };
 
   const subColor = settings.subtitleColor || "#ffffff";
-  const subSz    = settings.subtitleFontSize || "medium";
-  const subOp    = settings.subtitleBgOpacity ?? 0.5;
-  const subPos   = settings.subtitlePosition || "bottom";
+  const subSz = settings.subtitleFontSize || "medium";
+  const subOp = settings.subtitleBgOpacity ?? 0.5;
+  const subPos = settings.subtitlePosition || "bottom";
 
   return (
-    <div className="page" style={{ background: "var(--bg-primary)" }}>
+    <div className="page" style={{ background: "var(--bg-primary)", paddingTop: 'calc(var(--sat) + 62px)' }}>
       <style>{GLOBAL_STYLES}</style>
 
-      {/* Header */}
+      {/* Fixed Header — never scrolls away, like Home AniPlay bar */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 12,
-        padding: "16px 16px 16px",
-        paddingTop: "max(32px, env(safe-area-inset-top))",
-        background: "linear-gradient(to bottom, rgba(0,0,0,0.3), transparent)",
-        borderBottom: "1px solid rgba(255,255,255,0.05)",
-        marginBottom: 4,
+        position: 'fixed',
+        top: 0,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: '100%',
+        maxWidth: 480,
+        zIndex: 50,
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '14px 16px',
+        paddingTop: 'var(--sat)',
+        background: 'rgba(12, 12, 14, 0.96)',
+        backdropFilter: 'blur(40px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
       }}>
         <button onClick={onBack} style={{
-          background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)",
-          color: "var(--text-primary)", cursor: "pointer",
-          padding: "7px 14px", borderRadius: 10, fontSize: 13, fontWeight: 700,
-          transition: "all 0.2s", flexShrink: 0,
+          background: 'rgba(255,255,255,0.09)', border: '1px solid rgba(255,255,255,0.12)',
+          color: 'var(--text-primary)', cursor: 'pointer',
+          padding: '8px 16px', borderRadius: 12, fontSize: 13, fontWeight: 700,
+          transition: 'all 0.2s', flexShrink: 0,
+          display: 'flex', alignItems: 'center', gap: 5,
         }}>← Back</button>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
             width: 36, height: 36, borderRadius: 11,
-            background: "linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #818cf8))",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 4px 18px -3px var(--accent)",
+            background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #818cf8))',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 18px -3px var(--accent)',
           }}>
             <Settings size={17} color="#fff" />
           </div>
-          <h2 style={{ fontSize: 19, fontWeight: 900, margin: 0, letterSpacing: "-0.025em" }}>App Settings</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 900, margin: 0, letterSpacing: '-0.03em' }}>App Settings</h2>
         </div>
       </div>
+
 
       <div style={{ padding: "10px 16px 80px" }}>
 
@@ -412,10 +441,10 @@ function SettingsPanel({ onBack }) {
           <SettingRow icon={Server} label="Preferred Server" sub="Stream source priority when multiple are available" iconColor="#60a5fa">
             <Dropdown value={settings.preferredServer} onChange={v => updateSettings({ preferredServer: v })}
               options={[
-                { value: "auto", label: "Auto (Best)" },
-                { value: "neko", label: "NekoHD" },
-                { value: "waveshd", label: "WavesHD" },
-                { value: "anikoto", label: "AniKoto" }
+                { value: "auto",     label: "Auto (Best)" },
+                { value: "neko",     label: "NekoHD" },
+                { value: "waveshd",  label: "WavesHD" },
+                { value: "anihd",    label: "AniHD" },
               ]} />
           </SettingRow>
           <SettingRow icon={Globe} label="Preferred Dub Language" sub="Dub audio preference for GogoAnime streams" iconColor="#fb7185" last>
@@ -435,9 +464,6 @@ function SettingsPanel({ onBack }) {
         <SettingsCard title="Appearance" emoji="🎨" zIndex={9}>
           <SettingRow icon={Moon} label="Dark Mode" sub="Always-on dark theme for night watching" iconColor="#6366f1">
             <Toggle value={settings.darkMode} onChange={v => updateSettings({ darkMode: v })} />
-          </SettingRow>
-          <SettingRow icon={LayoutGrid} label="Compact Cards" sub="Smaller anime cards — more per row" iconColor="#14b8a6">
-            <Toggle value={settings.compactCards} onChange={v => updateSettings({ compactCards: v })} />
           </SettingRow>
           <SettingRow icon={Palette} label="Accent Color" sub="Theme highlight applied across the app" iconColor={settings.accentColor} last>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 190 }}>
@@ -550,42 +576,42 @@ function SettingsPanel({ onBack }) {
               <Upload size={13} /> Import
             </button>
           </SettingRow>
-          <SettingRow 
-            icon={Download} 
-            label="Download Folder" 
-            sub="Subfolder inside your Downloads directory" 
-            iconColor="#a855f7" 
+          <SettingRow
+            icon={Download}
+            label="Download Folder"
+            sub="Subfolder inside your Downloads directory"
+            iconColor="#a855f7"
             last
           >
-             <div
-               onClick={handleOpenDirectoryPicker}
-               style={{
-                 background: 'var(--bg-hover)',
-                 border: '1.5px solid var(--border)',
-                 borderRadius: 8,
-                 padding: '6px 14px',
-                 color: '#fff',
-                 minWidth: 90,
-                 textAlign: 'right',
-                 fontSize: 13,
-                 fontWeight: 600,
-                 cursor: 'pointer',
-                 WebkitTapHighlightColor: 'transparent',
-                 userSelect: 'none',
-                 display: 'inline-block',
-                 transition: 'all 0.15s',
-               }}
-               onMouseEnter={e => {
-                 e.currentTarget.style.borderColor = 'rgba(255,255,255,0.3)';
-                 e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
-               }}
-               onMouseLeave={e => {
-                 e.currentTarget.style.borderColor = 'var(--border)';
-                 e.currentTarget.style.background = 'var(--bg-hover)';
-               }}
-             >
-               {settings.downloadLocation || 'AniPlay'}
-             </div>
+            <div
+              onClick={handleOpenDirectoryPicker}
+              style={{
+                background: 'var(--bg-hover)',
+                border: '1.5px solid var(--border)',
+                borderRadius: 8,
+                padding: '6px 14px',
+                color: '#fff',
+                minWidth: 90,
+                textAlign: 'right',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                WebkitTapHighlightColor: 'transparent',
+                userSelect: 'none',
+                display: 'inline-block',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.3)';
+                e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--border)';
+                e.currentTarget.style.background = 'var(--bg-hover)';
+              }}
+            >
+              {settings.downloadLocation || 'AniPlay'}
+            </div>
           </SettingRow>
         </SettingsCard>
       </div>
@@ -630,18 +656,19 @@ function Modal({ title, children, onClose }) {
 
 /* ── Main Profile ────────────────────────────────────────────────────────── */
 export default function Profile() {
-  const { watchlist, favorites, progress, user, syncWithCloud, showToast, flushSync } = useApp();
+  const { watchlist, favorites, progress, recentlyViewed, user, userProfile, syncWithCloud, showToast, flushSync } = useApp();
   const navigate = useNavigate();
-  const [showSettings,    setShowSettings]    = useState(false);
-  const [showAbout,       setShowAbout]       = useState(false);
-  const [showPrivacy,     setShowPrivacy]     = useState(false);
-  const [showSignOut,     setShowSignOut]     = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showSignOut, setShowSignOut] = useState(false);
   const [showCloudLogOut, setShowCloudLogOut] = useState(false);
-  const [showAuthModal,   setShowAuthModal]   = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
-  const [appVersion,      setAppVersion]      = useState("1.0.0");
-  const [devTaps,         setDevTaps]         = useState(0);
-  const [syncing,         setSyncing]         = useState(false);
+  const [appVersion, setAppVersion] = useState("1.0.0");
+  const [devTaps, setDevTaps] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const handleManualSync = async () => {
     if (syncing) return;
@@ -660,6 +687,15 @@ export default function Profile() {
   const [editNickname, setEditNickname] = useState("");
   const [editAvatar, setEditAvatar] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [profileDbData, setProfileDbData] = useState(null);
+
+  // Fetch user_profiles row from DB (for avatar/nickname fallback)
+  useEffect(() => {
+    if (!user?.id) return;
+    fetchUserProfile(user.id)
+      .then(d => setProfileDbData(d))
+      .catch(() => { });
+  }, [user?.id]);
 
   useEffect(() => {
     const getVersion = async () => {
@@ -668,7 +704,7 @@ export default function Profile() {
           const v = await APKUpdater.getAppVersion();
           setAppVersion(v.versionName);
           if (v.packageName?.endsWith(".beta")) localStorage.setItem("anilab_test_updates", "true");
-        } catch { try { const i = await CapApp.getInfo(); setAppVersion(i.version); } catch {} }
+        } catch { try { const i = await CapApp.getInfo(); setAppVersion(i.version); } catch { } }
       }
     };
     getVersion();
@@ -684,41 +720,96 @@ export default function Profile() {
     } else setDevTaps(n);
   };
 
-  const handleSignOut     = async () => {
-    try { await flushSync(); } catch (e) { console.warn('[LogOut] flush failed:', e.message); }
-    localStorage.clear(); sessionStorage.clear(); window.location.reload();
-  };
-  const handleCloudLogOut = async () => {
+  const handleSignOut = async () => {
     try {
+      setIsLoggingOut(true);
+      setShowSignOut(false);
       await flushSync();
-      await cloudSignOut();
-      setShowCloudLogOut(false);
+      localStorage.clear();
+      sessionStorage.clear();
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 700);
+    } catch (e) {
+      setIsLoggingOut(false);
+      console.warn('[LogOut] flush failed:', e.message);
       window.location.reload();
     }
-    catch (e) { alert(e.message || "Failed to log out"); }
   };
+
+  const handleCloudLogOut = async () => {
+    try {
+      setIsLoggingOut(true);
+      setShowCloudLogOut(false);
+      await flushSync();
+      // Dynamically import Preferences (same pattern used elsewhere in this file)
+      const { Preferences } = await import('@capacitor/preferences');
+      await Preferences.remove({ key: 'aniplay_cloud_credentials' }).catch(console.error);
+      await cloudSignOut();
+      localStorage.removeItem('aniplay_last_sync_at'); // clear sync timestamp on logout
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 700);
+    } catch (e) {
+      setIsLoggingOut(false);
+      alert(e.message || "Failed to log out");
+    }
+  };
+
+  const wlCount = Object.keys(watchlist || {}).length;
+  const favCount = Object.keys(favorites || {}).length;
+
+  const historyCount = useMemo(() => {
+    const isValid = (a) => {
+      if (!a) return false;
+      const t = getTitle(a);
+      return typeof t === 'string' && t.trim().length > 0 && t.toLowerCase() !== 'unknown';
+    };
+
+    const completedIds = new Set(
+      Object.values(watchlist || {})
+        .filter(i => i?.status === 'completed' && isValid(i?.anime))
+        .map(i => String(i.anime.id))
+    );
+
+    const activeSet = new Set();
+    (recentlyViewed || []).forEach(item => {
+      if (item?.anime?.id && isValid(item.anime) && !completedIds.has(String(item.anime.id))) {
+        activeSet.add(String(item.anime.id));
+      }
+    });
+    Object.entries(progress || {}).forEach(([id, prog]) => {
+      if (!completedIds.has(String(id)) && prog?.episode && !activeSet.has(String(id))) {
+        const anime = watchlist?.[id]?.anime || favorites?.[id];
+        if (isValid(anime)) {
+          activeSet.add(String(id));
+        }
+      }
+    });
+
+    return completedIds.size + activeSet.size;
+  }, [recentlyViewed, progress, watchlist, favorites]);
 
   if (showSettings) return <SettingsPanel onBack={() => setShowSettings(false)} />;
 
-  const wlCount = Object.keys(watchlist).length;
-  const favCount = Object.keys(favorites).length;
-  const proCount = Object.keys(progress).length;
-
   const MENU = [
-    { icon: Settings,      label: "Settings",            action: () => setShowSettings(true),     color: "var(--accent)" },
-    { icon: Info,          label: "About AniPlay",       action: () => setShowAbout(true) },
-    { icon: Shield,        label: "Privacy Policy",      action: () => setShowPrivacy(true) },
+    { icon: Settings, label: "Settings", action: () => setShowSettings(true), color: "var(--accent)" },
+    { icon: Bell, label: "Notifications", action: () => navigate('/notifications') },
+    { icon: Info, label: "About AniPlay", action: () => setShowAbout(true) },
+    { icon: Shield, label: "Privacy Policy", action: () => setShowPrivacy(true) },
     user ? { icon: CloudLightning, label: "Log Out from Cloud", action: () => setShowCloudLogOut(true), color: "#38bdf8" } : null,
-    { icon: LogOut,        label: "Clear Cache & Reset", action: () => setShowSignOut(true),      color: "#ef4444" },
+    { icon: LogOut, label: "Clear Cache & Reset", action: () => setShowSignOut(true), color: "#ef4444" },
   ].filter(Boolean);
 
-  const displayName = user
-    ? (user.user_metadata?.nickname || user.email.split("@")[0])
-    : (localStorage.getItem("user_nickname") || "Anime Fan");
-
+  // avatar: prefer user_metadata → then userProfile → then user_profiles DB row → then localStorage
   const avatar = user
-    ? (user.user_metadata?.avatar || "")
+    ? (user.user_metadata?.avatar || userProfile?.avatar || userProfile?.avatar_url || profileDbData?.avatar || profileDbData?.avatar_url || "")
     : (localStorage.getItem("user_avatar") || "");
+
+  // displayName: prefer user_metadata → then userProfile → then user_profiles DB → email prefix → localStorage
+  const displayName = user
+    ? (user.user_metadata?.nickname || userProfile?.nickname || profileDbData?.nickname || user.email?.split("@")[0] || "User")
+    : (localStorage.getItem("user_nickname") || "Anime Fan");
 
   // Pre-fill edit fields when editing modal opens
   const openEditModal = () => {
@@ -728,20 +819,31 @@ export default function Profile() {
   };
 
   const saveProfile = async () => {
-    if (!editNickname.trim()) return;
+    const cleanNick = editNickname.trim();
+    if (!cleanNick) return;
     setSavingProfile(true);
     try {
       if (user) {
-        // Save to Supabase Cloud
+        // 1. Save to Supabase Auth user_metadata (primary)
         const { error } = await supabase.auth.updateUser({
-          data: { nickname: editNickname.trim(), avatar: editAvatar }
+          data: { nickname: cleanNick, avatar: editAvatar }
         });
         if (error) throw error;
-        // Trigger background sync
+        // 2. Persist both nickname AND avatar to user_profiles DB table (recovery / fallback)
+        await updateUserNickname(cleanNick).catch(() => { });
+        await saveAvatarToProfile(editAvatar).catch(() => { });
+        // 3. Refresh local cached state
+        setProfileDbData(prev => ({
+          ...prev,
+          nickname: cleanNick,
+          avatar: editAvatar,
+          avatar_url: editAvatar
+        }));
+        // Trigger background cloud sync
         syncWithCloud(user).catch(console.error);
       } else {
         // Save to local guest storage
-        localStorage.setItem("user_nickname", editNickname.trim());
+        localStorage.setItem("user_nickname", cleanNick);
         localStorage.setItem("user_avatar", editAvatar);
       }
       setShowEditProfile(false);
@@ -755,73 +857,85 @@ export default function Profile() {
   return (
     <div className="page fade-in-up">
       <style>{GLOBAL_STYLES}</style>
-      <div style={{
-        padding: "16px 16px 12px",
-        display: "flex",
-        flexDirection: "column",
-        minHeight: "calc(100vh - var(--nav-height) - 40px - env(safe-area-inset-bottom))",
-        boxSizing: "border-box"
-      }}>
 
-        {/* ── Profile Header: avatar left · name center · edit right ── */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18, marginTop: 10, padding: "0 2px" }}>
+      {/* ── Floating Profile Header (fixed, never scrolls) ── */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: '100%',
+        maxWidth: 480,
+        zIndex: 50,
+        background: 'rgba(12, 12, 14, 0.94)',
+        backdropFilter: 'blur(40px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        // Explicit individual padding — NO shorthand conflict:
+        paddingTop:    'calc(var(--sat) + 10px)',
+        paddingBottom: 12,
+        paddingLeft:   16,
+        paddingRight:  16,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           {/* Avatar */}
           <div onClick={openEditModal} style={{
-            width: 72, height: 72, borderRadius: "50%", flexShrink: 0,
+            width: 46, height: 46, borderRadius: '50%', flexShrink: 0,
             background: getAvatarBackground(avatar),
-            display: "flex", alignItems: "center", justifyContent: "center",
-            border: "3px solid rgba(255,255,255,0.12)",
-            boxShadow: "0 6px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04)",
-            cursor: "pointer", position: "relative", overflow: "hidden",
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '2.5px solid rgba(255,255,255,0.12)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            cursor: 'pointer', position: 'relative', overflow: 'hidden',
           }}>
             {renderAvatarContent(avatar, displayName)}
-            <div style={{
-              position: "absolute", inset: 0, background: "rgba(0,0,0,0.4)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              opacity: 0, transition: "opacity 0.2s",
-            }}
-            className="avatar-hover-overlay"
-            onTouchStart={e => e.currentTarget.style.opacity = 1}
-            onTouchEnd={e => e.currentTarget.style.opacity = 0}
-            onMouseEnter={e => e.currentTarget.style.opacity = 1}
-            onMouseLeave={e => e.currentTarget.style.opacity = 0}
-            >
-              <Camera size={16} color="#fff" />
-            </div>
           </div>
 
           {/* Name & status */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 19, fontWeight: 900, letterSpacing: "-0.02em", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: 17, fontWeight: 900, letterSpacing: '-0.025em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {displayName}
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 5 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: user ? "#10b981" : "#6b7280", flexShrink: 0 }} />
-              {user ? "Cloud Synced Member" : "Local Guest Mode"}
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: user ? '#10b981' : '#6b7280', flexShrink: 0 }} />
+              {user ? 'Cloud Synced Member' : 'Local Guest Mode'}
             </div>
           </div>
 
-          {/* Edit Profile pen icon */}
+          {/* Edit button */}
           <button
             onClick={openEditModal}
             style={{
-              width: 38, height: 38, borderRadius: 12,
-              background: "rgba(255,255,255,0.07)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", flexShrink: 0,
-              transition: "background 0.18s",
+              width: 36, height: 36, borderRadius: 11,
+              background: 'rgba(255,255,255,0.07)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', flexShrink: 0,
+              transition: 'background 0.18s',
             }}
-            onTouchStart={e => e.currentTarget.style.background = "rgba(255,255,255,0.13)"}
-            onTouchEnd={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}
+            onTouchStart={e => e.currentTarget.style.background = 'rgba(255,255,255,0.13)'}
+            onTouchEnd={e => e.currentTarget.style.background = 'rgba(255,255,255,0.07)'}
           >
-            {/* Pen/Edit icon via inline SVG (lucide Pencil) */}
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-muted)" }}>
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
           </button>
         </div>
+      </div>
+
+      {/* ── Scrollable content — paddingTop accounts for fixed header height ── */}
+      {/*   Header: var(--sat) + 10px top + 46px avatar + 12px bottom = ~68px + sat  */}
+      <div style={{
+        paddingTop:    'calc(var(--sat) + 76px)',
+        paddingLeft:   16,
+        paddingRight:  16,
+        paddingBottom: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 'calc(100vh - var(--nav-height) - 40px - env(safe-area-inset-bottom))',
+        boxSizing: 'border-box',
+      }}>
+
 
 
         {/* Cloud banner / status */}
@@ -862,49 +976,66 @@ export default function Profile() {
             <button
               disabled={syncing}
               onClick={handleManualSync}
+              className="btn-press-anim"
               style={{
-                background: syncing ? "rgba(255,255,255,0.05)" : "rgba(56,189,248,0.1)",
-                border: syncing ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(56,189,248,0.22)",
-                borderRadius: 9, padding: "5px 11px", fontSize: 11,
-                color: syncing ? "var(--text-muted)" : "#38bdf8",
-                fontWeight: 700, cursor: syncing ? "not-allowed" : "pointer",
+                background: syncing ? "rgba(56,189,248,0.15)" : "rgba(56,189,248,0.1)",
+                border: syncing ? "1px solid rgba(56,189,248,0.4)" : "1px solid rgba(56,189,248,0.22)",
+                borderRadius: 10, padding: "6px 13px", fontSize: 11,
+                color: "#38bdf8", fontWeight: 700, cursor: syncing ? "not-allowed" : "pointer",
+                display: "flex", alignItems: "center", gap: 6,
+                boxShadow: syncing ? "0 0 16px rgba(56,189,248,0.35)" : "none",
+                transition: "all 0.22s cubic-bezier(0.4, 0, 0.2, 1)",
               }}
             >
-              {syncing ? "Syncing..." : "Sync"}
+              <RefreshCw
+                size={12}
+                color="#38bdf8"
+                style={{
+                  animation: syncing ? "spinSlow 0.75s linear infinite" : "none",
+                  flexShrink: 0
+                }}
+              />
+              <span>{syncing ? "Syncing..." : "Sync"}</span>
             </button>
           </div>
         )}
 
-        {/* Stats — more compact */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
+        {/* Stats — 3 cards: My List · Favorites · History */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 14 }}>
           {[
-            { icon: Bookmark, label: "My List",   value: wlCount,  to: "/mylist",    color: "#818cf8" },
-            { icon: Heart,    label: "Favorites", value: favCount, to: "/favorites", color: "#f43f5e" },
-            { icon: Clock,    label: "Watched",   value: proCount, to: "/watched",   color: "#10b981" },
+            { icon: Bookmark, label: 'My List', value: wlCount, to: '/mylist', color: '#818cf8' },
+            { icon: Heart, label: 'Favorites', value: favCount, to: '/favorites', color: '#f43f5e' },
+            { icon: Clock, label: 'History', value: historyCount, to: '/history', color: '#38bdf8' },
           ].map(s => (
-            <div key={s.label} onClick={() => navigate(s.to)} style={{
-              background: "linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.018))",
-              borderRadius: 14, padding: "11px 6px",
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-              cursor: "pointer", border: "1px solid rgba(255,255,255,0.07)",
-              boxShadow: "0 2px 12px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05)",
-              transition: "transform 0.18s",
-            }}
-            onTouchStart={e => e.currentTarget.style.transform = "scale(0.96)"}
-            onTouchEnd={e => e.currentTarget.style.transform = "scale(1)"}
-            >
-              <s.icon size={18} color={s.color} />
-              <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: "-0.04em" }}>{s.value}</span>
-              <span style={{ fontSize: 9.5, color: "var(--text-muted)", fontWeight: 600 }}>{s.label}</span>
+            <div key={s.label} onClick={() => navigate(s.to)} className="btn-press-anim" style={{
+              background: 'linear-gradient(145deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))',
+              borderRadius: 16,
+              padding: '14px 6px',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+              cursor: 'pointer', border: '1px solid rgba(255,255,255,0.07)',
+              boxShadow: '0 2px 12px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05)',
+              transition: 'transform 0.15s',
+            }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: 11,
+                background: `${s.color}18`,
+                border: `1px solid ${s.color}30`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <s.icon size={17} color={s.color} />
+              </div>
+              <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: '-0.05em', color: 'var(--text-primary)' }}>{s.value}</span>
+              <span style={{ fontSize: 9.5, color: 'var(--text-muted)', fontWeight: 700, textAlign: 'center', letterSpacing: '0.02em' }}>{s.label}</span>
             </div>
           ))}
         </div>
 
-        {/* Menu list — more compact */}
+        {/* Menu list — with press animation feedback */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
           {MENU.map((item, i) => (
             <button key={item.label} id={`profile-menu-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
               onClick={item.action}
+              className="btn-press-anim"
               style={{
                 display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
                 background: i === 0
@@ -914,7 +1045,6 @@ export default function Profile() {
                 border: i === 0 ? "1px solid rgba(124,58,237,0.22)" : "1px solid rgba(255,255,255,0.07)",
                 cursor: "pointer", textAlign: "left",
                 boxShadow: "0 2px 10px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.05)",
-                transition: "all 0.2s",
               }}
             >
               <div style={{
@@ -949,6 +1079,31 @@ export default function Profile() {
         </div>
       </div>
 
+      {/* Smooth Fullscreen Glassmorphic Logout Overlay */}
+      {isLoggingOut && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 999999,
+          background: "rgba(10, 10, 15, 0.85)",
+          backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          gap: 16, animation: "fadeInOverlay 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards"
+        }}>
+          <div style={{
+            width: 60, height: 60, borderRadius: "50%",
+            border: "3px solid rgba(56, 189, 248, 0.18)",
+            borderTopColor: "#38bdf8",
+            animation: "spinSlow 0.8s linear infinite",
+            boxShadow: "0 0 28px rgba(56, 189, 248, 0.35)"
+          }} />
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>
+            Logging Out Safely...
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>
+            Syncing local progress & ending session
+          </div>
+        </div>
+      )}
+
       {showAbout && (
         <Modal title="About AniPlay" onClose={() => setShowAbout(false)}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center", padding: "8px 0" }}>
@@ -976,7 +1131,7 @@ export default function Profile() {
             <p><b>Local Storage</b><br />All preferences use device storage. Clearing app data removes this.</p>
             <p><b>Streaming Content</b><br />AniPlay aggregates publicly available anime streams. We do not host content directly.</p>
             <p><b>Third-Party Services</b><br />We use the AniList API for metadata. Their privacy policy applies.</p>
-            <p style={{ fontSize: 11, color: "var(--text-muted)" }}>Last updated: July 2025</p>
+            <p style={{ fontSize: 11, color: "var(--text-muted)" }}>Last updated: August 2026</p>
           </div>
         </Modal>
       )}
@@ -991,8 +1146,8 @@ export default function Profile() {
               This will permanently clear your <b>watchlist</b>, <b>favorites</b>, and <b>progress</b>. This cannot be undone.
             </p>
             <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={() => setShowSignOut(false)} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "var(--text-primary)", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-              <button onClick={handleSignOut} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#ef4444,#dc2626)", color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer", boxShadow: "0 4px 16px rgba(239,68,68,0.3)" }}>Clear & Reset</button>
+              <button onClick={() => setShowSignOut(false)} className="btn-press-anim" style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "var(--text-primary)", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              <button onClick={handleSignOut} className="btn-press-anim" style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#ef4444,#dc2626)", color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer", boxShadow: "0 4px 16px rgba(239,68,68,0.3)" }}>Clear & Reset</button>
             </div>
           </div>
         </Modal>
@@ -1008,8 +1163,8 @@ export default function Profile() {
               Sign out from cloud sync? Your local data stays safe on this device.
             </p>
             <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={() => setShowCloudLogOut(false)} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "var(--text-primary)", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-              <button onClick={handleCloudLogOut} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer", boxShadow: "0 4px 16px rgba(56,189,248,0.3)" }}>Log Out</button>
+              <button onClick={() => setShowCloudLogOut(false)} className="btn-press-anim" style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "var(--text-primary)", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              <button onClick={handleCloudLogOut} className="btn-press-anim" style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer", boxShadow: "0 4px 16px rgba(56,189,248,0.3)" }}>Log Out</button>
             </div>
           </div>
         </Modal>
@@ -1036,8 +1191,8 @@ export default function Profile() {
                 fontSize: 11, fontWeight: 700, cursor: "pointer", display: "inline-flex",
                 alignItems: "center", gap: 4, transition: "background 0.2s",
               }}
-              onTouchStart={e => e.currentTarget.style.background = "rgba(255,255,255,0.15)"}
-              onTouchEnd={e => e.currentTarget.style.background = "rgba(255,255,255,0.08)"}
+                onTouchStart={e => e.currentTarget.style.background = "rgba(255,255,255,0.15)"}
+                onTouchEnd={e => e.currentTarget.style.background = "rgba(255,255,255,0.08)"}
               >
                 <Camera size={12} /> Upload Custom Photo
                 <input

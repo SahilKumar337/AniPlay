@@ -81,15 +81,13 @@ public class EmbedScraperPlugin extends Plugin {
                     window.setNavigationBarContrastEnforced(false);
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    android.view.WindowInsetsController wic = window.getInsetsController();
-                    if (wic != null) {
-                        wic.hide(
-                            android.view.WindowInsets.Type.statusBars() |
-                            android.view.WindowInsets.Type.navigationBars()
-                        );
-                        wic.setSystemBarsBehavior(
-                            android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                        );
+                    // Re-apply the global immersive state instead of force-hiding the navigation bar
+                    if (getActivity() instanceof MainActivity) {
+                        ((MainActivity) getActivity()).applyFullscreen();
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    if (getActivity() instanceof MainActivity) {
+                        ((MainActivity) getActivity()).applyFullscreen();
                     }
                 }
             }
@@ -114,13 +112,23 @@ public class EmbedScraperPlugin extends Plugin {
                 public WebResourceResponse shouldInterceptRequest(
                         WebView view, WebResourceRequest request) {
                     String reqUrl = request.getUrl().toString();
-                    // Capture the first media URL (.m3u8, .mp4, .mpd, .m4v, googlevideo) we see
                     String lowerReq = reqUrl.toLowerCase();
-                    if (!captured && (lowerReq.contains(".m3u8") 
-                        || lowerReq.contains(".mp4") 
-                        || lowerReq.contains(".mpd") 
-                        || lowerReq.contains(".m4v") 
-                        || lowerReq.contains("googlevideo.com/videoplayback"))) {
+
+                    // ── Capture the first REAL media URL ──────────────────────────────────────
+                    // Skip known ad CDN m3u8 URLs that load before the actual video.
+                    // vivibebe.site loads an ad playlist (ibyteimg.com) BEFORE the real video m3u8.
+                    // Without this check, we capture the ad m3u8 instead of the video m3u8.
+                    // Filter ad segments: only block ibyteimg.com URLs that explicitly contain
+                    // ad path markers like 'ad-site', 'ad-sg', or '/ad/'. Real video segments
+                    // on ibyteimg.com (if any) will NOT be blocked by this smarter filter.
+                    boolean isAdM3u8 = (lowerReq.contains("ibyteimg.com") && (lowerReq.contains("ad-site") || lowerReq.contains("ad-sg") || lowerReq.contains("/ad/")));
+
+                    if (!captured && !isAdM3u8 && (
+                            lowerReq.contains(".m3u8") 
+                         || lowerReq.contains(".mp4") 
+                         || lowerReq.contains(".mpd") 
+                         || lowerReq.contains(".m4v") 
+                         || lowerReq.contains("googlevideo.com/videoplayback"))) {
                         captured = true;
                         final String sid = currentSessionId;
                         getActivity().runOnUiThread(() -> {
@@ -446,6 +454,92 @@ public class EmbedScraperPlugin extends Plugin {
         });
     }
 
+    /**
+     * fetchSegmentBinary — Downloads an HLS segment through the WebView's browser context.
+     *
+     * WHY THIS EXISTS: Cloudflare Bot Management checks the TLS fingerprint (JA3/JA4)
+     * of the HTTP client. OkHttp's TLS fingerprint differs from Chrome's → 403.
+     * The WebView uses Chromium's network stack WITH the correct Chrome TLS fingerprint
+     * AND already has cf_clearance cookies from loading the embed page.
+     *
+     * By running fetch() INSIDE the WebView, segments are downloaded with:
+     *   - Chrome TLS fingerprint (passes Cloudflare Bot Management)
+     *   - All CDN cookies (cf_clearance, session tokens, etc.)
+     *   - Same security origin context as the embed player
+     *
+     * Returns base64-encoded binary data of the segment.
+     */
+    @PluginMethod
+    public void fetchSegmentBinary(final PluginCall call) {
+        call.setKeepAlive(true);
+        final String url = call.getString("url", "");
+        final String referer = call.getString("referer", "");
+
+        if (url.isEmpty()) {
+            call.reject("url is required");
+            return;
+        }
+
+        getActivity().runOnUiThread(() -> {
+            if (scrapeWebView == null) {
+                call.reject("WebView not available - call startScrape first");
+                return;
+            }
+
+            // Safely escape URL and referer for embedding in JS string literal
+            String escapedUrl = url.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "").replace("\r", "");
+            String escapedRef = referer.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "").replace("\r", "");
+
+            // JS: fetch binary → convert to base64 in chunks (avoids stack overflow on large segments)
+            final String fetchJs =
+                "(async function() {" +
+                "  try {" +
+                "    const resp = await fetch(\"" + escapedUrl + "\", {" +
+                "      credentials: 'include'," +
+                "      headers: { 'Accept': '*/*', 'Referer': \"" + escapedRef + "\" }" +
+                "    });" +
+                "    if (!resp.ok) return 'ERR:HTTP' + resp.status;" +
+                "    const buf = await resp.arrayBuffer();" +
+                "    const bytes = new Uint8Array(buf);" +
+                "    const chunk = 8192;" +
+                "    const parts = [];" +
+                "    for (let i = 0; i < bytes.length; i += chunk) {" +
+                "      parts.push(String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i+chunk, bytes.length))));" +
+                "    }" +
+                "    return 'OK:' + btoa(parts.join(''));" +
+                "  } catch(e) { return 'ERR:' + e.message; }" +
+                "})();";
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                scrapeWebView.evaluateJavascript(fetchJs, resultValue -> {
+                    getActivity().runOnUiThread(() -> {
+                        try {
+                            // evaluateJavascript wraps string result in JSON quotes — unwrap
+                            String raw = resultValue;
+                            if (raw != null && raw.startsWith("\"") && raw.endsWith("\"")) {
+                                raw = raw.substring(1, raw.length() - 1)
+                                    .replace("\\\"", "\"")
+                                    .replace("\\\\", "\\");
+                            }
+                            if (raw == null || raw.startsWith("ERR:")) {
+                                call.reject("Segment fetch failed: " + (raw != null ? raw.substring(4) : "null"));
+                            } else if (raw.startsWith("OK:")) {
+                                JSObject result = new JSObject();
+                                result.put("data", raw.substring(3));
+                                call.resolve(result);
+                            } else {
+                                call.reject("Unexpected JS result: " + raw.substring(0, Math.min(80, raw.length())));
+                            }
+                        } catch (Exception e) {
+                            call.reject("fetchSegmentBinary error: " + e.getMessage());
+                        }
+                    });
+                });
+            } else {
+                call.reject("Requires Android 4.4+ (API 19)");
+            }
+        });
+    }
 
     private void destroyWebView() {
         if (scrapeWebView != null) {

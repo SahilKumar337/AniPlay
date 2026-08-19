@@ -1,25 +1,34 @@
 import { useState, useEffect, useRef } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation, useParams } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
 import { StatusBar } from '@capacitor/status-bar';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
-const APKUpdater = registerPlugin('APKUpdater');
 import WelcomeScreen from './components/WelcomeScreen';
 import AuthModal from './components/AuthModal';
 import { supabase } from './api/supabase';
-import Home          from './pages/Home';
-import Browse        from './pages/Browse';
-import Schedule      from './pages/Schedule';
-import AnimePage     from './pages/AnimePage';
-import MyList        from './pages/MyList';
-import { useParams } from 'react-router-dom';
+import { dispatchBackButton } from './utils/backButton';
+import Home from './pages/Home';
+import Browse from './pages/Browse';
+import Schedule from './pages/Schedule';
+import AnimePage from './pages/AnimePage';
+import MyList from './pages/MyList';
+import DownloadPage from './pages/DownloadPage';
+import Profile from './pages/Profile';
+import FavoritesPage from './pages/FavoritesPage';
+import WatchedPage from './pages/WatchedPage';
+import HistoryPage from './pages/HistoryPage';
+import Notifications from './pages/Notifications';
+import Navbar from './components/Navbar';
+
+// registerPlugin must run after all imports are resolved
+const APKUpdater = registerPlugin('APKUpdater');
 
 function WatchRedirect() {
   const { id, ep } = useParams();
   const navigate = useNavigate();
-  
+
   useEffect(() => {
     // Replace redirect route with detail page, then push play parameters
     navigate(`/anime/${id}`, { replace: true });
@@ -31,11 +40,7 @@ function WatchRedirect() {
 
   return null;
 }
-import DownloadPage  from './pages/DownloadPage';
-import Profile       from './pages/Profile';
-import FavoritesPage from './pages/FavoritesPage';
-import WatchedPage   from './pages/WatchedPage';
-import Navbar        from './components/Navbar';
+
 
 // Inner component that has access to navigate (must be inside BrowserRouter)
 function AppInner({ showWelcome, onEnter }) {
@@ -89,6 +94,15 @@ function AppInner({ showWelcome, onEnter }) {
     };
   }, [isNative]);
 
+  // Request storage permissions on first app launch for offline downloads and playback
+  useEffect(() => {
+    if (!isNative) return;
+    try {
+      const OfflineDownloader = registerPlugin('OfflineDownloader');
+      OfflineDownloader?.requestStoragePermissions?.().catch(() => {});
+    } catch (_) {}
+  }, [isNative]);
+
   useEffect(() => {
     if (!showWelcome && !user) {
       const onboarded = localStorage.getItem('aniplay_onboarded');
@@ -131,24 +145,26 @@ function AppInner({ showWelcome, onEnter }) {
   // Keep path and search parameters in refs so listeners don't require registration cycles
   const currentPathRef = useRef(location.pathname);
   const currentSearchRef = useRef(location.search);
-  
+
   useEffect(() => {
     currentPathRef.current = location.pathname;
     currentSearchRef.current = location.search;
   }, [location.pathname, location.search]);
- 
+
   useEffect(() => {
     if (!isNative) return;
-    
+
     const setupListener = async () => {
       const handle = await CapApp.addListener('backButton', ({ canGoBack }) => {
         const path = currentPathRef.current;
         const search = currentSearchRef.current;
         console.log('[BackButton] Clicked. Path:', path, 'search:', search, 'canGoBack:', canGoBack);
-        
+
+        // First: let any open popup/modal/sheet consume the back event
+        if (dispatchBackButton()) return;
 
         const mainTabs = ['/browse', '/schedule', '/mylist', '/download', '/profile'];
-        
+
         if (path === '/') {
           CapApp.exitApp();
         } else if (mainTabs.includes(path)) {
@@ -162,7 +178,7 @@ function AppInner({ showWelcome, onEnter }) {
 
     const handlePromise = setupListener();
     return () => {
-      handlePromise.then(l => l.remove()).catch(() => {});
+      handlePromise.then(l => l.remove()).catch(() => { });
     };
   }, [navigate, isNative]);
 
@@ -172,19 +188,25 @@ function AppInner({ showWelcome, onEnter }) {
         <WelcomeScreen onEnter={onEnter} onSignIn={() => setShowFirstTimeAuth(true)} />
       ) : (
         <>
-          <Routes>
-            <Route path="/"            element={<Home />}         />
-            <Route path="/browse"      element={<Browse />}       />
-            <Route path="/schedule"    element={<Schedule />}     />
-            <Route path="/anime/:id"   element={<AnimePage />}    />
-            <Route path="/watch/:id/:ep" element={<WatchRedirect />}  />
-            <Route path="/mylist"      element={<MyList />}       />
-            <Route path="/favorites"   element={<FavoritesPage />} />
-            <Route path="/watched"     element={<WatchedPage />}   />
-            <Route path="/download"    element={<DownloadPage />} />
-            <Route path="/profile"     element={<Profile />}      />
-            <Route path="*"            element={<Navigate to="/" replace />} />
-          </Routes>
+          {/* Route container — no key prop so pages preserve state across navigations.
+              React Router handles mount/unmount; cache provides instant re-renders. */}
+          <div style={{ position: 'relative', flex: 1 }}>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/browse" element={<Browse />} />
+              <Route path="/schedule" element={<Schedule />} />
+              <Route path="/anime/:id" element={<AnimePage />} />
+              <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
+              <Route path="/mylist" element={<MyList />} />
+              <Route path="/favorites" element={<FavoritesPage />} />
+              <Route path="/watched" element={<WatchedPage />} />
+              <Route path="/history" element={<HistoryPage />} />
+              <Route path="/download" element={<DownloadPage />} />
+              <Route path="/profile" element={<Profile />} />
+              <Route path="/notifications" element={<Notifications />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
           {!playParam && <Navbar />}
         </>
       )}
@@ -228,23 +250,44 @@ export default function App() {
         } catch (e) {
           console.warn('[Capacitor] StatusBar settings error:', e);
         }
-        // Read actual status bar height (works even if hide() fails on some phones)
-        // and expose it as a CSS variable so the player overlay can use it as safe padding.
+        // Read actual status bar height and expose as CSS variable for the player overlay.
         try {
           const info = await StatusBar.getInfo();
-          // height is in pixels (already DPR-scaled on Capacitor Android)
-          const sbPx = info?.height ?? 0;
-          document.documentElement.style.setProperty('--sb-height', `${sbPx}px`);
-          console.log('[StatusBar] height:', sbPx, 'px | visible:', info?.visible);
+          const sbCssPx = info?.height ?? 0;
+          document.documentElement.style.setProperty('--sb-height', `${sbCssPx}px`);
+          console.log('[StatusBar] height:', sbCssPx, 'px | visible:', info?.visible);
         } catch (e2) {
-          // Fallback: assume 0 (hidden successfully)
           document.documentElement.style.setProperty('--sb-height', '0px');
         }
+        // NOTE: --android-safe-bottom is set by MainActivity.java's WindowInsetsCompat listener
+        // (reading real navigationBars() inset height). Do NOT measure it in JS — the
+        // JS viewport calculation fires on keyboard open/close and gives wrong values.
       } else {
         document.documentElement.style.setProperty('--sb-height', '0px');
+        document.documentElement.style.setProperty('--android-safe-bottom', '0px');
       }
     };
     initDeviceSettings();
+  }, []);
+
+  // ── Software keyboard detection — hide navbar when keyboard opens ──────
+  // visualViewport.height shrinks when Android keyboard opens. Compare to
+  // screen.height (physical screen, never changes) to detect keyboard.
+  // This is the industry-standard approach used by Twitter/X, YouTube, etc.
+  // NOTE: We deliberately do NOT update CSS safe-area vars here — only toggle
+  // a class. The comment about "JS viewport giving wrong values" refers only
+  // to --android-safe-bottom measurement, not keyboard open/close detection.
+  useEffect(() => {
+    if (!window.visualViewport) return;
+
+    const onViewportResize = () => {
+      // If visual viewport is less than 70% of screen height → keyboard is open
+      const isKeyboardOpen = window.visualViewport.height < window.screen.height * 0.70;
+      document.body.classList.toggle('keyboard-open', isKeyboardOpen);
+    };
+
+    window.visualViewport.addEventListener('resize', onViewportResize);
+    return () => window.visualViewport.removeEventListener('resize', onViewportResize);
   }, []);
 
   // ── One-time cache purge: clear stale AniKoto search matches ──
@@ -293,9 +336,9 @@ export default function App() {
       const urls = isTestBuild
         ? ['https://raw.githubusercontent.com/SahilKumar337/AniPlay/refs/heads/main/update-test.json']
         : [
-            'https://raw.githubusercontent.com/SahilKumar337/AniPlay/refs/heads/main/update.json',
-            'https://raw.githubusercontent.com/SahilKumar337/AniPlay/main/update.json'
-          ];
+          'https://raw.githubusercontent.com/SahilKumar337/AniPlay/refs/heads/main/update.json',
+          'https://raw.githubusercontent.com/SahilKumar337/AniPlay/main/update.json'
+        ];
       let data = null;
       for (const url of urls) {
         try {
@@ -339,7 +382,7 @@ export default function App() {
         return false;
       };
 
-      if (data.latestVersion && isNewerVersion(data.latestVersion, appVer)) {
+      if (Capacitor.isNativePlatform() && data.latestVersion && isNewerVersion(data.latestVersion, appVer)) {
         setUpdateInfo(data);
       }
     }
@@ -457,11 +500,11 @@ export default function App() {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 22, margin: '0 auto 16px'
             }}>⬆</div>
-            
+
             <h2 style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 8, fontFamily: 'var(--font-brand)' }}>
               Update Available
             </h2>
-             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
               Version {updateInfo.latestVersion} (Current: {currentVersion})
             </div>
 
@@ -609,18 +652,18 @@ export default function App() {
             }}>
               <span style={{ fontSize: '26px' }}>🛡️</span>
             </div>
-            <h3 style={{ 
-              margin: '0 0 8px 0', 
-              color: '#fff', 
+            <h3 style={{
+              margin: '0 0 8px 0',
+              color: '#fff',
               fontFamily: 'var(--font-brand), sans-serif',
               fontSize: '18px',
               fontWeight: 800
             }}>
               Verifying Security Clearance
             </h3>
-            <p style={{ 
-              margin: '0 0 20px 0', 
-              color: 'var(--text-secondary)', 
+            <p style={{
+              margin: '0 0 20px 0',
+              color: 'var(--text-secondary)',
               fontSize: '13px',
               lineHeight: '1.5',
               fontFamily: 'var(--font-main), sans-serif'

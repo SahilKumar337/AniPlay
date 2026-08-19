@@ -61,7 +61,7 @@
   touch-action: none;
 }
 
-/* ── Buffering spinner ─────────────────────────────────────── */
+/* ── Buffering spinner — dual-ring orbital ─────────────────── */
 .anip__spinner {
   position: absolute;
   inset: 0;
@@ -71,15 +71,38 @@
   pointer-events: none;
   z-index: 10;
 }
+/* Dual-ring: outer faint orbit track + inner accent ring */
 .anip__spinner-ring {
-  width: 44px;
-  height: 44px;
+  position: relative;
+  width: 50px;
+  height: 50px;
+  flex-shrink: 0;
+}
+.anip__spinner-ring::before,
+.anip__spinner-ring::after {
+  content: '';
+  position: absolute;
   border-radius: 50%;
-  border: 3.5px solid rgba(255,255,255,0.12);
-  border-top-color: rgba(255,255,255,0.85);
-  animation: anip-spin 0.9s linear infinite;
+  border-style: solid;
+  inset: 0;
+}
+/* Outer ring: faint white orbit */
+.anip__spinner-ring::before {
+  border-width: 3px;
+  border-color: rgba(255, 255, 255, 0.10);
+}
+/* Inner ring: accent colored, spinning */
+.anip__spinner-ring::after {
+  inset: 5px;
+  border-width: 3px;
+  border-color: transparent;
+  border-top-color: var(--accent, #6c63ff);
+  border-right-color: color-mix(in srgb, var(--accent, #6c63ff) 40%, transparent);
+  animation: anip-spin-accent 0.75s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent, #6c63ff) 35%, transparent);
 }
 @keyframes anip-spin { to { transform: rotate(360deg); } }
+@keyframes anip-spin-accent { to { transform: rotate(360deg); } }
 
 /* ── Tap-to-play overlay ───────────────────────────────────── */
 .anip__tap-play {
@@ -114,7 +137,7 @@
   text-shadow: 0 1px 6px rgba(0,0,0,0.8);
 }
 
-/* ── Fatal error overlay ───────────────────────────────────── */
+/* ── Fatal error overlay — premium glass ──────────────────── */
 .anip__error {
   position: absolute;
   inset: 0;
@@ -122,31 +145,63 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 14px;
   z-index: 15;
-  background: rgba(0,0,0,0.82);
-  padding: 24px;
+  background: rgba(6, 5, 16, 0.88);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  padding: 28px;
   text-align: center;
+  animation: anip-error-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.anip__error__icon { font-size: 38px; }
+@keyframes anip-error-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.anip__error__icon {
+  font-size: 40px;
+  filter: drop-shadow(0 2px 12px rgba(239, 68, 68, 0.35));
+}
 .anip__error__msg {
-  color: rgba(255,255,255,0.85);
-  font-size: 13px;
-  line-height: 1.6;
-  max-width: 260px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  line-height: 1.65;
+  max-width: 280px;
+  font-weight: 400;
 }
 .anip__error__retry {
-  margin-top: 6px;
-  padding: 10px 28px;
-  border-radius: 20px;
-  background: #e50914;
+  margin-top: 4px;
+  padding: 11px 30px;
+  border-radius: 30px;
+  background: linear-gradient(135deg,
+    var(--accent, #6c63ff),
+    color-mix(in srgb, var(--accent, #6c63ff) 72%, #fff));
   color: #fff;
   border: none;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   letter-spacing: 0.3px;
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--accent, #6c63ff) 40%, transparent);
+  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+  -webkit-tap-highlight-color: transparent;
 }
+.anip__error__retry:active { transform: scale(0.93); }
+.anip__error__secondary {
+  padding: 9px 22px;
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.70);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+  transition: background 0.15s, transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.anip__error__secondary:active { transform: scale(0.95); }
+.anip__error__secondary:hover  { background: rgba(255,255,255,0.14); }
 
 
 /* ══════════════════════════════════════════════════════════════
@@ -162,7 +217,7 @@
   /* hidden by default, revealed by .anip--ctrl */
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.22s ease;
+  transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1);
   touch-action: none;
 }
 .anip--ctrl .anip__overlay {
@@ -227,8 +282,13 @@
    BOTTOM GROUP — seek bar + controls bar, pinned to bottom
    ══════════════════════════════════════════════════════════════ */
 .anip__bottom-group {
-  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%);
-  padding: 0 14px 10px;
+  /* Stronger gradient — covers more area, ensures visibility on any video frame */
+  background: linear-gradient(to top,
+    rgba(0, 0, 0, 0.98) 0%,
+    rgba(0, 0, 0, 0.88) 35%,
+    rgba(0, 0, 0, 0.55) 65%,
+    transparent 100%);
+  padding: 0 14px 12px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -238,7 +298,7 @@
   pointer-events: all;
 }
 
-/* ── Seek bar ──────────────────────────────────────────────── */
+/* ── Seek bar — accent gradient + glow knob ──────────────── */
 .anip__seek-wrap {
   width: 100%;
   padding: 10px 0 6px;
@@ -248,40 +308,44 @@
 .anip__seek-track {
   position: relative;
   width: 100%;
-  height: 4px;
-  background: rgba(255,255,255,0.25);
+  height: 5px;
+  background: rgba(255, 255, 255, 0.18);
   border-radius: 99px;
-  transition: height 0.15s ease;
+  transition: height 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.anip__seek-wrap:hover .anip__seek-track { height: 6px; }
+.anip__seek-wrap:active .anip__seek-track { height: 8px; }
 .anip__seek-buf {
   position: absolute;
   left: 0; top: 0; bottom: 0;
-  background: rgba(255,255,255,0.32);
+  background: rgba(140, 130, 255, 0.28);
   border-radius: 99px;
   pointer-events: none;
 }
 .anip__seek-played {
   position: absolute;
   left: 0; top: 0; bottom: 0;
-  background: #e50914;
+  background: linear-gradient(90deg,
+    var(--accent, #6c63ff),
+    color-mix(in srgb, var(--accent, #6c63ff) 72%, #fff));
   border-radius: 99px;
   pointer-events: none;
 }
 .anip__seek-knob {
   position: absolute;
-  right: -7px;
+  right: -9px;
   top: 50%;
   transform: translateY(-50%) scale(0);
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #e50914;
-  border: 2px solid #fff;
-  box-shadow: 0 0 8px rgba(229,9,20,0.6);
-  transition: transform 0.15s ease;
+  background: var(--accent, #6c63ff);
+  border: 2.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 0 14px color-mix(in srgb, var(--accent, #6c63ff) 60%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.55);
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.anip__seek-wrap:hover .anip__seek-knob,
+.anip__seek-wrap:active .anip__seek-knob,
 .anip--touch .anip__seek-knob {
   transform: translateY(-50%) scale(1);
 }
@@ -310,19 +374,22 @@
   gap: 5px;
   background: transparent;
   border: none;
-  color: rgba(255,255,255,0.9);
+  color: rgba(255,255,255,0.95);
   padding: 9px 9px;
   border-radius: 8px;
   cursor: pointer;
   line-height: 1;
-  transition: background 0.13s, transform 0.1s, color 0.13s;
+  /* Drop-shadow on SVG icons: ensures play/pause/next/prev are ALWAYS visible
+     regardless of video frame color (white anime frames, bright scenes, etc.) */
+  filter: drop-shadow(0 1px 4px rgba(0,0,0,0.98)) drop-shadow(0 0 8px rgba(0,0,0,0.7));
+  transition: transform 0.1s;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   white-space: nowrap;
 }
 .anip__btn:hover  { background: rgba(255,255,255,0.12); color: #fff; }
-.anip__btn:active { transform: scale(0.88); }
-.anip__btn--active { color: #e50914; }
+.anip__btn:active { transform: scale(0.86); }
+.anip__btn--active { color: var(--accent, #6c63ff); }
 
 /* Play button slightly larger hit area */
 .anip__btn--play { padding: 9px 11px; }
@@ -416,8 +483,9 @@
   animation: anip-menu-pop 0.18s cubic-bezier(0.34,1.56,0.64,1);
 }
 @keyframes anip-menu-pop {
-  from { opacity:0; transform: translateY(6px) scale(0.94); }
-  to   { opacity:1; transform: translateY(0) scale(1); }
+  0%   { opacity: 0; transform: translateY(10px) scale(0.88); }
+  60%  { opacity: 1; transform: translateY(-2px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 .anip__menu-hd {
   font-size: 9px;
@@ -686,42 +754,89 @@
 @keyframes anip-fade-in { from { opacity: 0; transform: translate(-50%, -8px); } }
 
 
-/* Custom Subtitle Overlay */
+/* ── Custom Subtitle Overlay ─────────────────────────────────────── */
 .anip__subtitle-overlay {
   position: absolute;
   bottom: 11%;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Centering via left/right + text-align instead of translateX(-50%).
+     The global GPU acceleration block sets transform:translateZ(0) on
+     [class*="overlay"] which overwrites translateX(-50%), pushing subtitles
+     to the corner. This margin-based centering is immune to that override. */
+  left: 4%;
+  right: 4%;
+  width: auto;
   z-index: 15;
   pointer-events: none;
   text-align: center;
-  width: 85%;
   animation: anip-sub-fade 0.1s ease-out;
+  /* Override any transform from global GPU acceleration block */
+  transform: none !important;
+  -webkit-transform: none !important;
 }
 
 .anip__subtitle-text {
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.40);
   color: #ffffff;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  padding: 5px 12px;
+  padding: 4px 10px;
   border-radius: 6px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.95);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.98), 0 0 3px rgba(0, 0, 0, 0.98);
   white-space: pre-wrap;
   display: inline-block;
-  line-height: 1.4;
-  letter-spacing: 0.2px;
+  line-height: 1.45;
+  letter-spacing: 0.15px;
+  max-width: 100%;
   font-family: system-ui, -apple-system, sans-serif;
 }
 
 @keyframes anip-sub-fade {
   from { opacity: 0.5; }
-  to { opacity: 1; }
+  to   { opacity: 1;   }
 }
 
-/* Adjust subtitle bottom height when controls overlay is visible */
+/* Controls visible — lift subtitle above progress bar */
 .anip--ctrl .anip__subtitle-overlay {
-  bottom: 18%;
+  bottom: 20%;
+}
+
+/* Fullscreen mode — larger text, more breathing room */
+.anip--fs .anip__subtitle-overlay {
+  bottom: 8%;
+  left: 5%;
+  right: 5%;
+}
+.anip--fs.anip--ctrl .anip__subtitle-overlay {
+  bottom: 14%;
+}
+.anip--fs .anip__subtitle-text {
+  font-size: 22px;
+  padding: 6px 16px;
+  border-radius: 8px;
+}
+
+/* Landscape fullscreen — even larger (wide screen = bigger text expected) */
+@media (orientation: landscape) {
+  .anip--fs .anip__subtitle-text {
+    font-size: 26px;
+    padding: 7px 18px;
+  }
+  .anip--fs .anip__subtitle-overlay {
+    bottom: 7%;
+    left: 8%;
+    right: 8%;
+  }
+  .anip--fs.anip--ctrl .anip__subtitle-overlay {
+    bottom: 13%;
+  }
+}
+
+/* Portrait (non-fullscreen embedded) — compact */
+@media (orientation: portrait) {
+  .anip__subtitle-text {
+    font-size: 14px;
+    padding: 3px 9px;
+  }
 }
 
 /* Subtitle unavailable toast */
@@ -772,12 +887,18 @@
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  /* Liquid glass button: translucent + inner specular highlight */
+  background: rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    0 4px 16px rgba(0, 0, 0, 0.35);
   color: #ffffff;
   cursor: pointer;
   outline: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
   -webkit-tap-highlight-color: transparent;
   width: 52px;
   height: 52px;
@@ -786,24 +907,28 @@
 .anip__center-btn--play {
   width: 68px;
   height: 68px;
-  background: rgba(0, 0, 0, 0.55);
-  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    0 6px 24px rgba(0, 0, 0, 0.5),
+    0 0 0 0 color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .anip__center-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.22);
   border-color: rgba(255, 255, 255, 0.35);
-  transform: scale(1.05);
+  transform: scale(1.06);
 }
 
 .anip__center-btn--play:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.22);
   transform: scale(1.08);
 }
 
 .anip__center-btn:active {
-  transform: scale(0.92);
+  transform: scale(0.88);
+  transition: transform 0.08s cubic-bezier(0.4, 0, 1, 1);
 }
 
 .anip__center-btn--disabled {

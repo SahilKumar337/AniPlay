@@ -10,21 +10,25 @@ export default function FavoritesPage() {
   const items = Object.values(favorites);
 
   return (
-    <div className="page fade-in-up">
-      {/* Header */}
-      <div className="sticky-header" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px 12px', paddingTop: 'max(32px, env(safe-area-inset-top))' }}>
-        <button
-          onClick={() => navigate(-1)}
-          className="floating-btn"
-          aria-label="Go back"
-        >
+    <div className="page fade-in-up" style={{ paddingTop: 'calc(var(--sat) + 56px)' }}>
+      {/* ── Fixed Floating Header ─────────────────────────────────── */}
+      <div style={{
+        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)',
+        zIndex: 90, width: '100%', maxWidth: 480,
+        background: 'rgba(12,12,14,0.92)',
+        backdropFilter: 'blur(40px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+        borderBottom: '0.5px solid rgba(255,255,255,0.07)',
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '12px 16px',
+        paddingTop: 'var(--sat)',
+      }}>
+        <button onClick={() => navigate(-1)} className="floating-btn" aria-label="Go back">
           <ArrowLeft size={18} />
         </button>
         <div style={{ flex: 1 }}>
-          <h1 className="mylist-title" style={{ fontSize: 20, margin: 0 }}>Favorites</h1>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {items.length} anime
-          </span>
+          <h1 style={{ fontSize: 20, fontWeight: 900, margin: 0, letterSpacing: '-0.03em', fontFamily: 'var(--font-brand)' }}>Favorites</h1>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{items.length} anime</span>
         </div>
       </div>
 
@@ -56,31 +60,27 @@ export default function FavoritesPage() {
                   onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
                   aria-label={title}
                 >
-                  <img src={cover} alt={title} loading="lazy" />
+                  <div className="mylist-card-poster">
+                    <img src={cover} alt={title} loading="lazy" />
 
-                  <div className="mylist-card-overlay">
-                    <div className="mylist-card-title">{title}</div>
+                    {/* Quick Action: Delete/Remove Favorite */}
+                    <div style={{ position: 'absolute', top: 6, right: 6, zIndex: 10 }}>
+                      <button
+                        className="mylist-action-btn"
+                        onClick={e => {
+                          e.stopPropagation();
+                          toggleFavorite(anime.id);
+                        }}
+                        aria-label="Remove from favorites"
+                        title="Remove"
+                      >
+                        <Trash2 size={13} color="#fff" />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Quick Action: Delete/Remove Favorite */}
-                  <div style={{ position: 'absolute', top: 6, right: 6 }}>
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        toggleFavorite(anime.id);
-                      }}
-                      aria-label="Remove from favorites"
-                      style={{
-                        width: 28, height: 28,
-                        borderRadius: '50%',
-                        background: 'rgba(0,0,0,0.65)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        border: 'none', cursor: 'pointer',
-                        backdropFilter: 'blur(4px)',
-                      }}
-                    >
-                      <Trash2 size={13} color="#fff" />
-                    </button>
+                  <div className="mylist-card-info">
+                    <div className="mylist-card-title">{title}</div>
                   </div>
                 </div>
               );

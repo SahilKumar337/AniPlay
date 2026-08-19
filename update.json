@@ -1,38 +1,21 @@
 {
-  "latestVersion": "1.5.4",
-  "versionCode": 19,
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.4/AniPlay.apk",
-  "forceUpdate": true,
-  "changelog": "\u26a0\ufe0f CRITICAL STORAGE UPDATE\n\u2022 Completely resolves database storage and network bandwidth limits\n\u2022 Reduces watchlist size by 99%\n\u2022 Faster app startup and list loading times\n\u2022 This update is mandatory to continue using synchronization features",
+  "latestVersion": "1.5.7",
+  "versionCode": 35,
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.7/AniPlay-v1.5.7.apk",
+  "forceUpdate": false,
+  "changelog": "AniPlay v1.5.7 - Stable release with full new UI/UX, notifications, and fixed title matching",
   "changelogItems": [
-    "\u26a0\ufe0f CRITICAL UPDATE: Database storage and bandwidth optimizations",
-    "Resolves Supabase data limits \u2014 reduces network egress by 99%",
-    "Mandatory update to continue using watchlist synchronization",
-    " watchlist and progress data are now 99% smaller",
-    "Faster app loading and page transition times"
+    "Redesigned new UI/UX with smooth animations",
+    "Notification popups and background sync",
+    "Navigation bar hiding fix",
+    "Enhanced anime streaming & direct slug matching"
   ],
   "domains": {
     "neko": "https://anineko.to",
     "waves": "https://aniwaves.ru",
-    "animetsu": "https://animetsu.net",
-    "anikoto": "https://anikoto.cz"
+    "gogo": "https://anitaku.bz",
+    "fallback_gogo": "https://anitaku.so",
+    "animepahe": "https://animepahe.pw"
   },
-  "mappings": {
-    "21": {
-      "neko": "one-piece",
-      "anikoto": "one-piece-odmau",
-      "waves": "one-piece-odmau"
-    },
-    "11757": {
-      "neko": "sword-art-online",
-      "anikoto": "sword-art-online-c6fbv",
-      "waves": "sword-art-online-c6fbv"
-    },
-    "154587": {
-      "neko": "frieren-beyond-journeys-end",
-      "anikoto": "frieren-beyond-journey-s-end-c6fbj",
-      "waves": "frieren-beyond-journey-s-end-c6fb"
-    }
-  },
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.4/bundle.zip"
+  "maintenanceMessage": null
 }

@@ -5,32 +5,73 @@ import { getTitle, getCover } from '../api/anilist';
 
 export default function WatchedPage() {
   const navigate = useNavigate();
-  const { recentlyViewed, progress, removeFromRecentlyViewed, watchlist } = useApp();
+  const { recentlyViewed, progress, removeFromRecentlyViewed, watchlist, favorites } = useApp();
 
   const completedItems = Object.values(watchlist).filter(item => item.status === 'completed');
+  const completedIds = new Set(completedItems.map(item => String(item.anime?.id || item.id)));
+
+  const isValidAnime = (a) => {
+    if (!a) return false;
+    const title = getTitle(a);
+    return typeof title === 'string' && title.trim().length > 0 && title.toLowerCase() !== 'unknown';
+  };
+
+  // Combine recentlyViewed with progress entries to ensure all recovered watched anime appear
+  const activeMap = new Map();
+  recentlyViewed.forEach(item => {
+    if (item?.anime?.id && isValidAnime(item.anime) && !completedIds.has(String(item.anime.id))) {
+      activeMap.set(String(item.anime.id), item);
+    }
+  });
+
+  // Add any items with progress that aren't completed
+  for (const [id, progObj] of Object.entries(progress)) {
+    if (!completedIds.has(String(id)) && progObj?.episode) {
+      if (!activeMap.has(String(id))) {
+        const animeMeta = watchlist[id]?.anime || favorites[id];
+        if (animeMeta && isValidAnime(animeMeta)) {
+          activeMap.set(String(id), {
+            anime: animeMeta,
+            episode: progObj.episode,
+            timestamp: progObj.timestamp || Date.now()
+          });
+        }
+      }
+    }
+  }
+
+  const activeItems = Array.from(activeMap.values())
+    .filter(item => isValidAnime(item?.anime))
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
   return (
-    <div className="page fade-in-up">
-      {/* Header */}
-      <div className="sticky-header" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px 12px', paddingTop: 'max(32px, env(safe-area-inset-top))' }}>
-        <button
-          onClick={() => navigate(-1)}
-          className="floating-btn"
-          aria-label="Go back"
-        >
+    <div className="page fade-in-up" style={{ paddingTop: 'calc(var(--sat) + 56px)' }}>
+      {/* ── Fixed Floating Header ─────────────────────────────────── */}
+      <div style={{
+        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)',
+        zIndex: 90, width: '100%', maxWidth: 480,
+        background: 'rgba(12,12,14,0.92)',
+        backdropFilter: 'blur(40px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+        borderBottom: '0.5px solid rgba(255,255,255,0.07)',
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '12px 16px',
+        paddingTop: 'var(--sat)',
+      }}>
+        <button onClick={() => navigate(-1)} className="floating-btn" aria-label="Go back">
           <ArrowLeft size={18} />
         </button>
         <div style={{ flex: 1 }}>
-          <h1 className="mylist-title" style={{ fontSize: 20, margin: 0 }}>Watch History</h1>
+          <h1 style={{ fontSize: 20, fontWeight: 900, margin: 0, letterSpacing: '-0.03em', fontFamily: 'var(--font-brand)' }}>Watch History</h1>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {recentlyViewed.length} active · {completedItems.length} completed
+            {activeItems.length} active · {completedItems.length} completed
           </span>
         </div>
       </div>
 
       {/* Content */}
-      <div style={{ padding: '16px 16px 80px', display: 'flex', flexDirection: 'column', gap: 24 }}>
-        
+      <div style={{ padding: '16px 16px 80px', paddingTop: 'var(--sat)', display: 'flex', flexDirection: 'column', gap: 24 }}>
+
         {/* SECTION 1: Continue Watching */}
         <div>
           <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -38,7 +79,7 @@ export default function WatchedPage() {
             Currently Watching
           </h2>
 
-          {recentlyViewed.length === 0 ? (
+          {activeItems.length === 0 ? (
             <div style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
               padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13
@@ -47,7 +88,7 @@ export default function WatchedPage() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {recentlyViewed.map(({ anime, episode }) => {
+              {activeItems.map(({ anime, episode }) => {
                 const title = getTitle(anime);
                 const cover = getCover(anime);
                 const currentProg = progress[anime.id];
@@ -143,8 +184,10 @@ export default function WatchedPage() {
                     onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
                     aria-label={title}
                   >
-                    <img src={cover} alt={title} loading="lazy" />
-                    <div className="mylist-card-overlay">
+                    <div className="mylist-card-poster">
+                      <img src={cover} alt={title} loading="lazy" />
+                    </div>
+                    <div className="mylist-card-info">
                       <div className="mylist-card-title">{title}</div>
                     </div>
                   </div>

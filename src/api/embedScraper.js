@@ -21,6 +21,37 @@ const NativeEmbedScraper = isNative
   : null;
 
 /**
+ * Session-level m3u8 URL cache.
+ * When a stream URL is successfully resolved (during playback), it's stored here.
+ * If the same embed URL is requested again (e.g. for download), the cached URL
+ * is returned immediately without re-solving Cloudflare (saves 10-30s).
+ * TTL: 90 minutes (typical CDN token lifetime).
+ */
+const m3u8Cache = new Map(); // embedUrl (normalized) → { url, timestamp }
+const M3U8_CACHE_TTL = 90 * 60 * 1000; // 90 minutes
+
+/** Store a resolved m3u8 URL in the session cache. */
+export function cacheM3U8Url(embedUrl, m3u8Url) {
+  if (embedUrl && m3u8Url) {
+    const key = embedUrl.split('?')[0]; // normalize: strip query params
+    m3u8Cache.set(key, { url: m3u8Url, timestamp: Date.now() });
+    console.log('[EmbedScraper] Cached m3u8 for', key.slice(0, 60));
+  }
+}
+
+/** Get a cached m3u8 URL if still valid. */
+export function getCachedM3U8(embedUrl) {
+  if (!embedUrl) return null;
+  const key = embedUrl.split('?')[0];
+  const cached = m3u8Cache.get(key);
+  if (cached && Date.now() - cached.timestamp < M3U8_CACHE_TTL) {
+    console.log('[EmbedScraper] Cache hit for', key.slice(0, 60));
+    return cached.url;
+  }
+  return null;
+}
+
+/**
  * Fast direct HTTP extractor for known embed providers.
  * Resolves streams in <200ms without opening a heavy native WebView.
  */
@@ -69,8 +100,34 @@ async function scrapeEmbedDirectly(embedUrl, referer) {
       console.log('[EmbedScraper] Found direct .m3u8 link: ' + m3u8Url.slice(0, 100));
       return m3u8Url;
     }
+
+    // 2. Packed JS unpacker (e.g. StreamHG/otakuhg.site, Earnvids/otakuvid.online, VidHide, StreamWish)
+    const evalMatch = html.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]*?\.split\('\|'\)\)\)/);
+    if (evalMatch) {
+      try {
+        const rawEval = evalMatch[0];
+        const argsMatch = rawEval.match(/}\('([\s\S]*?)',\s*(\d+),\s*(\d+),\s*'([\s\S]*?)'\.split/);
+        if (argsMatch) {
+          let p = argsMatch[1];
+          const a = parseInt(argsMatch[2]);
+          let c = parseInt(argsMatch[3]);
+          const k = argsMatch[4].split('|');
+          while (c--) if (k[c]) p = p.replace(new RegExp('\\b' + c.toString(a) + '\\b', 'g'), k[c]);
+          
+          const m3u8Match = p.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/i) ||
+                            p.match(/["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i);
+          if (m3u8Match) {
+            const m3u8Url = (m3u8Match[1] || m3u8Match[0]).replace(/\\/g, '');
+            console.log('[EmbedScraper] Resolved stream from unpacked JS: ' + m3u8Url.slice(0, 100));
+            return m3u8Url;
+          }
+        }
+      } catch (unpackErr) {
+        console.warn('[EmbedScraper] Packed JS unpack error:', unpackErr.message);
+      }
+    }
     
-    // 2. getSourcesNew API scan (e.g. megaplay.buzz, vidtube.site, vidwish.live)
+    // 3. getSourcesNew API scan (e.g. megaplay.buzz, vidtube.site, vidwish.live)
     let fileId = '';
     const fileIdHtmlMatch = html.match(/File\s+(\d+)/i) || 
                             html.match(/"id"\s*:\s*(\d+)/i) ||
@@ -139,6 +196,13 @@ async function scrapeEmbedDirectly(embedUrl, referer) {
  * @returns {Promise<string>} The captured .m3u8 URL
  */
 export function scrapeEmbedNative(embedUrl, referer, timeoutMs = 40000) {
+  // ── Fast path: return cached URL if available (e.g. already watched this episode) ──
+  const cachedUrl = getCachedM3U8(embedUrl);
+  if (cachedUrl) {
+    console.log('[EmbedScraper] Using cached m3u8 URL (instant, no Cloudflare needed)');
+    return Promise.resolve(cachedUrl);
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     let timeoutId = null;
@@ -159,6 +223,7 @@ export function scrapeEmbedNative(embedUrl, referer, timeoutMs = 40000) {
       .then(directUrl => {
         if (directUrl) {
           settled = true;
+          cacheM3U8Url(embedUrl, directUrl); // cache for future downloads
           resolve(directUrl);
           return;
         }
@@ -183,6 +248,7 @@ export function scrapeEmbedNative(embedUrl, referer, timeoutMs = 40000) {
         settled = true;
         cleanup();
         console.log('[EmbedScraper] Native captured m3u8:', data.url.slice(0, 100));
+        cacheM3U8Url(embedUrl, data.url); // cache for future downloads
         resolve(data.url);
       }).then(handle => {
         listenerHandle = handle;
@@ -324,3 +390,122 @@ export async function fetchViaWebViewNative(url, referer, domainUrl) {
   }
 }
 
+/**
+ * Extracts data-embed-id attribute values from a URL using the WebView's fetch() context.
+ * Unlike fetchViaWebViewNative (which returns full HTML and has size/escaping issues with 273KB pages),
+ * this runs the regex extraction IN JavaScript and returns only the tiny embed-ID array.
+ * Returns string[] of embed IDs, or null on failure.
+ */
+export async function extractEmbedIdsNative(url, referer) {
+  if (!isNative || !NativeEmbedScraper || !NativeEmbedScraper.extractEmbedIds) {
+    return null;
+  }
+  try {
+    const origin = new URL(url).origin;
+    const res = await NativeEmbedScraper.extractEmbedIds({
+      url,
+      referer: referer || origin + '/',
+      domainUrl: origin
+    });
+    if (res && res.body) {
+      try {
+        const parsed = JSON.parse(res.body);
+        if (parsed.ok && Array.isArray(parsed.ids)) {
+          console.log(`[EmbedScraper] extractEmbedIdsNative: found ${parsed.ids.length} embed IDs`);
+          return parsed.ids;
+        }
+        if (parsed.error) throw new Error(parsed.error);
+      } catch (parseErr) {
+        console.warn('[EmbedScraper] extractEmbedIdsNative parse failed:', parseErr.message);
+      }
+    }
+    return null;
+  } catch (e) {
+    console.error('[EmbedScraper] extractEmbedIdsNative failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Loads an anime series page in background WebView and extracts the exact episode watch URL.
+ */
+export async function extractWatchLinkNative(animeUrl, episode) {
+  if (!isNative || !NativeEmbedScraper || !NativeEmbedScraper.extractWatchLink) {
+    return null;
+  }
+  try {
+    const origin = new URL(animeUrl).origin;
+    const res = await NativeEmbedScraper.extractWatchLink({
+      url: animeUrl,
+      episode: Number(episode),
+      referer: origin + '/'
+    });
+    if (res && res.body) {
+      try {
+        const parsed = JSON.parse(res.body);
+        if (parsed.ok && parsed.watchUrl) {
+          console.log(`[EmbedScraper] extractWatchLinkNative found link for ep ${episode}: ${parsed.watchUrl}`);
+          return parsed.watchUrl;
+        }
+      } catch (parseErr) {
+        console.warn('[EmbedScraper] extractWatchLinkNative parse failed:', parseErr.message);
+      }
+    }
+    return null;
+  } catch (e) {
+    console.warn('[EmbedScraper] extractWatchLinkNative failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Loads any URL in native WebView and returns the full rendered HTML.
+ * This bypasses Cloudflare challenges because it uses a real browser engine.
+ * Used as a fallback for fetching pages that require JavaScript rendering.
+ */
+export async function fetchHtmlNative(url, referer, timeoutMs = 10000) {
+  if (!isNative || !NativeEmbedScraper || !NativeEmbedScraper.fetchHtml) {
+    return null;
+  }
+  try {
+    const res = await NativeEmbedScraper.fetchHtml({
+      url,
+      referer: referer || '',
+      timeoutMs: Number(timeoutMs)
+    });
+    if (res && res.html && res.html.length > 100) {
+      console.log(`[EmbedScraper] fetchHtmlNative success for ${url}: ${res.html.length} chars`);
+      return res.html;
+    }
+    return null;
+  } catch (e) {
+    console.warn('[EmbedScraper] fetchHtmlNative failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * fetchSegmentViaBrowser — Downloads an HLS binary segment (TS/M4S) via the WebView's
+ * full browser context (Chrome TLS, CDN session cookies, cf_clearance).
+ *
+ * This is the ONLY way to bypass Cloudflare Bot Management on CDNs like vidplay.site:
+ * - WebView has Chromium's TLS fingerprint (Chrome JA3/JA4) — OkHttp does not
+ * - WebView has all CDN cookies including cf_clearance
+ * - fetch() runs in same security origin context as the embed player
+ *
+ * @param {string} url - HLS segment URL (.ts or .m4s)
+ * @param {string} referer - Referer header to include
+ * @returns {Promise<string>} base64-encoded binary segment data
+ */
+export async function fetchSegmentViaBrowser(url, referer = '') {
+  if (!isNative || !NativeEmbedScraper) {
+    throw new Error('[EmbedScraper] Native plugin not available');
+  }
+  try {
+    const result = await NativeEmbedScraper.fetchSegmentBinary({ url, referer });
+    if (!result || !result.data) throw new Error('Empty segment data');
+    return result.data; // base64-encoded binary
+  } catch (e) {
+    throw new Error(`fetchSegmentViaBrowser failed for ${url.slice(0, 60)}: ${e.message}`);
+  }
+}

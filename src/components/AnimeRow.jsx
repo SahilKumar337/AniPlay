@@ -4,10 +4,11 @@ export default function AnimeRow({
   title,
   subtitle,
   animes = [],
-  cardWidth = 120,
+  cardWidth  = 120,
   cardHeight = 165,
-  showRank = false,
+  showRank   = false,
   showEpBadge = false,
+  showTitle  = true,    // show label below every card
   onSeeAll,
 }) {
   if (!animes.length) return null;
@@ -18,7 +19,9 @@ export default function AnimeRow({
         <div>
           <h2 className="section-title">{title}</h2>
           {subtitle && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginTop: 1 }}>{subtitle}</span>
+            <span className="section-subtitle">
+              {subtitle}
+            </span>
           )}
         </div>
         {onSeeAll && (
@@ -36,6 +39,7 @@ export default function AnimeRow({
               height={cardHeight}
               rank={showRank ? i + 1 : null}
               epLabel={showEpBadge && anime._latestEp ? `EP ${anime._latestEp}` : null}
+              showTitle={showTitle}
               index={i}
             />
           ))}

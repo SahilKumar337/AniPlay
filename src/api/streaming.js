@@ -58,3 +58,4 @@ export const SERVERS = [
   { id: 'gogo',     label: 'Server 3',  badge: 'Gogo'   },
   { id: 'aniwatch', label: 'Server 4',  badge: 'AniWatch' },
 ];
+

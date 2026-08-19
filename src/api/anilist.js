@@ -12,11 +12,11 @@
 const ENDPOINT = 'https://graphql.anilist.co';
 const SESSION_PREFIX = 'anilist_cache_';
 
-// ── TTL constants (ms) ────────────────────────────────────────────
+// ── TTL constants (ms) ──────────────────────────────────────────
 const TTL = {
-  LIVE:   5  * 60_000,   // trending, airing, schedule: 5 min
-  NORMAL: 15 * 60_000,   // search, seasonal, movies: 15 min
-  STABLE: 30 * 60_000,   // top-rated, most popular: 30 min
+  LIVE:   10 * 60_000,   // trending, airing, schedule: 10 min (was 5)
+  NORMAL: 30 * 60_000,   // search, seasonal, movies: 30 min (was 15)
+  STABLE: 60 * 60_000,   // top-rated, most popular: 60 min (was 30)
 };
 
 // ── L1: In-memory cache ───────────────────────────────────────────
@@ -82,8 +82,11 @@ async function gql(query, variables = {}, ttl = TTL.NORMAL) {
         clearTimeout(tid);
 
         if (res.status === 429) {
+          // Respect Retry-After header if provided by AniList
+          const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+          const waitMs = retryAfter > 0 ? retryAfter * 1000 : (i + 1) * 3000; // 3s, 6s, 9s
           lastErr = new Error('Rate limit exceeded (429). Please try again in a few seconds.');
-          await new Promise(r => setTimeout(r, (i + 1) * 2000));
+          await new Promise(r => setTimeout(r, waitMs));
           continue;
         }
 
@@ -200,6 +203,17 @@ export async function getNewReleases(page = 1, perPage = 20) {
     unique.push({ ...s.media, _latestEp: s.episode, _airedAt: s.airingAt });
   }
   return unique;
+}
+
+/* ── Batch Fetch by IDs ────────────────────────────────────────────── */
+export async function getAnimesByIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const validIds = ids.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
+  if (validIds.length === 0) return [];
+
+  const q = `query($ids:[Int]){Page(perPage:50){media(id_in:$ids,type:ANIME){${MEDIA_FIELDS}}}}`;
+  const d = await gql(q, { ids: validIds }, TTL.STABLE);
+  return d?.Page?.media || [];
 }
 
 /* ── Most Popular ──────────────────────────────────────────────────── */
@@ -408,6 +422,62 @@ export async function getSchedule(page = 1, perPage = 50) {
   return (d?.Page?.airingSchedules || []).filter(s => !s.media?.isAdult);
 }
 
+export async function getScheduleWeek2(page = 1, perPage = 50) {
+  const now   = Math.floor(Date.now() / 1000);
+  const from  = now + 7 * 86400;
+  const to    = now + 14 * 86400;
+  const q = `query($p:Int,$n:Int,$from:Int,$to:Int){
+    Page(page:$p,perPage:$n){
+      airingSchedules(airingAt_greater:$from,airingAt_lesser:$to,sort:TIME){
+        id airingAt episode
+        media{ id idMal title{romaji english} coverImage{large extraLarge color} format averageScore isAdult }
+      }
+    }
+  }`;
+  const d = await gql(q, { p: page, n: perPage, from, to }, TTL.LIVE);
+  return (d?.Page?.airingSchedules || []).filter(s => !s.media?.isAdult);
+}
+
+/** Batch-fetch full AniList metadata for a list of anime IDs */
+export async function getAnimeByIds(ids = []) {
+  if (!ids || ids.length === 0) return [];
+  const cleanIds = Array.from(new Set(ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id) && id > 0)));
+  if (cleanIds.length === 0) return [];
+
+  // Split into chunks of 50 (AniList perPage max is 50)
+  const chunks = [];
+  for (let i = 0; i < cleanIds.length; i += 50) {
+    chunks.push(cleanIds.slice(i, i + 50));
+  }
+
+  const q = `query($ids:[Int]){
+    Page(page:1, perPage:50){
+      media(id_in:$ids){
+        id idMal title{romaji english native}
+        coverImage{extraLarge large color}
+        bannerImage description season seasonYear format
+        episodes duration status averageScore genres
+        tags{name rank isMediaSpoiler}
+      }
+    }
+  }`;
+
+  try {
+    const results = await Promise.all(
+      chunks.map(chunk => gql(q, { ids: chunk }, TTL.NORMAL))
+    );
+    const allMedia = [];
+    results.forEach(d => {
+      if (d?.Page?.media) allMedia.push(...d.Page.media);
+    });
+    return allMedia;
+  } catch (e) {
+    console.warn('[AniList] getAnimeByIds failed:', e.message);
+    return [];
+  }
+}
+
+
 /* ── Helpers ───────────────────────────────────────────────────────── */
 export function getCurrentSeason() {
   const m    = new Date().getMonth() + 1;
@@ -417,14 +487,28 @@ export function getCurrentSeason() {
 }
 export const getTitle = a => {
   if (!a) return 'Unknown';
-  const mainTitle = a.title?.english || a.title?.romaji || 'Unknown';
-  if (a.format && !['TV', 'MOVIE'].includes(a.format)) {
-    const cleanFormat = a.format.replace('_', ' ').toUpperCase();
-    return `${mainTitle} (${cleanFormat})`;
+  if (typeof a === 'string') return a;
+  let t = 'Unknown';
+  if (typeof a.title === 'string') {
+    t = a.title;
+  } else if (a.title && typeof a.title === 'object') {
+    t = a.title.userPreferred || a.title.english || a.title.romaji || a.title.native || 'Unknown';
+  } else if (a.name) {
+    t = a.name;
   }
-  return mainTitle;
+  if (a.format && !['TV', 'MOVIE'].includes(a.format)) {
+    const cleanFormat = String(a.format).replace('_', ' ').toUpperCase();
+    return `${t} (${cleanFormat})`;
+  }
+  return t;
 };
-export const getCover = a => a?.coverImage?.extraLarge || a?.coverImage?.large || '';
+
+export const getCover = a => {
+  if (!a) return '';
+  if (typeof a === 'string') return a;
+  if (typeof a.coverImage === 'string') return a.coverImage;
+  return a.coverImage?.extraLarge || a.coverImage?.large || a.coverImage?.medium || a.image || a.bannerImage || '';
+};
 export const getColor = a => a?.coverImage?.color || '#e50914';
 
 // pinnedTags: array of tag/genre names that MUST appear in the result

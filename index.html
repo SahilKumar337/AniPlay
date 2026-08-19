@@ -7,12 +7,30 @@
     <meta name="description" content="AniPlay - Watch Anime Online, Streaming for Free. Browse thousands of anime with filters, schedule, and more." />
     <title>AniPlay - Watch Anime Online Free</title>
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#6366f1" />
+    <meta name="theme-color" content="#6C63FF" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <!-- Inter Variable: 300-900 weight, sharper than static fonts on Android WebView -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..900;1,14..32,300..900&display=swap" rel="stylesheet" />
+  <!-- ── Theme fast-path: apply accent/dark mode BEFORE React renders to prevent color flash ── -->
+  <script>
+    (function() {
+      try {
+        var accent = localStorage.getItem('aniplay_accent_fast');
+        var dark   = localStorage.getItem('aniplay_dark_fast');
+        var el     = document.documentElement;
+        if (accent) {
+          el.style.setProperty('--accent', accent);
+          el.style.setProperty('--accent-hover', accent);
+        }
+        if (dark === 'false') {
+          document.body && document.body.classList.add('theme-light');
+        }
+      } catch(e) {}
+    })();
+  </script>
   </head>
   <body>
     <div id="root"></div>

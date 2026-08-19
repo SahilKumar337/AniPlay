@@ -1,7 +1,9 @@
 package com.aniplay.aniplay;
 
+import android.Manifest;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -250,6 +252,204 @@ public class OfflineDownloader extends Plugin {
     }
 
     @PluginMethod public void deleteDownload(PluginCall call) { call.resolve(); }
+
+    /**
+     * Explicitly request runtime storage permissions from JS.
+     */
+    @PluginMethod
+    public void requestStoragePermissions(PluginCall call) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                List<String> perms = new ArrayList<>();
+                if (getContext().checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
+                    perms.add(Manifest.permission.READ_MEDIA_VIDEO);
+                }
+                if (getContext().checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+                    perms.add(Manifest.permission.READ_MEDIA_IMAGES);
+                }
+                if (!perms.isEmpty() && getActivity() != null) {
+                    getActivity().requestPermissions(perms.toArray(new String[0]), 201);
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                List<String> perms = new ArrayList<>();
+                if (getContext().checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    perms.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+                }
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                    getContext().checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+                }
+                if (!perms.isEmpty() && getActivity() != null) {
+                    getActivity().requestPermissions(perms.toArray(new String[0]), 200);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "requestStoragePermissions error: " + e.getMessage());
+        }
+        call.resolve();
+    }
+
+    /**
+     * Find a downloaded episode's filesystem path using a 4-tier lookup strategy:
+     *  1. Direct file path (fastest — no MediaStore needed)
+     *  2. MediaStore.Downloads (where we actually save files on Android 10+)
+     *  3. MediaStore.Video (fallback — some ROMs re-index Downloads as Video)
+     *  4. Folder scan (brute force — finds any MP4 matching the title/episode)
+     *
+     * Returns { filePath, subtitlePath } as absolute filesystem paths.
+     * JS side calls Capacitor.convertFileSrc('file://'+path) to get a streamable URL.
+     */
+    @PluginMethod
+    public void getLocalVideoUri(PluginCall call) {
+        String displayName = call.getString("displayName");
+        if (displayName == null || displayName.isEmpty()) {
+            call.reject("displayName is required");
+            return;
+        }
+
+        android.content.ContentResolver cr = getContext().getContentResolver();
+        String filePath = null;
+        String subPath  = null;
+
+        String vttName  = displayName.endsWith(".mp4")
+            ? displayName.substring(0, displayName.length() - 4) + ".vtt"
+            : displayName + ".vtt";
+        String basePart = displayName.endsWith(".mp4")
+            ? displayName.substring(0, displayName.length() - 4)
+            : displayName;
+
+        java.io.File downloadsBase = android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS);
+        String folder = getDownloadFolder();
+
+        // ── Request storage permissions if not already granted ─────────────────
+        // Without READ_EXTERNAL_STORAGE (≤API32) or READ_MEDIA_VIDEO (API33+),
+        // File.exists() always returns false for Downloads content.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (getContext().checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                getActivity().requestPermissions(
+                    new String[]{ android.Manifest.permission.READ_MEDIA_VIDEO }, 201);
+            }
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            if (getContext().checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                getActivity().requestPermissions(
+                    new String[]{ android.Manifest.permission.READ_EXTERNAL_STORAGE }, 200);
+            }
+        }
+
+        // ── TIER 1: Direct filesystem path (fastest, no MediaStore needed) ──────
+        java.io.File directFile = new java.io.File(downloadsBase, folder + "/" + displayName);
+        if (directFile.exists()) {
+            filePath = directFile.getAbsolutePath();
+            Log.d(TAG, "getLocalVideoUri: TIER1 direct path hit: " + filePath);
+        }
+
+        // ── TIER 2: MediaStore.Downloads (this is where saveToGallery inserts on Q+) ──
+        if (filePath == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            String[] proj = { android.provider.MediaStore.Downloads._ID,
+                              android.provider.MediaStore.MediaColumns.DATA,
+                              android.provider.MediaStore.MediaColumns.DISPLAY_NAME };
+            String sel  = android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?";
+            String[] selArgs = { basePart + "%.mp4" };
+            try (android.database.Cursor c = cr.query(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    proj, sel, selArgs,
+                    android.provider.MediaStore.MediaColumns.DATE_ADDED + " DESC")) {
+                if (c != null && c.moveToFirst()) {
+                    int dataIdx = c.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA);
+                    if (dataIdx >= 0) filePath = c.getString(dataIdx);
+                    if (filePath == null || filePath.isEmpty()) {
+                        // DATA null — reconstruct from known folder + display name
+                        int nameIdx = c.getColumnIndex(android.provider.MediaStore.MediaColumns.DISPLAY_NAME);
+                        String fname = (nameIdx >= 0) ? c.getString(nameIdx) : displayName;
+                        java.io.File f = new java.io.File(downloadsBase, folder + "/" + fname);
+                        if (f.exists()) filePath = f.getAbsolutePath();
+                    }
+                    Log.d(TAG, "getLocalVideoUri: TIER2 MediaStore.Downloads hit: " + filePath);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "getLocalVideoUri: TIER2 failed: " + e.getMessage());
+            }
+        }
+
+        // ── TIER 3: MediaStore.Video (some ROMs re-index Downloads as Video) ────
+        if (filePath == null) {
+            String[] proj = { android.provider.MediaStore.Video.Media._ID,
+                              android.provider.MediaStore.MediaColumns.DATA,
+                              android.provider.MediaStore.MediaColumns.DISPLAY_NAME };
+            String sel  = android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?";
+            String[] selArgs = { basePart + "%.mp4" };
+            try (android.database.Cursor c = cr.query(
+                    android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    proj, sel, selArgs,
+                    android.provider.MediaStore.MediaColumns.DATE_ADDED + " DESC")) {
+                if (c != null && c.moveToFirst()) {
+                    int dataIdx = c.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA);
+                    if (dataIdx >= 0) filePath = c.getString(dataIdx);
+                    if (filePath == null || filePath.isEmpty()) {
+                        int nameIdx = c.getColumnIndex(android.provider.MediaStore.MediaColumns.DISPLAY_NAME);
+                        String fname = (nameIdx >= 0) ? c.getString(nameIdx) : displayName;
+                        java.io.File f = new java.io.File(downloadsBase, folder + "/" + fname);
+                        if (f.exists()) filePath = f.getAbsolutePath();
+                    }
+                    Log.d(TAG, "getLocalVideoUri: TIER3 MediaStore.Video hit: " + filePath);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "getLocalVideoUri: TIER3 failed: " + e.getMessage());
+            }
+        }
+
+        // ── TIER 4: Brute-force folder scan (deduplication like Title (1).mp4) ──
+        if (filePath == null) {
+            java.io.File dir = new java.io.File(downloadsBase, folder);
+            if (dir.exists() && dir.isDirectory()) {
+                java.io.File[] files = dir.listFiles();
+                if (files != null) {
+                    for (java.io.File f : files) {
+                        if (f.getName().startsWith(basePart) && f.getName().endsWith(".mp4")) {
+                            filePath = f.getAbsolutePath();
+                            Log.d(TAG, "getLocalVideoUri: TIER4 folder scan hit: " + filePath);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Subtitle lookup (VTT) ────────────────────────────────────────────
+        // Tier 1: direct path (check both .vtt and legacy .vtt.txt in folder and base)
+        java.io.File directSub = new java.io.File(downloadsBase, folder + "/" + vttName);
+        if (!directSub.exists()) directSub = new java.io.File(downloadsBase, folder + "/" + vttName + ".txt");
+        if (!directSub.exists()) directSub = new java.io.File(downloadsBase, vttName);
+        if (!directSub.exists()) directSub = new java.io.File(downloadsBase, vttName + ".txt");
+        if (directSub.exists()) subPath = directSub.getAbsolutePath();
+
+        // Tier 2: MediaStore.Downloads
+        if (subPath == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            String[] subProj = { android.provider.MediaStore.Downloads._ID,
+                                 android.provider.MediaStore.MediaColumns.DATA };
+            try (android.database.Cursor c = cr.query(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    subProj,
+                    android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " = ?",
+                    new String[]{ vttName }, null)) {
+                if (c != null && c.moveToFirst()) {
+                    int dataIdx = c.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA);
+                    if (dataIdx >= 0) subPath = c.getString(dataIdx);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "getLocalVideoUri: subtitle lookup failed: " + e.getMessage());
+            }
+        }
+
+        Log.d(TAG, "getLocalVideoUri result → video=" + filePath + " sub=" + subPath);
+        JSObject ret = new JSObject();
+        if (filePath != null && !filePath.isEmpty()) ret.put("filePath",     filePath);
+        if (subPath  != null && !subPath.isEmpty())  ret.put("subtitlePath", subPath);
+        call.resolve(ret);
+    }
 
     @PluginMethod
     public void openDownloadFolder(PluginCall call) {
@@ -658,6 +858,7 @@ public class OfflineDownloader extends Plugin {
 
     static class JavaDLTask implements Runnable {
         final String taskId, animeId, animeTitle, episode, srvUrl, referer, cover, track, subsJson;
+        final String deviceUA;   // actual device WebView UA — must match embed page UA for CDN token validation
         final boolean isHls;
         final String playlistContent;
         final Context ctx;
@@ -674,6 +875,15 @@ public class OfflineDownloader extends Plugin {
             this.cover = cover; this.track = track; this.subsJson = subsJson;
             this.isHls = isHls; this.playlistContent = playlistContent;
             this.ctx = ctx; this.plugin = plugin; this.http = http;
+
+            // Resolve the device's actual WebView User-Agent ONCE at construction time.
+            // CRITICAL: The EmbedScraperPlugin's hidden WebView loads the embed page with THIS
+            // exact UA. CDNs may bind segment tokens to the requesting UA — using any other UA
+            // (e.g. hardcoded Desktop Chrome) will cause token validation to fail → HTTP 403.
+            String resolvedUA;
+            try { resolvedUA = android.webkit.WebSettings.getDefaultUserAgent(ctx); }
+            catch (Exception e) { resolvedUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"; }
+            this.deviceUA = resolvedUA;
         }
 
         private String getUniqueFileName(String baseName, String extension) {
@@ -736,6 +946,11 @@ public class OfflineDownloader extends Plugin {
 
         private void downloadHLS(String fileName) throws Exception {
             String targetUrl = srvUrl;
+            Log.d(TAG, "=== downloadHLS START ===");
+            Log.d(TAG, "srvUrl: " + srvUrl);
+            Log.d(TAG, "referer: " + referer);
+            Log.d(TAG, "deviceUA: " + deviceUA);
+            Log.d(TAG, "playlistContent.length: " + (playlistContent != null ? playlistContent.length() : 0));
 
             // Use pre-fetched playlist from JS if available
             List<String> lines;
@@ -744,7 +959,7 @@ public class OfflineDownloader extends Plugin {
                 lines = new ArrayList<>(Arrays.asList(playlistContent.replace("\r\n", "\n").split("\n")));
                 Log.d(TAG, "Using JS pre-fetched playlist (" + lines.size() + " lines)");
             } else {
-                Log.d(TAG, "Fetching playlist via OkHttp");
+                Log.d(TAG, "Fetching playlist via OkHttp: " + targetUrl);
                 lines = fetchLines(targetUrl);
             }
 
@@ -810,7 +1025,12 @@ public class OfflineDownloader extends Plugin {
                     pendingExtInf = t;
                 } else if (!t.isEmpty() && !t.startsWith("#")) {
                     String abs = t.startsWith("http") ? t : (t.startsWith("/") ? rootProto + t : base + t);
-                    boolean isAd = abs.contains("/ad/") || abs.contains("adserver") || abs.contains("doubleclick");
+                    // Filter ad segments: only block ibyteimg.com URLs that explicitly contain
+                    // ad path markers like 'ad-site', 'ad-sg', or '/ad/'. Real video segments
+                    // on ibyteimg.com (if any) will NOT be blocked by this smarter filter.
+                    boolean isAd = (abs.contains("ibyteimg.com") && (abs.contains("ad-site") || abs.contains("-ad-") || abs.contains("/ad/"))) 
+                                   || abs.contains("adserver") 
+                                   || abs.contains("doubleclick");
                     if (!isAd) {
                         if (pendingExtInf != null) {
                             cleanLines.add(pendingExtInf);
@@ -846,14 +1066,14 @@ public class OfflineDownloader extends Plugin {
                 try (FileOutputStream fos = new FileOutputStream(new File(segDir, "init.mp4"))) { fos.write(initData); }
             }
 
-            // Download segments in parallel (2 threads for rate limit protection)
+            // Download segments in parallel (3 threads for optimal speed without triggering CDN rate limits)
             int total = segUrls.size();
             AtomicInteger done = new AtomicInteger(0);
             AtomicBoolean failed = new AtomicBoolean(false);
             AtomicReference<Exception> failEx = new AtomicReference<>();
             final boolean enc = isEnc; final byte[] fKey = curKey; final List<byte[]> fIVs = segIVs;
 
-            ExecutorService pool = Executors.newFixedThreadPool(6);
+            ExecutorService pool = Executors.newFixedThreadPool(16); // 16 parallel segment downloads
             List<Future<?>> futures = new ArrayList<>();
             for (int i = 0; i < total; i++) {
                 final int idx = i;
@@ -864,10 +1084,26 @@ public class OfflineDownloader extends Plugin {
                     if (failed.get()) return;
                     for (int r = 0; r < 10; r++) {
                         try {
+                            // Use fixed buildRequest (same headers for all retries) — matches v1.5.7.
+                            // Adaptive header changes per-retry were making things worse.
                             Request req = buildRequest(segUrl);
                             try (Response resp = http.newCall(req).execute()) {
+                                int code = resp.code();
                                 if (!resp.isSuccessful() || resp.body() == null) {
-                                    throw new IOException("HTTP " + resp.code() + " for segment " + idx);
+                                    // Log detailed diagnostics on first failure
+                                    String bodySnippet = "";
+                                    try {
+                                        if (resp.body() != null) {
+                                            String bodyStr = resp.body().string();
+                                            bodySnippet = bodyStr.substring(0, Math.min(100, bodyStr.length())).replaceAll("\\s+", " ");
+                                        }
+                                    } catch (Exception ignored) {}
+                                    String urlShort = segUrl.length() > 70 ? segUrl.substring(0, 70) + "..." : segUrl;
+                                    String refShort = referer.length() > 35 ? referer.substring(0, 35) + "..." : referer;
+                                    String msg = "HTTP " + code + " | URL: " + urlShort + " | Ref: " + refShort
+                                            + (bodySnippet.isEmpty() ? "" : " | Body: " + bodySnippet);
+                                    Log.e(TAG, "[Seg" + idx + "/r" + r + "] " + msg);
+                                    throw new IOException(msg);
                                 }
                                 if (enc && fKey != null && iv != null) {
                                     byte[] encryptedData = resp.body().bytes();
@@ -905,7 +1141,7 @@ public class OfflineDownloader extends Plugin {
                                                 }
                                             }
                                         }
-                                        byte[] buf = new byte[32768];
+                                        byte[] buf = new byte[131072]; // 128KB buffer — 4x bigger = faster IO
                                         int read;
                                         while ((read = bis.read(buf)) != -1) {
                                             fos.write(buf, 0, read);
@@ -924,12 +1160,12 @@ public class OfflineDownloader extends Plugin {
                         } catch (Exception e) {
                             Log.w(TAG, "Segment " + idx + " download failed (attempt " + (r + 1) + "/10): " + e.getMessage());
                             if (r >= 9) { failed.set(true); failEx.set(e); }
-                            else { try { Thread.sleep((r + 1) * 1000); } catch (Exception ignored) {} }
+                            else { try { Thread.sleep(Math.min(2500, (r + 1) * 500)); } catch (Exception ignored) {} }
                         }
                     }
                 }));
             }
-            for (Future<?> f : futures) { try { f.get(120, TimeUnit.SECONDS); } catch (Exception e) { failed.set(true); } }
+            for (Future<?> f : futures) { try { f.get(180, TimeUnit.SECONDS); } catch (Exception e) { failed.set(true); } }
             pool.shutdown();
 
             if (failed.get()) {
@@ -994,21 +1230,25 @@ public class OfflineDownloader extends Plugin {
         }
 
         byte[] fetchBytes(String urlStr) throws Exception {
+            // Use buildRequest (fixed headers matching v1.5.7) — not adaptive.
+            // If the CDN requires anineko.to referer, adaptive would fail on retries.
             Request req = buildRequest(urlStr);
             try (Response resp = http.newCall(req).execute()) {
-                if (!resp.isSuccessful() || resp.body() == null) throw new IOException("HTTP " + resp.code() + " for " + urlStr);
+                if (!resp.isSuccessful() || resp.body() == null) {
+                    throw new IOException("HTTP " + resp.code() + " for " + urlStr);
+                }
                 return resp.body().bytes();
             }
         }
 
+        /**
+         * Fixed-header request builder — matches v1.5.7 working config exactly.
+         * Used for ALL segment download retries (same headers every attempt).
+         * Key: deviceUA (actual device WebView UA) + this.referer (anineko.to) + Origin.
+         */
         private Request buildRequest(String urlStr) {
             Request.Builder b = new Request.Builder().url(urlStr).get();
-            
-            String ua;
-            try { ua = android.webkit.WebSettings.getDefaultUserAgent(ctx); }
-            catch (Exception e) { ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"; }
-            
-            b.header("User-Agent", ua);
+            b.header("User-Agent", deviceUA);
             b.header("Accept", "*/*");
             b.header("Accept-Language", "en-US,en;q=0.9");
             if (!referer.isEmpty()) {
@@ -1016,13 +1256,64 @@ public class OfflineDownloader extends Plugin {
                 try { URL ref = new URL(referer); b.header("Origin", ref.getProtocol() + "://" + ref.getHost()); }
                 catch (Exception ignored) {}
             }
-            
-            // Inject merged cookies manually to guarantee transmission
             try {
                 StringBuilder sb = new StringBuilder();
                 android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
                 String c1 = cm.getCookie(urlStr);
                 String c2 = referer.isEmpty() ? null : cm.getCookie(referer);
+                if (c1 != null && !c1.isEmpty()) sb.append(c1);
+                if (c2 != null && !c2.isEmpty()) {
+                    if (sb.length() > 0) sb.append("; ");
+                    sb.append(c2);
+                }
+                String cookie = sb.toString();
+                if (!cookie.isEmpty()) b.header("Cookie", cookie);
+            } catch (Exception ignored) {}
+            return b.build();
+        }
+
+        private Request buildAdaptiveRequest(String urlStr, int attempt) {
+            Request.Builder b = new Request.Builder().url(urlStr).get();
+            // Use the device's actual WebView UA (same as the hidden WebView that loaded the embed).
+            // CDN tokens are often bound to the requesting UA — using any other UA causes 403.
+            b.header("User-Agent", deviceUA);
+            // Use broad accept for HLS/TS segments; do NOT include Sec-Fetch-* headers.
+            // Sec-Fetch-Mode: cors tells the server this is a browser CORS fetch, which triggers
+            // CORS origin validation on some CDNs → HTTP 403. OkHttp is a native client, not a
+            // browser, so we omit these browser-specific security headers entirely.
+            b.header("Accept", "application/x-mpegURL,video/mp2t,video/mp4,*/*;q=0.8");
+            b.header("Accept-Language", "en-US,en;q=0.9");
+            b.header("Connection", "keep-alive");
+
+            String effectiveReferer = "";
+            if (attempt == 0) {
+                effectiveReferer = referer;
+            } else if (attempt == 1) {
+                effectiveReferer = srvUrl;
+            } else if (attempt == 2) {
+                try {
+                    URL u = new URL(urlStr);
+                    effectiveReferer = u.getProtocol() + "://" + u.getHost() + "/";
+                } catch (Exception ignored) {}
+            } else {
+                // attempt >= 3: NO referer (direct hotlink / unreferer mode)
+                effectiveReferer = "";
+            }
+
+            if (effectiveReferer != null && !effectiveReferer.isEmpty()) {
+                b.header("Referer", effectiveReferer);
+                // Restore Origin header (same as v1.5.1 — CDNs use CORS-based hotlink validation).
+                // Referer alone is sometimes insufficient; Origin confirms the trusted embed origin.
+                try { URL ref = new URL(effectiveReferer); b.header("Origin", ref.getProtocol() + "://" + ref.getHost()); }
+                catch (Exception ignored) {}
+            }
+
+            // Inject cookies from CookieManager
+            try {
+                StringBuilder sb = new StringBuilder();
+                android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                String c1 = cm.getCookie(urlStr);
+                String c2 = (effectiveReferer != null && !effectiveReferer.isEmpty()) ? cm.getCookie(effectiveReferer) : null;
                 if (c1 != null && !c1.isEmpty()) sb.append(c1);
                 if (c2 != null && !c2.isEmpty()) {
                     if (sb.length() > 0) sb.append("; ");
@@ -1162,7 +1453,7 @@ public class OfflineDownloader extends Plugin {
                     try {
                         ContentValues cv = new ContentValues();
                         cv.put(MediaStore.MediaColumns.DISPLAY_NAME, subName);
-                        cv.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                        cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
                         cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/" + folder);
                         Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                         if (uri != null) {

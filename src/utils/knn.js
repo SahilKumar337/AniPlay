@@ -30,6 +30,8 @@ export function getFeatureVector(anime) {
     }
   }
 
+  if (!anime) return new Array(GENRES.length + 2).fill(0);
+
   // 2. Score dimension (normalized [0, 1])
   const score = anime.averageScore || 70;
   vec[GENRES.length] = score / 100.0;
@@ -99,7 +101,7 @@ export function rankAnimeByKnn(animes, recentlyViewed) {
   const profileVec = getUserProfileVector(recentlyViewed);
   
   // Calculate distance for each anime
-  const scored = animes.map(anime => {
+  const scored = animes.filter(Boolean).map(anime => {
     const vec = getFeatureVector(anime);
     const distance = getDistance(profileVec, vec);
     return { anime, distance };

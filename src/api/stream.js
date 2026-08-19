@@ -5,8 +5,7 @@
  * through a lightweight Cloudflare Worker header proxy if configured.
  */
 
-import { scrapeAniNeko, scrapeAniWaves, scrapeAniKoto, getScraperEpisodeCount } from './scrapers';
-export { getScraperEpisodeCount };
+import { scrapeAniNeko, scrapeAniWaves, scrapeAniKoto } from './scrapers';
 
 const clientStreamCache = new Map();
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache life
@@ -100,10 +99,13 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   const handleScraperResult = (data) => {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
-        const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim();
-        const isAllowed = ['NekoHD', 'WavesHD', 'AniHD', 'AniVid'].includes(baseName)
-          || baseName.startsWith('Waves-');
-        if (!isAllowed) return; // skip all other servers
+        const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim().split(' ')[0];
+        // Allow all known good server prefixes:
+        // Neko-StreamHG, Neko-Earnvids, NekoHD (old name), WavesHD, Waves-*, AniHD, AniVid
+        const isAllowed = baseName.startsWith('Neko')
+          || baseName.startsWith('Waves')
+          || ['WavesHD', 'AniHD', 'AniVid'].includes(baseName);
+        if (!isAllowed) return; // skip unrecognized servers
 
         // Prevent duplicate server items
         if (!combinedServers.some(x => x.name === s.name && x.type === s.type)) {
@@ -113,14 +115,16 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // Prioritize servers: Neko → WavesHD → AniHD → AniVid
+      // Prioritize: Neko-StreamHG > Neko-Earnvids > other Neko > WavesHD > AniHD > AniVid
       combinedServers.sort((a, b) => {
         const getPriority = (name) => {
-          if (name.includes('Neko')) return 0;
-          if (name.includes('Waves') || name === 'WavesHD') return 1;
-          if (name === 'AniHD') return 2;
-          if (name === 'AniVid') return 3;
-          return 4;
+          if (name.includes('StreamHG')) return 0;
+          if (name.includes('Earnvids')) return 1;
+          if (name.startsWith('Neko')) return 2;
+          if (name.includes('Waves') || name === 'WavesHD') return 3;
+          if (name === 'AniHD') return 4;
+          if (name === 'AniVid') return 5;
+          return 6;
         };
         return getPriority(a.name) - getPriority(b.name);
       });
@@ -163,7 +167,7 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   const results = await Promise.allSettled([
     runWithTimeout(nekoPromise,    18000, 'AniNeko').catch(e  => { console.warn(e.message); return null; }),
     runWithTimeout(wavesPromise,   18000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(anikotoPromise, 18000, 'AniKoto').catch(e  => { console.warn(e.message); return null; })
+    runWithTimeout(anikotoPromise, 18000, 'AniKoto').catch(e  => { console.warn(e.message); return null; }),
   ]);
 
   if (combinedServers.length === 0) {
