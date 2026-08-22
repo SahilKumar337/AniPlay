@@ -1,7 +1,8 @@
 import { useNavigate } from 'react-router-dom';
 import { getTitle, getCover, getColor } from '../api/anilist';
 import { Play } from 'lucide-react';
-import { useState } from 'react';
+import { useState, memo } from 'react';
+import { motion } from 'motion/react';
 import { useApp } from '../context/AppContext';
 
 // Global memory cache of loaded image URLs
@@ -18,7 +19,7 @@ export function preloadAnimeCardImages(urls) {
   });
 }
 
-export default function AnimeCard({
+function AnimeCard({
   anime,
   width  = null,
   height = null,
@@ -43,7 +44,13 @@ export default function AnimeCard({
   const cardWidth  = width  ?? (compact ? 90  : 120);
   const cardHeight = height ?? (compact ? 125 : 165);
 
-  const handleClick = () => navigate(`/anime/${anime.id}`);
+  const handleClick = (e) => {
+    e?.stopPropagation?.();
+    const targetId = anime?.id || anime?.mediaId || anime?.animeId;
+    if (targetId) {
+      navigate(`/anime/${targetId}`, { viewTransition: true });
+    }
+  };
 
   const handleLoad = () => {
     if (cover) imageCache.add(cover);
@@ -51,8 +58,10 @@ export default function AnimeCard({
   };
 
   const hasRank = rank !== null;
-  // Netflix-style: wider wrap when rank is shown so the big number fits
-  const wrapWidth = hasRank ? cardWidth + 24 : cardWidth;
+  const isDoubleDigit = hasRank && Number(rank) >= 10;
+  // Netflix-style: dynamic width and margin so numbers 1-9 and 10+ never get clipped or hidden
+  const rankOffset = hasRank ? (isDoubleDigit ? 52 : 32) : 0;
+  const wrapWidth = cardWidth + rankOffset;
 
   return (
     <div
@@ -65,17 +74,19 @@ export default function AnimeCard({
     >
       {/* ── Netflix-style large rank number ── */}
       {hasRank && (
-        <span className="rank-number">{rank}</span>
+        <span className={`rank-number ${isDoubleDigit ? 'rank-double-digit' : ''}`}>{rank}</span>
       )}
 
-      <div
+      <motion.div
         className="anime-card"
         style={{
           width: cardWidth,
           height: cardHeight,
-          marginLeft: hasRank ? 24 : 0,
+          marginLeft: rankOffset,
         }}
         onClick={handleClick}
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
         id={`anime-card-${anime.id}`}
         role="button"
         tabIndex={0}
@@ -162,7 +173,7 @@ export default function AnimeCard({
             {title}
           </span>
         </div>
-      </div>
+      </motion.div>
 
       {/* Title label below card */}
       {showTitle && (
@@ -179,3 +190,5 @@ export default function AnimeCard({
     </div>
   );
 }
+
+export default memo(AnimeCard);

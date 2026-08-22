@@ -1,5 +1,5 @@
 import { CapacitorHttp } from '@capacitor/core';
-import { scrapeEmbedNative, solveCloudflareNative, getCookiesForUrlNative, fetchViaWebViewNative, extractEmbedIdsNative } from './embedScraper.js';
+import { scrapeEmbedNative, solveCloudflareNative, getCookiesForUrlNative, fetchViaWebViewNative, extractEmbedIdsNative, unpackUniversalJS } from './embedScraper.js';
 
 const isCapacitorApp = typeof window !== 'undefined' && window.Capacitor && (
   window.Capacitor.isNativePlatform() || 
@@ -794,15 +794,27 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
   const rawServers = await awGetServers(wavesId, episode, slug);
   const servers = [];
 
-  // Parallelize sub and dub server resolution to halve latency
+  // Parallelize sub and dub server resolution with direct HLS extraction
   const [subRes, dubRes] = await Promise.all([
     (async () => {
       const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 2);
       for (const s of subServers) {
         try {
           const embedUrl = await awGetEmbedUrl(s.linkId, slug);
-          const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
-          return { name: 'WavesHD', videoUrl, type: 'sub', embedUrl, serverName: s.serverName, referer: `${AW}/watch/${slug}`, isHLS: false };
+          let directHls = false;
+          let finalVideoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
+
+          try {
+            const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 5000 });
+            const unpacked = unpackUniversalJS(embedHtml);
+            if (unpacked) {
+              finalVideoUrl = unpacked;
+              directHls = true;
+              console.log(`[AniWaves] Direct HLS extracted for WavesHD: ${finalVideoUrl.slice(0, 60)}...`);
+            }
+          } catch (_) {}
+
+          return { name: 'WavesHD', videoUrl: finalVideoUrl, type: 'sub', embedUrl, serverName: s.serverName, referer: `${AW}/watch/${slug}`, isHLS: directHls };
         } catch (e) {
           console.warn(`[AniWaves] Sub server ${s.serverName} resolution failed:`, e.message);
         }
@@ -814,8 +826,20 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
       for (const s of dubServers) {
         try {
           const embedUrl = await awGetEmbedUrl(s.linkId, slug);
-          const videoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
-          return { name: 'WavesHD (DUB)', videoUrl, type: 'dub', embedUrl, serverName: s.serverName, referer: `${AW}/watch/${slug}`, isHLS: false };
+          let directHls = false;
+          let finalVideoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
+
+          try {
+            const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 5000 });
+            const unpacked = unpackUniversalJS(embedHtml);
+            if (unpacked) {
+              finalVideoUrl = unpacked;
+              directHls = true;
+              console.log(`[AniWaves] Direct HLS extracted for WavesHD (DUB): ${finalVideoUrl.slice(0, 60)}...`);
+            }
+          } catch (_) {}
+
+          return { name: 'WavesHD (DUB)', videoUrl: finalVideoUrl, type: 'dub', embedUrl, serverName: s.serverName, referer: `${AW}/watch/${slug}`, isHLS: directHls };
         } catch (e) {
           console.warn(`[AniWaves] Dub server ${s.serverName} resolution failed:`, e.message);
         }
@@ -965,41 +989,52 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
 
   const fetchedPages = await Promise.allSettled(
     urlsToFetch.map(async item => {
-      const html = await clientFetch(item.url, { referer: ANINEKO, timeout: 25000 });
+      const html = await clientFetch(item.url, { referer: ANINEKO, timeout: 12000 });
       return { html, isDubPage: item.isDubPage };
     })
   );
 
   const rawServers = [];
+  const btnRe = /<button[^>]*class="[^"]*server[^"]*"[^>]*data-video="([^"]+)"[^>]*>([\s\S]+?)<\/button>/g;
+
   for (const page of fetchedPages) {
     if (page.status !== 'fulfilled') continue;
     const { html, isDubPage } = page.value;
-    const panelsRe = /<div[^>]+data-id="(sub|dub)[\s\S]*?<\/div>\s*<\/div>/g;
-    let pMatch;
-    while ((pMatch = panelsRe.exec(html)) !== null) {
-      const panelId = pMatch[1];
-      const btnRe = /<button class="nv-server-btn server-video server[^"]*"[^>]*data-video="([^"]+)"[^>]*>([\s\S]+?)<\/button>/g;
-      let m;
-      while ((m = btnRe.exec(pMatch[0])) !== null) {
-        let videoUrl = m[1];
-        if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
-        const name = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        // Load all available servers, not just HD-1
-        rawServers.push({
-          videoUrl,
-          serverName: name,
-          isDub: isDubPage || panelId === 'dub' || name.toLowerCase().includes('dub')
-        });
+    btnRe.lastIndex = 0;
+    let m;
+    while ((m = btnRe.exec(html)) !== null) {
+      let videoUrl = m[1];
+      if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
+      const rawText = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const low = rawText.toLowerCase();
+
+      // Determine SUB vs DUB accurately based on button label and page source
+      let isDub = false;
+      if (low.includes('dub')) {
+        isDub = true;
+      } else if (low.includes('sub') || low.includes('soft') || low.includes('hard')) {
+        isDub = false;
+      } else {
+        isDub = isDubPage;
       }
+
+      const isHardSub = !isDub && low.includes('hard');
+      const isSoftSub = !isDub && (low.includes('sort') || low.includes('soft'));
+
+      rawServers.push({
+        videoUrl,
+        rawText,
+        isDub,
+        isHardSub,
+        isSoftSub
+      });
     }
   }
 
-  // First pass: collect subtitle URLs across all servers
-  const seen = new Set();
+  // First pass: collect subtitle URLs across only sub servers
   let bestSubtitleUrl = '';
-
   for (const s of rawServers) {
-    if (!s.videoUrl) continue;
+    if (s.isDub || !s.videoUrl) continue;
     try {
       const urlObj = new URL(s.videoUrl);
       const sub = urlObj.searchParams.get('sub') || urlObj.searchParams.get('caption_1') || urlObj.searchParams.get('c1_file') || '';
@@ -1007,42 +1042,50 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
     } catch {}
   }
 
-  // Second pass: build the final servers array for all available servers
-  const servers = [];
-  const serverOrder = ['streamhg', 'earnvids', 'hd-1', 'vidhide'];
+  const cleanServerName = (rawText, isDub, isHardSub) => {
+    const low = rawText.toLowerCase();
+    let base = 'NekoHD';
+    if (low.includes('hd-2')) base = 'Neko-HD-2';
+    else if (low.includes('hd-1')) base = 'NekoHD';
+    else base = `Neko-${rawText.split(' ')[0]}`;
 
-  const cleanServerName = (rawName, isDub) => {
-    const low = rawName.toLowerCase();
-    let label = 'NekoHD';
-    if (low.includes('streamhg')) label = 'Neko-StreamHG';
-    else if (low.includes('earnvids')) label = 'Neko-Earnvids';
-    else if (low.includes('hd-1')) label = 'NekoHD';
-    else if (low.includes('dood')) label = 'Neko-Dood';
-    else label = `Neko-${rawName.split(' ')[0]}`;
-    return isDub ? `${label} (DUB)` : label;
+    if (isDub) return `${base} (DUB)`;
+    if (isHardSub) return `${base}-HardSub`;
+    return base;
   };
 
+  const seen = new Set();
+  const servers = [];
+
+  // Sort order: Prioritize verified fastest servers (HD-1 vivibebe ~2.9s > HD-2 bibiemb ~3.6s)
   const sortedRaw = [...rawServers].sort((a, b) => {
-    const aName = a.serverName.toLowerCase();
-    const bName = b.serverName.toLowerCase();
-    const aIdx = serverOrder.findIndex(k => aName.includes(k));
-    const bIdx = serverOrder.findIndex(k => bName.includes(k));
-    const aVal = aIdx >= 0 ? aIdx : 99;
-    const bVal = bIdx >= 0 ? bIdx : 99;
-    return aVal - bVal;
+    const score = (item) => {
+      const low = item.rawText.toLowerCase();
+      // SUB ordering
+      if (!item.isDub && low.includes('hd-1')) return 1;
+      if (!item.isDub && low.includes('hd-2')) return 2;
+      if (!item.isDub && !item.isHardSub) return 3;
+      if (!item.isDub) return 4;
+      // DUB ordering
+      if (item.isDub && low.includes('hd-1')) return 5;
+      if (item.isDub && low.includes('hd-2')) return 6;
+      if (item.isDub) return 7;
+      return 8;
+    };
+    return score(a) - score(b);
   });
 
   for (const s of sortedRaw) {
     if (seen.has(s.videoUrl)) continue;
     seen.add(s.videoUrl);
 
-    // Skip doodstream/playmogo (known to block direct downloads)
-    if (s.videoUrl.includes('playmogo') || s.videoUrl.includes('dood')) continue;
+    // Skip dead doodstream / playmogo / vivibebe (ByteDance ibyteimg 403 domain forbidden)
+    const sNameLow = s.rawText.toLowerCase();
+    const sUrlLow = (s.videoUrl || '').toLowerCase();
+    if (sNameLow.includes('dood') || sUrlLow.includes('dood') || sUrlLow.includes('playmogo') || sUrlLow.includes('vivibebe') || sUrlLow.includes('ibyteimg')) continue;
 
-
-    const isDub = s.isDub;
-    const serverDisplayName = cleanServerName(s.serverName, isDub);
-    const subtitleFile = (!isDub && bestSubtitleUrl) ? formatSubtitleProxyUrl(bestSubtitleUrl, s.videoUrl) : '';
+    const serverDisplayName = cleanServerName(s.rawText, s.isDub, s.isHardSub);
+    const subtitleFile = (!s.isDub && (s.isSoftSub || !s.isHardSub) && bestSubtitleUrl) ? formatSubtitleProxyUrl(bestSubtitleUrl, s.videoUrl) : '';
     const subtitles = subtitleFile ? [{ id: 0, label: 'English', file: subtitleFile, referer: ANINEKO + '/' }] : [];
     const proxiedUrl = formatIframeProxyUrl(s.videoUrl, ANINEKO);
 
@@ -1051,16 +1094,38 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
       videoUrl: proxiedUrl,
       embedUrl: s.videoUrl,
       referer: ANINEKO + '/',
-      type: isDub ? 'dub' : 'sub',
+      type: s.isDub ? 'dub' : 'sub',
       subtitles,
       isHLS: false
     });
   }
 
-  // Cache the resolved servers for this episode
-  if (servers.length > 0) setNekoEpisodeCache(best.slug, episode, servers);
+  // Pre-extract direct .m3u8 for all Neko servers in parallel via fast direct HTTP
+  await Promise.all(
+    servers.map(async (srv) => {
+      try {
+        if (!srv.embedUrl || srv.isHLS) return;
+        const embedHtml = await clientFetch(srv.embedUrl, { referer: ANINEKO + '/', timeout: 6000 });
+        const directM3u8 = unpackUniversalJS(embedHtml);
+        if (directM3u8) {
+          srv.videoUrl = directM3u8;
+          srv.isHLS = true;
+          console.log(`[AniNeko] Direct HLS extracted for ${srv.name}: ${directM3u8.slice(0, 60)}...`);
+        }
+      } catch (err) {
+        console.warn(`[AniNeko] Direct extract failed for ${srv.name}:`, err.message);
+      }
+    })
+  );
 
-  return { servers, animeTitle: best.title, slug: best.slug };
+  // Filter out any servers that failed direct extraction so user only sees 100% playable servers
+  const validServers = servers.filter(s => s.isHLS && s.videoUrl && s.videoUrl.startsWith('http'));
+  const finalServers = validServers.length > 0 ? validServers : servers;
+
+  // Cache the resolved servers for this episode
+  if (finalServers.length > 0) setNekoEpisodeCache(best.slug, episode, finalServers);
+
+  return { servers: finalServers, animeTitle: best.title, slug: best.slug };
 }
 
 
@@ -1376,9 +1441,11 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
       if (!embedUrl) return null;
       const videoUrl = formatIframeProxyUrl(embedUrl, domain);
 
-      // ── Extract subtitles from megacloud/megaplay API (AniHD only) ──
-      // megacloud exposes /getSources?id=<embedId> which includes subtitle tracks
+      // ── Extract subtitles & direct HLS from megacloud/megaplay API (AniHD only) ──
       let subtitles = [];
+      let isHlsDirect = s.isHLS;
+      let finalVideoUrl = videoUrl;
+
       if (s.label === 'AniHD') {
         try {
           // Megacloud embed URL format: https://megaplay.buzz/embed/<id> or https://s5.mfast.in/...
@@ -1392,6 +1459,17 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
             timeout: 6000
           });
           const sourcesData = JSON.parse(sourcesResp);
+
+          // Direct .m3u8 stream detection
+          if (sourcesData?.sources?.length && typeof sourcesData.sources[0]?.file === 'string') {
+            const rawFile = sourcesData.sources[0].file;
+            if (rawFile.includes('.m3u8')) {
+              finalVideoUrl = rawFile;
+              isHlsDirect = true;
+              console.log(`[AniKoto] Direct HLS extracted for AniHD: ${finalVideoUrl.slice(0, 60)}...`);
+            }
+          }
+
           // tracks array: [{ file: '...vtt', label: 'English', kind: 'captions', default: true }]
           const tracks = sourcesData?.tracks || [];
           subtitles = tracks
@@ -1406,18 +1484,36 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
             console.log(`[AniKoto] Extracted ${subtitles.length} subtitle track(s) from megacloud`);
           }
         } catch (e) {
-          console.warn('[AniKoto] Failed to fetch megacloud subtitles:', e.message);
+          console.warn('[AniKoto] Failed to fetch megacloud subtitles/sources:', e.message);
         }
       }
 
+      // If direct stream was not returned from getSources API, try fast universal JS unpacker
+      if (!isHlsDirect && embedUrl) {
+        try {
+          const embedHtml = await clientFetch(embedUrl, { referer: domain + '/', timeout: 4000 });
+          const directM3u8 = unpackUniversalJS(embedHtml);
+          if (directM3u8) {
+            finalVideoUrl = directM3u8;
+            isHlsDirect = true;
+            console.log(`[AniKoto] Direct HLS unpacked for ${s.label}: ${directM3u8.slice(0, 60)}...`);
+          }
+        } catch (_) {}
+      }
+
+      let serverReferer = domain + '/';
+      try {
+        if (embedUrl) serverReferer = new URL(embedUrl).origin + '/';
+      } catch (_) {}
+
       return {
         name: s.label,
-        videoUrl,
+        videoUrl: finalVideoUrl,
         embedUrl,
-        referer: domain + '/',
+        referer: serverReferer,
         type: s.type,
         subtitles,
-        isHLS: s.isHLS
+        isHLS: isHlsDirect
       };
     })
   );

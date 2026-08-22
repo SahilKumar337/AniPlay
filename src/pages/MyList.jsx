@@ -74,7 +74,7 @@ function AnimeCard({ anime, status, progress, isFav, onRemove, onStatusChange, o
         cursor: 'pointer',
         animationDelay: `${Math.min(index * 0.03, 0.3)}s`,
         position: 'relative',
-        transition: 'all 0.42s cubic-bezier(0.34, 1.25, 0.64, 1)',
+        transition: 'transform 0.42s cubic-bezier(0.34, 1.25, 0.64, 1), opacity 0.42s ease',
         opacity: removing ? 0 : 1,
         transform: removing ? 'scale(0.8) translateY(18px) rotate(-3deg)' : 'none',
       }}
@@ -322,15 +322,15 @@ export default function MyList() {
             {/* GPU-composited sliding pill */}
             <div style={{
               position: 'absolute', top: 0, bottom: 0,
-              left: tabStyle.left, width: tabStyle.width, opacity: tabStyle.opacity,
+              left: 0, width: tabStyle.width, opacity: tabStyle.opacity,
               background: `${activeColor}20`,
               border: `1px solid ${activeColor}50`,
               boxShadow: `0 0 16px -4px ${activeColor}, inset 0 1px 0 rgba(255,255,255,0.1)`,
               borderRadius: 22,
-              transform: 'translateZ(0)',
-              transition: 'left 0.35s cubic-bezier(0.16, 1, 0.3, 1), width 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease',
+              transform: `translate3d(${tabStyle.left}px, 0, 0)`,
+              transition: 'transform 0.34s cubic-bezier(0.2, 0.9, 0.28, 1), width 0.34s cubic-bezier(0.2, 0.9, 0.28, 1), opacity 0.2s ease',
               pointerEvents: 'none', zIndex: 0,
-              willChange: 'transform, left, width',
+              willChange: 'transform, width',
             }} />
 
             {TABS.map(t => {

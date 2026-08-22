@@ -40,13 +40,27 @@ public class MainActivity extends BridgeActivity {
 
         // Switch from splash launch theme to main app theme
         setTheme(R.style.AppTheme_NoActionBar);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         // Keep the splash screen until the web content is ready
         super.onCreate(savedInstanceState);
 
-        // Customize the WebChromeClient to hide the default poster
+        // Ensure notification permission is requested on Android 13+ for background download progress
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
+
+        // Customize the WebChromeClient and enforce hardware GPU rendering
         if (getBridge() != null && getBridge().getWebView() != null) {
-            getBridge().getWebView().setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
+            WebView webView = getBridge().getWebView();
+            webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null);
+            WebSettings ws = webView.getSettings();
+            ws.setDomStorageEnabled(true);
+            ws.setDatabaseEnabled(true);
+
+            webView.setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
                 @Override
                 public Bitmap getDefaultVideoPoster() {
                     try {
@@ -102,9 +116,8 @@ public class MainActivity extends BridgeActivity {
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
-        // TRANSPARENT: app content (translucent glass navbar) shows through the system nav bar
-        window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        // Solid black theme matching app background
+        window.setNavigationBarColor(android.graphics.Color.parseColor("#060609"));
 
         applyFullscreen();
 
@@ -155,6 +168,7 @@ public class MainActivity extends BridgeActivity {
     public void applyFullscreen() {
         Window window = getWindow();
         if (isImmersiveMode) {
+            window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 window.setDecorFitsSystemWindows(false);
                 android.view.WindowInsetsController ctrl = window.getInsetsController();
@@ -178,6 +192,7 @@ public class MainActivity extends BridgeActivity {
                 );
             }
         } else {
+            window.setNavigationBarColor(android.graphics.Color.parseColor("#060609"));
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 window.setDecorFitsSystemWindows(false);
                 android.view.WindowInsetsController ctrl = window.getInsetsController();

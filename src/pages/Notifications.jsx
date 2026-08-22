@@ -355,20 +355,27 @@ export default function Notifications() {
             padding: 4,
             border: '1px solid rgba(255, 255, 255, 0.06)',
           }}>
-            {/* Sliding Pill Background */}
+            {/* GPU-Accelerated Sliding Pill Track */}
             <div style={{
               position: 'absolute',
               top: 4,
               bottom: 4,
-              left: pillStyle.left,
-              width: pillStyle.width,
-              opacity: pillStyle.opacity,
-              borderRadius: 10,
-              background: 'var(--accent)',
-              boxShadow: '0 4px 16px color-mix(in srgb, var(--accent) 50%, transparent)',
-              transition: 'all 0.35s cubic-bezier(0.25, 1, 0.3, 1)',
+              left: 4,
+              width: 'calc((100% - 8px) / 3)',
+              transform: `translate3d(${(tabs.findIndex(t => t.id === activeTab) >= 0 ? tabs.findIndex(t => t.id === activeTab) : 0) * 100}%, 0, 0)`,
+              transition: 'transform 0.34s cubic-bezier(0.2, 0.9, 0.28, 1)',
+              willChange: 'transform',
               pointerEvents: 'none',
-            }} />
+              zIndex: 0,
+            }}>
+              <div style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: 10,
+                background: 'var(--accent)',
+                boxShadow: '0 4px 16px color-mix(in srgb, var(--accent) 50%, transparent)',
+              }} />
+            </div>
 
           {tabs.map(t => {
             const active = activeTab === t.id;
@@ -489,7 +496,7 @@ export default function Notifications() {
                           transform: isDeleting ? 'scale(0.85) translateY(-12px)' : 'none',
                           filter: isDeleting ? 'blur(8px)' : 'none',
                           maxHeight: isDeleting ? 0 : 200,
-                          transition: 'all 0.32s cubic-bezier(0.2, 1, 0.3, 1)',
+                          transition: 'transform 0.32s cubic-bezier(0.2, 1, 0.3, 1), opacity 0.32s ease, max-height 0.32s ease, filter 0.32s ease',
                         }}
                       >
                         {/* Unread Left Glowing Border Accent */}

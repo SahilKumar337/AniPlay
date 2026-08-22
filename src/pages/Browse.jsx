@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useRef, useMemo, memo, startTransition } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, SlidersHorizontal, X, Star, Play, Tag, Loader, ChevronDown, Check, RotateCcw } from 'lucide-react';
+import { Search, SlidersHorizontal, X, Star, Play, Tag, Loader, Check, RotateCcw } from 'lucide-react';
+import { motion } from 'motion/react';
+import AppDrawer from '../components/ui/AppDrawer';
 import {
   searchAnime, getTitle, getCover, getDisplayGenresOrTags,
   getTrending, getAiring, getSeasonal,
@@ -431,15 +432,6 @@ export default function Browse() {
                 touchAction: 'auto',
               }}
             />
-            {query && (
-              <button
-                onClick={() => setQuery('')}
-                aria-label="Clear search"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
-              >
-                <X size={14} color="var(--text-muted)" />
-              </button>
-            )}
           </div>
 
           {/* Filter Button */}
@@ -452,7 +444,9 @@ export default function Browse() {
               background: activeFilterCount > 0 ? 'var(--accent)' : 'var(--bg-secondary)',
               border: `1.5px solid ${activeFilterCount > 0 ? 'var(--accent)' : 'var(--border)'}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              position: 'relative', cursor: 'pointer', transition: 'all 0.2s',
+              position: 'relative', cursor: 'pointer',
+              touchAction: 'manipulation',
+              transition: 'background-color 0.2s ease, border-color 0.2s ease, transform 0.15s ease',
             }}
           >
             <SlidersHorizontal size={18} color="#fff" />
@@ -572,178 +566,140 @@ export default function Browse() {
         <div ref={sentinelRef} style={{ height: 1 }} aria-hidden="true" />
       </div>
 
-      {/* ─── Bottom Sheet Filter Panel ─── */}
-      {showFilter && createPortal(
-        <>
-          {/* Backdrop */}
-          <div
-            style={{
-              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
-              zIndex: 1000, backdropFilter: 'blur(3px)',
-            }}
-            onClick={() => setShowFilter(false)}
-          />
-
-          {/* Sheet */}
-          <div
-            ref={filterSheetRef}
-            style={{
-              position: 'fixed', bottom: 0, left: 0, right: 0,
-              zIndex: 1001, borderRadius: '22px 22px 0 0',
-              background: 'var(--bg-secondary)',
-              boxShadow: '0 -8px 40px rgba(0,0,0,0.5)',
-              display: 'flex', flexDirection: 'column',
-              maxHeight: '88vh',
-              animation: 'slideUp 0.28s cubic-bezier(0.16,1,0.3,1)',
-            }}
-          >
-            {/* Sheet Handle */}
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
-              <div style={{ width: 38, height: 4, borderRadius: 4, background: 'var(--border)' }} />
-            </div>
-
-            {/* Sheet Header */}
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '8px 18px 12px',
-            }}>
-              <div>
-                <h3 style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Filters</h3>
-                {activeFilterCount > 0 && (
-                  <p style={{ fontSize: 12, color: 'var(--accent)', margin: '2px 0 0', fontWeight: 600 }}>
-                    {activeFilterCount} active filter{activeFilterCount > 1 ? 's' : ''}
-                  </p>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {activeFilterCount > 0 && (
-                  <button
-                    onClick={clearAll}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 4,
-                      fontSize: 12, fontWeight: 700, color: 'var(--text-muted)',
-                      background: 'var(--bg-hover)', border: '1px solid var(--border)',
-                      borderRadius: 20, padding: '6px 12px', cursor: 'pointer',
-                    }}
-                  >
-                    <RotateCcw size={12} /> Reset
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowFilter(false)}
-                  style={{
-                    width: 34, height: 34, borderRadius: '50%',
-                    background: 'var(--bg-hover)', border: '1px solid var(--border)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <X size={16} color="var(--text-primary)" />
-                </button>
-              </div>
-            </div>
-
-            {/* Scrollable Content */}
-            <div style={{ overflowY: 'auto', padding: '0 18px 24px' }} className="hide-scrollbar">
-
-              {/* ── Format ── */}
-              <SectionLabel>Format</SectionLabel>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-                {FORMATS.map(f => (
-                  <FilterChip
-                    key={f.value || 'all-fmt'}
-                    label={f.label}
-                    active={format === f.value}
-                    onClick={() => setFormat(f.value)}
-                  />
-                ))}
-              </div>
-
-              {/* ── Status ── */}
-              <SectionLabel>Status</SectionLabel>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-                {STATUSES.map(s => (
-                  <FilterChip
-                    key={s.value || 'all-st'}
-                    label={s.label}
-                    active={status === s.value}
-                    onClick={() => setStatus(s.value)}
-                  />
-                ))}
-              </div>
-
-              {/* ── Genre ── */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <SectionLabel noMargin>Genre</SectionLabel>
-                {selectedGenres.length > 0 && (
-                  <button
-                    onClick={() => setSelectedGenres([])}
-                    style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
-                  >
-                    Clear ({selectedGenres.length})
-                  </button>
-                )}
-              </div>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
-                gap: 8,
-              }}>
-                {GENRES.map(g => {
-                  const active = selectedGenres.includes(g);
-                  return (
-                    <button
-                      key={g}
-                      id={`genre-filter-${g.toLowerCase().replace(/\s/g, '-')}`}
-                      onClick={() => toggleGenre(g)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        padding: '9px 12px', borderRadius: 12, cursor: 'pointer',
-                        border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                        background: active ? 'var(--accent-dim)' : 'var(--bg-elevated)',
-                        color: active ? 'var(--accent)' : 'var(--text-secondary)',
-                        fontSize: 13, fontWeight: active ? 600 : 400,
-                        textAlign: 'left', transition: 'all 0.18s',
-                        letterSpacing: '-0.1px',
-                        WebkitTapHighlightColor: 'transparent',
-                      }}
-                    >
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g}</span>
-                      {active && (
-                        <span style={{
-                          width: 18, height: 18, borderRadius: '50%',
-                          background: 'var(--accent)', display: 'flex',
-                          alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                        }}>
-                          <Check size={10} color="#fff" />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* ── Apply Button ── */}
-            <div style={{ padding: '12px 18px', paddingBottom: 'calc(56px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--border)' }}>
-              <button
-                onClick={() => setShowFilter(false)}
-                style={{
-                  width: '100%', padding: '14px', borderRadius: 14,
-                  background: 'var(--accent)', border: 'none', cursor: 'pointer',
-                  color: '#fff', fontSize: 15, fontWeight: 800, letterSpacing: 0.3,
-                  fontFamily: 'var(--font-main)',
-                }}
-              >
-                {activeFilterCount > 0
-                  ? `Show Results · ${activeFilterCount} Filter${activeFilterCount > 1 ? 's' : ''}`
-                  : 'Show All Results'}
-              </button>
+      {/* ─── Modern 120 FPS AppDrawer Filter Panel ─── */}
+      <AppDrawer
+        open={showFilter}
+        onOpenChange={setShowFilter}
+        title="Filters"
+        description={activeFilterCount > 0 ? `${activeFilterCount} active filters` : 'Filter anime by format, status, genre'}
+        headerRight={
+          activeFilterCount > 0 && (
+            <button
+              onClick={clearAll}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 12,
+                fontWeight: 700,
+                color: 'var(--text-muted)',
+                background: 'var(--bg-hover)',
+                border: '1px solid var(--border)',
+                borderRadius: 20,
+                padding: '6px 12px',
+                cursor: 'pointer',
+              }}
+            >
+              <RotateCcw size={12} /> Reset
+            </button>
+          )
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* ── Format ── */}
+          <div>
+            <SectionLabel>Format</SectionLabel>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {FORMATS.map(f => (
+                <FilterChip
+                  key={f.value || 'all-fmt'}
+                  label={f.label}
+                  active={format === f.value}
+                  onClick={() => setFormat(f.value)}
+                />
+              ))}
             </div>
           </div>
-        </>,
-        document.body
-      )}
+
+          {/* ── Status ── */}
+          <div>
+            <SectionLabel>Status</SectionLabel>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {STATUSES.map(s => (
+                <FilterChip
+                  key={s.value || 'all-st'}
+                  label={s.label}
+                  active={status === s.value}
+                  onClick={() => setStatus(s.value)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* ── Genre ── */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <SectionLabel noMargin>Genre</SectionLabel>
+              {selectedGenres.length > 0 && (
+                <button
+                  onClick={() => setSelectedGenres([])}
+                  style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+                >
+                  Clear ({selectedGenres.length})
+                </button>
+              )}
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: 8,
+            }}>
+              {GENRES.map(g => {
+                const active = selectedGenres.includes(g);
+                return (
+                  <motion.button
+                    key={g}
+                    id={`genre-filter-${g.toLowerCase().replace(/\s/g, '-')}`}
+                    onClick={() => toggleGenre(g)}
+                    whileTap={{ scale: 0.96 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 28 }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '9px 12px', borderRadius: 12, cursor: 'pointer',
+                      border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                      background: active ? 'var(--accent-dim)' : 'var(--bg-elevated)',
+                      color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                      fontSize: 13, fontWeight: active ? 600 : 400,
+                      textAlign: 'left',
+                      letterSpacing: '-0.1px',
+                    }}
+                  >
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g}</span>
+                    {active && (
+                      <span style={{
+                        width: 18, height: 18, borderRadius: '50%',
+                        background: 'var(--accent)', display: 'flex',
+                        alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                      }}>
+                        <Check size={10} color="#fff" />
+                      </span>
+                    )}
+                  </motion.button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Apply Button ── */}
+          <div style={{ paddingTop: 8 }}>
+            <motion.button
+              onClick={() => setShowFilter(false)}
+              whileTap={{ scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 28 }}
+              style={{
+                width: '100%', padding: '14px', borderRadius: 14,
+                background: 'var(--accent)', border: 'none', cursor: 'pointer',
+                color: '#fff', fontSize: 15, fontWeight: 800, letterSpacing: 0.3,
+                fontFamily: 'var(--font-main)',
+              }}
+            >
+              {activeFilterCount > 0
+                ? `Show Results · ${activeFilterCount} Filter${activeFilterCount > 1 ? 's' : ''}`
+                : 'Show All Results'}
+            </motion.button>
+          </div>
+        </div>
+      </AppDrawer>
     </div>
   );
 }
@@ -764,19 +720,21 @@ function SectionLabel({ children, noMargin }) {
 // ─── Filter Chip ─────────────────────────────────────────────────
 function FilterChip({ label, active, onClick }) {
   return (
-    <button
+    <motion.button
       onClick={onClick}
+      whileTap={{ scale: 0.92 }}
+      transition={{ type: 'spring', stiffness: 500, damping: 28 }}
       style={{
         padding: '7px 16px', borderRadius: 20, cursor: 'pointer',
         border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
         background: active ? 'var(--accent)' : 'var(--bg-card)',
         color: active ? '#fff' : 'var(--text-secondary)',
         fontSize: 13, fontWeight: active ? 700 : 500,
-        transition: 'all 0.18s', WebkitTapHighlightColor: 'transparent',
+        touchAction: 'manipulation',
       }}
     >
       {label}
-    </button>
+    </motion.button>
   );
 }
 
@@ -796,19 +754,20 @@ const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
   ));
 
   return (
-    <div
+    <motion.div
       className="search-result-item"
-      onClick={() => navigate(`/anime/${anime.id}`)}
+      onClick={() => navigate(`/anime/${anime.id}`, { viewTransition: true })}
+      whileTap={{ scale: 0.98 }}
+      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
       role="button"
       tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
+      onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`, { viewTransition: true })}
       id={`search-result-${anime.id}`}
       style={{
         display: 'flex', gap: 12, padding: '10px 14px',
         cursor: 'pointer', alignItems: 'flex-start',
         borderBottom: '1px solid rgba(255,255,255,0.04)',
         WebkitTapHighlightColor: 'transparent',
-        transition: 'background 0.2s',
       }}
     >
       {/* Thumbnail */}
@@ -896,7 +855,7 @@ const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
           </div>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 });
 

@@ -874,16 +874,21 @@ export function AppProvider({ children }) {
 
   const isFavorite = useCallback((animeId) => Boolean(favorites[animeId]), [favorites]);
 
-  const setEpisodeProgress = useCallback((animeId, episode) => {
-    const timestamp = Date.now();
+  const setEpisodeProgress = useCallback((animeId, epOrObj) => {
+    const rawEp = typeof epOrObj === 'object' && epOrObj !== null ? epOrObj.episode : epOrObj;
+    const episode = typeof rawEp === 'object' && rawEp !== null ? (rawEp.episode || 1) : (Number(rawEp) || 1);
+    const timestamp = (typeof epOrObj === 'object' && epOrObj !== null && epOrObj.timestamp) || Date.now();
     setProgress(prev => ({ ...prev, [animeId]: { episode, timestamp } }));
-    // Instant cloud write — pass explicit values so we don't read stale progressRef
-    // (React state updates are async — progressRef may lag by one render cycle)
     pushAnimeToCloudRef.current?.(animeId, { episode, timestamp });
     triggerDebouncedSyncRef.current?.();
-  }, []); // STABLE — reads pushAnimeToCloudRef at call-time with explicit overrides
+  }, []);
 
-  const getEpisodeProgress = useCallback((animeId) => progress[animeId] || null, [progress]);
+  const getEpisodeProgress = useCallback((animeId) => {
+    const p = progress[animeId];
+    if (!p) return null;
+    const rawEp = typeof p.episode === 'object' && p.episode !== null ? p.episode.episode : p.episode;
+    return { episode: Number(rawEp) || 1, timestamp: p.timestamp || 0 };
+  }, [progress]);
 
   const addToRecentlyViewed = useCallback((anime, episode) => {
     let nextRecently = [];

@@ -157,7 +157,7 @@ button {
   background: none;
   font-family: inherit;
   outline: none;
-  /* Eliminate 300ms tap delay + pre-promote to GPU */
+  /* Eliminate 300ms tap delay on all buttons */
   touch-action: manipulation;
   /* Immediate GPU layer for all buttons at startup */
   transform: translateZ(0);
@@ -178,39 +178,31 @@ button {
    is pre-promoted so there is ZERO GPU promotion cost on any interaction.
    ══════════════════════════════════════════════════════════════════════ */
 
-/* ── All tappable/interactive elements ─────────────────────────── */
+/* ── All tappable/interactive elements — 0ms tap latency ─────────── */
 a,
+button,
 [role="button"],
 .anime-card,
-.anime-card-wrap,
 .btn,
 .btn-primary,
 .btn-outline,
 .see-all,
-.card-overlay,
 .tag-chip,
 .filter-btn,
 .genre-chip {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
 }
 
-/* ── Anime cards specifically — heavy animations ─────────────── */
-.anime-card,
-.anime-card-wrap {
-  will-change: transform;
+/* ── Anime cards & lists — containment for 120 FPS scrolling ─── */
+.anime-card {
+  contain: layout style;
 }
 
-/* ── All images — prevent repaint flash on lazy load ─────────── */
-img {
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+.comment-card,
+.episode-card,
+.day-tab {
+  contain: layout style;
 }
 
 /* ── Scroll containers — momentum scrolling ──────────────────── */
@@ -345,14 +337,12 @@ body,
 @keyframes playerEnter {
   0% {
     opacity: 0;
-    transform: scale(0.96) translateY(20px);
-    filter: blur(8px);
+    transform: scale(0.96) translateY(16px);
   }
 
   100% {
     opacity: 1;
     transform: scale(1) translateY(0);
-    filter: blur(0);
   }
 }
 
@@ -527,6 +517,9 @@ body,
   flex-direction: column;
   flex-shrink: 0;
   cursor: pointer;
+  contain: content;
+  content-visibility: auto;
+  contain-intrinsic-size: 120px 165px;
 }
 
 .anime-card .card-overlay {
@@ -578,186 +571,194 @@ body,
 
 /* ---------- Welcome Screen — styles live in WelcomeScreen.jsx (component-scoped) ---------- */
 
-/* ── Premium Liquid Glass Navbar ─────────────────────────────────── */
-body.has-native-bottom-nav .navbar {
+/* ── Premium Liquid Glass Capsule Navbar ───────────────────────────── */
+body.has-native-bottom-nav .navbar,
+body.has-native-bottom-nav .navbar-container,
+body.has-native-bottom-nav .navbar-dock-blur,
+body.has-native-bottom-nav .navbar-bottom-bezel {
   display: none !important;
 }
 
-.navbar {
+/* ── Permanent Bottom Black Bezel (Resting under system navigation keys) ── */
+.navbar-bottom-bezel,
+.app-bottom-bezel {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  width: 100%;
-  max-width: 100%;
-  height: calc(var(--nav-height) + var(--android-safe-bottom, env(safe-area-inset-bottom)));
-  padding-bottom: var(--android-safe-bottom, env(safe-area-inset-bottom));
-
-  /* Liquid glass base — dark deep purple */
-  background: rgba(6, 5, 20, 0.72);
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
-
-  /* Multi-layer glow: purple ambient + upward shadow */
-  box-shadow:
-    0 -1px 0 rgba(255, 255, 255, 0.07),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 -8px 48px rgba(0, 0, 0, 0.65),
-    0 -1px 80px rgba(108, 99, 255, 0.10);
-
-  display: flex;
-  align-items: center;
-  z-index: 100;
+  height: max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px);
+  min-height: 24px;
+  background: #060609;
+  z-index: 99;
+  pointer-events: none;
   transform: translate3d(0, 0, 0);
-  -webkit-transform: translate3d(0, 0, 0);
-  isolation: isolate;
-  overflow: hidden;
-  /* transform:translate3d already forces GPU layer — no will-change needed.
-     No contain:layout here either — it would affect stacking/paint of siblings. */
 }
 
-/* ── Hide navbar when software keyboard is open ———————──────────────── */
-/* visualViewport resize listener in App.jsx adds .keyboard-open to body   */
-body.keyboard-open .navbar {
+/* ── Background Liquid Blur Dock (Optimized for 120 FPS Scrolling) ── */
+.navbar-dock-blur {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(88px + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px));
+  background: linear-gradient(to top, rgba(4, 4, 10, 0.98) 0%, rgba(4, 4, 10, 0.85) 45%, rgba(4, 4, 10, 0.35) 80%, transparent 100%);
+  z-index: 98;
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+.navbar-container {
+  position: fixed;
+  bottom: calc(max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px) + 8px);
+  left: 0;
+  right: 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  pointer-events: none;
+  padding: 0 16px;
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+}
+
+/* Hide navbar when keyboard open */
+body.keyboard-open .navbar,
+body.keyboard-open .navbar-container,
+body.keyboard-open .navbar-dock-blur,
+body.keyboard-open .navbar-bottom-bezel {
   display: none !important;
   pointer-events: none !important;
   visibility: hidden !important;
 }
 
-/* Primary glass blur layer */
-.navbar::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background:
-    linear-gradient(180deg,
-      rgba(120, 110, 255, 0.06) 0%,
-      rgba(6, 5, 20, 0.08) 40%,
-      rgba(6, 5, 20, 0.0) 100%),
-    rgba(8, 8, 22, 0.62);
-  backdrop-filter: blur(48px) saturate(220%) brightness(0.68);
-  -webkit-backdrop-filter: blur(48px) saturate(220%) brightness(0.68);
-}
-
-/* Specular glass highlight — top rim sheen */
-.navbar::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.18) 20%,
-    rgba(255, 255, 255, 0.28) 50%,
-    rgba(255, 255, 255, 0.18) 80%,
-    transparent 100%);
-  z-index: 2;
-  pointer-events: none;
-}
-
-.navbar .nav-items {
-  position: relative;
-  z-index: 1;
-}
-
-/* Light theme navbar override */
-body.theme-light .navbar {
-  background: rgba(240, 240, 248, 0.62);
-  backdrop-filter: blur(48px) saturate(200%) brightness(1.06);
-  -webkit-backdrop-filter: blur(48px) saturate(200%) brightness(1.06);
-  border-top: 1px solid rgba(255, 255, 255, 0.72);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.85),
-    0 -12px 40px rgba(0, 0, 0, 0.09),
-    0 -1px 0 rgba(0, 0, 0, 0.10);
-}
-
-/* Hide navbar only in true landscape orientation — NOT when keyboard opens in portrait */
 @media (orientation: landscape) and (max-height: 500px) {
-  .navbar {
+  .navbar-container,
+  .navbar-dock-blur,
+  .navbar-bottom-bezel {
     display: none !important;
   }
 }
 
-/* When the soft keyboard is open (class injected by MainActivity.java IME insets listener):
-   - Hide the bottom nav bar so it doesn't float above the keyboard eating screen space
-   - Remove page padding-bottom so all content is visible while typing */
-body.keyboard-open .navbar {
-  display: none !important;
-  pointer-events: none;
-}
-
-body.keyboard-open .page,
-body.keyboard-open main {
-  padding-bottom: 0 !important;
-}
-
-@media (min-width: 768px) {
-  .navbar {
-    left: 50%;
-    transform: translateX(-50%);
-    max-width: 480px;
-    border-left: 0.5px solid rgba(255, 255, 255, 0.09);
-    border-right: 0.5px solid rgba(255, 255, 255, 0.09);
-  }
-}
-
-.nav-items {
+.navbar-capsule {
+  pointer-events: auto;
+  position: relative;
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 420px;
+  height: 58px;
+  padding: 3px 4px;
+  border-radius: 9999px;
+
+  /* Frosted deep liquid glass styling with lightweight GPU fillrate */
+  background: linear-gradient(135deg, rgba(24, 24, 34, 0.92) 0%, rgba(10, 10, 16, 0.96) 100%);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+
+  /* Specular highlight rim & multi-depth borders */
+  border: 1px solid rgba(255, 255, 255, 0.14);
+
+  /* Deep elevated drop shadow — optimized single layer for maximum GPU fillrate */
+  box-shadow:
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.22),
+    0 12px 32px -4px rgba(0, 0, 0, 0.85),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+  isolation: isolate;
+  overflow: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+}
+
+/* Specular light sheen inside top rim */
+.navbar-capsule::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.5) 50%, transparent 100%);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ── Sliding Liquid Glass Pill Indicator (Hardware-Accelerated Track) ── */
+.navbar-indicator-track {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 4px;
+  width: calc((100% - 8px) / 5);
+  pointer-events: none;
+  z-index: 1;
+  transition: transform 0.34s cubic-bezier(0.2, 0.9, 0.28, 1);
+  will-change: transform;
+}
+
+.navbar-indicator-pill {
   width: 100%;
   height: 100%;
-  align-items: center;
-  justify-content: space-around;
-  padding: 0 4px;
-  padding-bottom: 2px;
+  border-radius: 9999px;
+  background: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
+    0 4px 16px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* ── Tab Panel Smooth Transition ────────────────────────────────────── */
+.tab-panel {
+  width: 100%;
+}
+
+.tab-panel-active {
+  display: block !important;
+  animation: tabSmoothFade 0.24s cubic-bezier(0.2, 0.9, 0.28, 1);
+}
+
+.tab-panel-hidden {
+  display: none !important;
+}
+
+@keyframes tabSmoothFade {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* ── Nav item button ────────────────────────────────────────────────── */
 .nav-item {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 2px;
   flex: 1;
   height: 100%;
   background: transparent !important;
   border: none;
   outline: none !important;
   box-shadow: none !important;
-  padding-bottom: 2px;
-  position: relative;
-  -webkit-tap-highlight-color: transparent;
   cursor: pointer;
-  /* Pre-promote every nav button to its own GPU layer at startup.
-     Without this, the FIRST tap causes a 1-frame stutter as the
-     browser creates the layer on-demand (lazy promotion). */
+  padding: 0;
+  border-radius: 9999px;
+  -webkit-tap-highlight-color: transparent;
   transform: translateZ(0);
   -webkit-transform: translateZ(0);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
 }
 
-.nav-item:focus,
-.nav-item:hover {
-  background: transparent !important;
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   NAV BAR — Silky smooth with TRANSITIONS ONLY, zero @keyframes
-   Root cause of jank: @keyframes re-fires on every .active class
-   toggle, fighting the existing transition on the same property.
-   Pure transitions = GPU compositor only = true 60fps.
-   ══════════════════════════════════════════════════════════════════ */
-
-/* Tap press — instant scale down, GPU-smooth release */
 .nav-item:active .nav-icon-wrap {
-  transform: scale(0.88) translateY(-2px);
-  transition: transform 0.06s ease-out;
+  transform: scale(0.88);
+  transition: transform 0.09s cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* ── Icon wrapper ─────────────────────────────────────────────────── */
@@ -766,87 +767,109 @@ body.keyboard-open main {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 32px;
-  border-radius: 16px;
-  will-change: transform;
-  /* Force immediate GPU layer — no lazy promotion on first tap */
+  width: 28px;
+  height: 22px;
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Active pill: background/shadow appear instantly, position shifts smoothly */
 .nav-item.active .nav-icon-wrap {
-  transform: translateY(-2px);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    0 2px 8px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-body.theme-light .nav-item.active .nav-icon-wrap {
-  background: color-mix(in srgb, var(--accent) 14%, rgba(255,255,255,0.5));
+  transform: scale(1.12) translateY(-0.5px);
 }
 
 /* ── Icon SVG ─────────────────────────────────────────────────────── */
 .nav-item svg {
-  width: 22px;
-  height: 22px;
-  color: rgba(255, 255, 255, 0.42);
-  will-change: transform;
-  /* Immediate GPU layer promotion */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 20px;
+  height: 20px;
+  color: rgba(255, 255, 255, 0.46);
+  transition: color 0.28s cubic-bezier(0.4, 0, 0.2, 1), transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nav-item.active svg {
-  color: var(--accent);     /* instant — no color transition */
-  transform: scale(1.1);    /* GPU smooth */
-  /* NO filter: drop-shadow — requires full repaint every frame on Android */
+  color: #ffffff;
+  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.45));
 }
 
 /* ── Label text ───────────────────────────────────────────────────── */
 .nav-label {
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 500;
   font-family: var(--font-main, sans-serif);
-  letter-spacing: 0.15px;
-  color: rgba(255, 255, 255, 0.38);
-  /* ONLY transform is GPU-compositable — color/opacity change is instant */
-  will-change: transform;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.46);
   line-height: 1;
   white-space: nowrap;
-  transform: translateY(0);
-  opacity: 0.85;
+  margin-top: 1px;
+  transition: color 0.28s cubic-bezier(0.4, 0, 0.2, 1), font-weight 0.22s ease, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nav-item.active .nav-label {
-  color: var(--accent);     /* instant */
-  font-weight: 700;
-  transform: translateY(-1px); /* GPU smooth */
-  opacity: 1;               /* instant */
+  color: #ffffff;
+  font-weight: 600;
+  transform: translateY(-0.5px);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
 }
 
 /* ── Notification badge ───────────────────────────────────────────── */
 .nav-badge {
   position: absolute;
-  top: 1px;
-  right: 3px;
-  width: 8px;
-  height: 8px;
-  background: #ef4444;
+  top: -1px;
+  right: -1px;
+  width: 6.5px;
+  height: 6.5px;
+  background: #ff3b30;
   border-radius: 50%;
-  border: 1.5px solid rgba(8, 8, 22, 0.92);
-  animation: badgePop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+  border: 1.5px solid rgba(12, 12, 18, 0.95);
+  box-shadow: 0 0 6px rgba(255, 59, 48, 0.6);
+  animation: badgePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
 @keyframes badgePop {
   from { transform: scale(0); opacity: 0; }
   to   { transform: scale(1); opacity: 1; }
+}
+
+/* ── Light theme navbar override ──────────────────────────────────── */
+body.theme-light .navbar-bottom-bezel {
+  background: #e4e4ed;
+}
+
+body.theme-light .navbar-dock-blur {
+  background: linear-gradient(to top, rgba(230, 230, 240, 0.94) 0%, rgba(230, 230, 240, 0.70) 50%, rgba(230, 230, 240, 0.25) 80%, transparent 100%);
+}
+
+body.theme-light .navbar-capsule {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88) 0%, rgba(240, 240, 248, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 1),
+    0 16px 40px -4px rgba(0, 0, 0, 0.12),
+    0 6px 16px -2px rgba(0, 0, 0, 0.08);
+}
+
+body.theme-light .navbar-indicator-pill {
+  background: rgba(0, 0, 0, 0.07);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+body.theme-light .nav-item svg {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+body.theme-light .nav-item.active svg {
+  color: var(--accent, #6c5ce7);
+  filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent));
+}
+
+body.theme-light .nav-label {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+body.theme-light .nav-item.active .nav-label {
+  color: var(--accent, #6c5ce7);
+  font-weight: 600;
+  text-shadow: none;
 }
 
 
@@ -1595,11 +1618,11 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   position: sticky;
   top: 0;
   z-index: 90;
-  background: rgba(15, 15, 15, 0.82);
-  backdrop-filter: blur(35px) saturate(200%);
-  -webkit-backdrop-filter: blur(35px) saturate(200%);
+  background: rgba(12, 12, 16, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-bottom: 0.5px solid var(--border);
-  transition: all 0.3s ease;
+  transition: all 0.25s ease;
   padding-top: var(--sat);
 }
 
@@ -1822,27 +1845,20 @@ body.compact-cards .mylist-card select {
 }
 
 /* ─── Card Entrance Animation — lightweight, GPU-composited ─────────── */
-/* Uses translate3d so it runs on the GPU compositor thread, no jank */
+/* Uses translate3d and opacity for 120 FPS buttery smoothness without GPU shader cost */
 @keyframes cardEntrance {
   0% {
     opacity: 0;
-    transform: translateY(16px) scale(0.94);
-    filter: blur(3px);
-  }
-  60% {
-    opacity: 1;
-    filter: blur(0.5px);
+    transform: translateY(12px) scale(0.96);
   }
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
 }
 
 .card-entrance {
-  animation: cardEntrance 0.52s cubic-bezier(0.34, 1.45, 0.64, 1) both;
-  will-change: transform, opacity, filter;
+  animation: cardEntrance 0.38s cubic-bezier(0.34, 1.45, 0.64, 1) both;
 }
 
 /* ─── Card label below card ────────────────────────────────────────── */
@@ -1990,40 +2006,37 @@ body.compact-cards .mylist-card select {
 /* ── Netflix-Style Top 10 Rank Number ──────────────────────────────── */
 .rank-number {
   position: absolute;
-  left: -2px;
-  bottom: 22px;
-  font-size: 88px;
+  left: 0px;
+  bottom: 20px;
+  font-size: 80px;
   font-weight: 900;
   font-style: italic;
-  line-height: 0.72;
-  letter-spacing: -8px;
+  font-family: var(--font-brand), sans-serif;
+  line-height: 0.76;
+  letter-spacing: -6px;
   color: var(--bg-primary);
-  -webkit-text-stroke: 2.5px rgba(255, 255, 255, 0.45);
+  -webkit-text-stroke: 2.2px rgba(255, 255, 255, 0.45);
   paint-order: stroke fill;
   z-index: 0;
   pointer-events: none;
   user-select: none;
-  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.7));
-  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.85));
+  transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1);
 }
 
-/* ── Hero Play Button Glow Pulse ──────────────────────────────────── */
-@keyframes heroPlayGlow {
-  0%, 100% {
-    box-shadow:
-      0 8px 32px -6px var(--accent-glow),
-      0 1px 0 rgba(255,255,255,0.2) inset;
-  }
-  50% {
-    box-shadow:
-      0 8px 48px -4px rgba(108, 99, 255, 0.55),
-      0 0 24px rgba(108, 99, 255, 0.25),
-      0 1px 0 rgba(255,255,255,0.2) inset;
-  }
+.rank-number.rank-double-digit {
+  font-size: 64px;
+  letter-spacing: -6px;
+  bottom: 22px;
+  -webkit-text-stroke: 2px rgba(255, 255, 255, 0.45);
 }
 
+/* ── Hero Play Button Glow ────────────────────────────────────────── */
 .hero-play-glow {
-  animation: heroPlayGlow 3s ease-in-out infinite;
+  box-shadow:
+    0 6px 24px -4px var(--accent-glow),
+    0 1px 0 rgba(255,255,255,0.2) inset;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 /* ── Continue Watching — show remove button on touch/hover ────────── */
@@ -2127,19 +2140,16 @@ body.compact-cards .mylist-card select {
 @keyframes playerContentEntrance {
   0% {
     opacity: 0;
-    transform: translateY(12px) scale(0.99);
-    filter: blur(1px);
+    transform: translateY(8px) scale(0.99);
   }
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
 }
 
 .player-content-soft-fade {
-  animation: playerContentEntrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.08s both;
-  will-change: transform, opacity;
+  animation: playerContentEntrance 0.35s cubic-bezier(0.16, 1, 0.3, 1) 0.04s both;
 }
 
 /* ─── Soft content transition for server/episode switching ───── */
@@ -2166,4 +2176,122 @@ body.compact-cards .mylist-card select {
   50% {
     box-shadow: 0 2px 18px color-mix(in srgb, var(--accent) 50%, transparent);
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   120 FPS HARDWARE ACCELERATED VIEW TRANSITIONS API (GPU COMPOSITED)
+   ══════════════════════════════════════════════════════════════════════ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  animation-name: viewTransitionFadeOut;
+}
+
+::view-transition-new(root) {
+  animation-name: viewTransitionFadeSlideIn;
+}
+
+@keyframes viewTransitionFadeOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+@keyframes viewTransitionFadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   VAUL MODERN 120 FPS BOTTOM SHEET / DRAWER SYSTEM
+   ══════════════════════════════════════════════════════════════════════ */
+.vaul-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 10000;
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vaul-drawer-content {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border-top-left-radius: 28px;
+  border-top-right-radius: 28px;
+  border: 1px solid var(--border-strong);
+  border-bottom: none;
+  box-shadow: var(--shadow-sheet);
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  outline: none;
+  transform: translateZ(0);
+  will-change: transform;
+  padding-bottom: max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 32px);
+}
+
+.vaul-drawer-handle {
+  width: 38px;
+  height: 4.5px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  margin: 12px auto 8px;
+  flex-shrink: 0;
+}
+
+.vaul-drawer-header {
+  padding: 8px 20px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.vaul-drawer-body {
+  padding: 16px 20px calc(28px + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   VIRTUALIZED GRID / LIST CONTAINERS (ZERO MEMORY BLOAT)
+   ══════════════════════════════════════════════════════════════════════ */
+.virtual-scroll-viewport {
+  width: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  contain: strict;
+  transform: translateZ(0);
+}
+
+.virtual-row-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  will-change: transform;
 }

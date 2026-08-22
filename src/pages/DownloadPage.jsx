@@ -1,8 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Download as DownloadIcon, Trash2, CheckCircle2, Film, AlertCircle, X, Play } from "lucide-react";
+import { ScreenOrientation } from "@capacitor/screen-orientation";
+import { registerPlugin, Capacitor } from "@capacitor/core";
 import { downloadManager } from "../utils/DownloadManager";
+import { registerBackButtonHandler } from "../utils/backButton";
 import AniPlayer from "../components/AniPlayer";
+
+const EmbedScraper = registerPlugin("EmbedScraper");
 
 function ProgressRing({ progress, size = 52, stroke = 3.5 }) {
   const r = (size - stroke) / 2;
@@ -26,6 +31,43 @@ function LocalPlayerOverlay({ item, onClose }) {
   const [playerData, setPlayerData] = useState(null);
   const [error, setError] = useState(null);
 
+  // Lock to landscape + immersive fullscreen mode immediately on mount
+  useEffect(() => {
+    const isNative = Capacitor.isNativePlatform();
+    if (isNative) {
+      if (EmbedScraper?.setOrientation) {
+        EmbedScraper.setOrientation({ orientation: "sensor-landscape" }).catch(() => {});
+      }
+      ScreenOrientation.lock({ orientation: "sensor-landscape" })
+        .catch(() => ScreenOrientation.lock({ orientation: "landscape" }).catch(() => {}));
+      if (EmbedScraper?.setImmersiveMode) {
+        EmbedScraper.setImmersiveMode({ enabled: true }).catch(() => {});
+      }
+    }
+
+    // Handle Android hardware/gesture back button to exit video player cleanly
+    const unregisterBack = registerBackButtonHandler(() => {
+      onClose();
+      return true;
+    });
+
+    return () => {
+      unregisterBack();
+      if (isNative) {
+        // Restore portrait orientation and navigation bar when player closes
+        if (EmbedScraper?.setOrientation) {
+          EmbedScraper.setOrientation({ orientation: "portrait" }).catch(() => {});
+        }
+        ScreenOrientation.lock({ orientation: "portrait" })
+          .then(() => ScreenOrientation.unlock())
+          .catch(() => {});
+        if (EmbedScraper?.setImmersiveMode) {
+          EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
+        }
+      }
+    };
+  }, [onClose]);
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -39,7 +81,11 @@ function LocalPlayerOverlay({ item, onClose }) {
           setError("Video file not found. It may have been deleted from your Downloads folder.");
           return;
         }
-        setPlayerData({ videoUri: uris.videoUri, subtitleUri: uris.subtitleUri || null });
+        setPlayerData({
+          videoUri: uris.videoUri,
+          subtitleUri: uris.subtitleUri || null,
+          subtitleContent: uris.subtitleContent || null
+        });
       } catch (e) {
         if (!cancelled) setError(e.message || "Failed to open video");
       }
@@ -48,8 +94,15 @@ function LocalPlayerOverlay({ item, onClose }) {
     return () => { cancelled = true; };
   }, [item]);
 
-  const subtracks = playerData && playerData.subtitleUri
-    ? [{ id: 0, file: playerData.subtitleUri, label: "English", kind: "captions", default: true }]
+  const subtracks = playerData && (playerData.subtitleContent || playerData.subtitleUri)
+    ? [{
+        id: 0,
+        file: playerData.subtitleUri || 'local://subtitles.vtt',
+        content: playerData.subtitleContent || null,
+        label: "English",
+        kind: "captions",
+        default: true
+      }]
     : [];
 
   return (
@@ -124,9 +177,10 @@ export default function DownloadPage() {
 
   const handleDelete = async (animeId, episode, track) => {
     try {
-      await downloadManager.deleteDownload(animeId, episode, track || "sub");
+      setDownloads(prev => prev.filter(d => !(String(d.animeId) === String(animeId) && String(d.episode) === String(episode) && (d.track || "sub") === (track || "sub"))));
+      await downloadManager.cancelDownload(animeId, episode, track || "sub");
       fetchDownloads();
-    } catch (e) { console.error("[DownloadPage] Failed to clear download:", e); }
+    } catch (e) { console.error("[DownloadPage] Failed to cancel download:", e); }
   };
 
   const activeCount = downloads.filter(d => d.status !== "completed" && d.status !== "error").length;
@@ -138,7 +192,7 @@ export default function DownloadPage() {
 
       <div className="page fade-in-up" style={{
         paddingTop: "calc(var(--sat) + 56px)",
-        paddingBottom: "calc(var(--nav-height, 56px) + var(--android-safe-bottom, 16px) + 16px)",
+        paddingBottom: "calc(var(--nav-height, 60px) + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 32px) + 48px)",
         minHeight: "100vh",
       }}>
 

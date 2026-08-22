@@ -21,6 +21,7 @@ import WatchedPage from './pages/WatchedPage';
 import HistoryPage from './pages/HistoryPage';
 import Notifications from './pages/Notifications';
 import Navbar from './components/Navbar';
+import { requestInitialPermissions } from './api/permissions';
 
 // registerPlugin must run after all imports are resolved
 const APKUpdater = registerPlugin('APKUpdater');
@@ -94,13 +95,10 @@ function AppInner({ showWelcome, onEnter }) {
     };
   }, [isNative]);
 
-  // Request storage permissions on first app launch for offline downloads and playback
+  // Request storage & notification permissions ONCE on first app launch
   useEffect(() => {
     if (!isNative) return;
-    try {
-      const OfflineDownloader = registerPlugin('OfflineDownloader');
-      OfflineDownloader?.requestStoragePermissions?.().catch(() => {});
-    } catch (_) {}
+    requestInitialPermissions().catch(() => {});
   }, [isNative]);
 
   useEffect(() => {
@@ -182,32 +180,68 @@ function AppInner({ showWelcome, onEnter }) {
     };
   }, [navigate, isNative]);
 
+  const path = location.pathname;
+  const isMainTab = path === '/' || path === '/schedule' || path === '/mylist' || path === '/download' || path === '/profile';
+  let currentTab = 'home';
+  if (path.startsWith('/schedule')) currentTab = 'schedule';
+  else if (path.startsWith('/mylist')) currentTab = 'mylist';
+  else if (path.startsWith('/download')) currentTab = 'download';
+  else if (path.startsWith('/profile')) currentTab = 'profile';
+
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set([currentTab]));
+
+  useEffect(() => {
+    if (isMainTab) {
+      setVisitedTabs(prev => {
+        if (prev.has(currentTab)) return prev;
+        const next = new Set(prev);
+        next.add(currentTab);
+        return next;
+      });
+    }
+  }, [isMainTab, currentTab]);
+
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>
       {showWelcome ? (
         <WelcomeScreen onEnter={onEnter} onSignIn={() => setShowFirstTimeAuth(true)} />
       ) : (
         <>
-          {/* Route container — no key prop so pages preserve state across navigations.
-              React Router handles mount/unmount; cache provides instant re-renders. */}
-          <div style={{ position: 'relative', flex: 1 }}>
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/browse" element={<Browse />} />
-              <Route path="/schedule" element={<Schedule />} />
-              <Route path="/anime/:id" element={<AnimePage />} />
-              <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
-              <Route path="/mylist" element={<MyList />} />
-              <Route path="/favorites" element={<FavoritesPage />} />
-              <Route path="/watched" element={<WatchedPage />} />
-              <Route path="/history" element={<HistoryPage />} />
-              <Route path="/download" element={<DownloadPage />} />
-              <Route path="/profile" element={<Profile />} />
-              <Route path="/notifications" element={<Notifications />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+          {/* Main Tab Stage — Lazy Persistent Mounting (Instant Launch + 120 FPS Kept-Alive Tabs) */}
+          <div className="tab-stage" style={{ display: isMainTab ? 'block' : 'none', flex: 1, position: 'relative' }}>
+            <div className={`tab-panel ${currentTab === 'home' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+              {visitedTabs.has('home') && <Home />}
+            </div>
+            <div className={`tab-panel ${currentTab === 'schedule' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+              {visitedTabs.has('schedule') && <Schedule />}
+            </div>
+            <div className={`tab-panel ${currentTab === 'mylist' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+              {visitedTabs.has('mylist') && <MyList />}
+            </div>
+            <div className={`tab-panel ${currentTab === 'download' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+              {visitedTabs.has('download') && <DownloadPage />}
+            </div>
+            <div className={`tab-panel ${currentTab === 'profile' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+              {visitedTabs.has('profile') && <Profile />}
+            </div>
           </div>
-          {!playParam && <Navbar />}
+
+          {/* Sub-routes (Anime detail, Search, Notifications, History, etc.) */}
+          {!isMainTab && (
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Routes>
+                <Route path="/browse" element={<Browse />} />
+                <Route path="/anime/:id" element={<AnimePage />} />
+                <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
+                <Route path="/favorites" element={<FavoritesPage />} />
+                <Route path="/watched" element={<WatchedPage />} />
+                <Route path="/history" element={<HistoryPage />} />
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </div>
+          )}
+          {isMainTab ? <Navbar /> : (!playParam && <div className="app-bottom-bezel" aria-hidden="true" />)}
         </>
       )}
       <AuthModal isOpen={showFirstTimeAuth} onClose={() => { setShowFirstTimeAuth(false); localStorage.setItem('aniplay_onboarded', 'true'); }} />
@@ -587,7 +621,8 @@ export default function App() {
                   color: '#fff',
                   fontSize: 13, fontWeight: 700,
                   cursor: (typeof updateProgress === 'number' || updateProgress === 'installing') ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.2s',
+                  touchAction: 'manipulation',
+                  transition: 'background-color 0.2s ease, opacity 0.2s ease, transform 0.15s ease',
                 }}
               >
                 {updateProgress === 'installing' && '⏳ Installing…'}

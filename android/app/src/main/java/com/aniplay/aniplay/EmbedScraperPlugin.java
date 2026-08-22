@@ -121,7 +121,7 @@ public class EmbedScraperPlugin extends Plugin {
                     // Filter ad segments: only block ibyteimg.com URLs that explicitly contain
                     // ad path markers like 'ad-site', 'ad-sg', or '/ad/'. Real video segments
                     // on ibyteimg.com (if any) will NOT be blocked by this smarter filter.
-                    boolean isAdM3u8 = (lowerReq.contains("ibyteimg.com") && (lowerReq.contains("ad-site") || lowerReq.contains("ad-sg") || lowerReq.contains("/ad/")));
+                    boolean isAdM3u8 = lowerReq.contains("doubleclick") || lowerReq.contains("googleads") || lowerReq.contains("adserver") || lowerReq.contains("popads");
 
                     if (!captured && !isAdM3u8 && (
                             lowerReq.contains(".m3u8") 
@@ -252,6 +252,25 @@ public class EmbedScraperPlugin extends Plugin {
                 ((MainActivity) getActivity()).applyFullscreen();
             }
             call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void setOrientation(final PluginCall call) {
+        final String orientation = call.getString("orientation", "portrait");
+        getActivity().runOnUiThread(() -> {
+            try {
+                if ("landscape".equalsIgnoreCase(orientation) || "sensor-landscape".equalsIgnoreCase(orientation)) {
+                    getActivity().setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                } else if ("portrait".equalsIgnoreCase(orientation)) {
+                    getActivity().setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                } else if ("unlocked".equalsIgnoreCase(orientation) || "unspecified".equalsIgnoreCase(orientation)) {
+                    getActivity().setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                }
+                call.resolve();
+            } catch (Exception e) {
+                call.reject("Failed setting orientation: " + e.getMessage());
+            }
         });
     }
 
@@ -543,13 +562,17 @@ public class EmbedScraperPlugin extends Plugin {
 
     private void destroyWebView() {
         if (scrapeWebView != null) {
-            scrapeWebView.stopLoading();
-            scrapeWebView.clearHistory();
-            ViewGroup parent = (ViewGroup) scrapeWebView.getParent();
-            if (parent != null) {
-                parent.removeView(scrapeWebView);
-            }
-            scrapeWebView.destroy();
+            try {
+                scrapeWebView.stopLoading();
+                scrapeWebView.onPause();
+                scrapeWebView.loadUrl("about:blank");
+                scrapeWebView.clearHistory();
+                ViewGroup parent = (ViewGroup) scrapeWebView.getParent();
+                if (parent != null) {
+                    parent.removeView(scrapeWebView);
+                }
+                scrapeWebView.destroy();
+            } catch (Exception ignored) {}
             scrapeWebView = null;
         }
     }

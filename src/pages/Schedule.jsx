@@ -39,17 +39,27 @@ export default function Schedule() {
   const dayTabsRef = useRef(null);
   const headerRef = useRef(null);
 
-  // Scroll listener for header transparency (same logic as Home)
+  // Scroll listener for header transparency (throttled via RAF + deduplicated boolean check)
+  const scrolledRef = useRef(false);
   useEffect(() => {
+    let ticking = false;
     const handleScroll = () => {
-      const y = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-      setScrolled(y > 20);
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          const y = window.scrollY || document.documentElement.scrollTop || 0;
+          const isOver = y > 20;
+          if (isOver !== scrolledRef.current) {
+            scrolledRef.current = isOver;
+            setScrolled(isOver);
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
-    document.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
       window.removeEventListener('scroll', handleScroll);
-      document.removeEventListener('scroll', handleScroll);
     };
   }, []);
 
@@ -117,7 +127,6 @@ export default function Schedule() {
         backdropFilter: 'blur(40px) saturate(180%)',
         WebkitBackdropFilter: 'blur(40px) saturate(180%)',
         borderBottom: '0.5px solid rgba(255,255,255,0.07)',
-        transition: 'all 0.3s ease',
       }}>
         {/* Brand row */}
         <div style={{

@@ -201,21 +201,27 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
         /* Upward scroll */
         .ws-col--left {
           animation: scrollUp 28s linear infinite;
+          transform: translate3d(0, 0, 0);
+          will-change: transform;
+          backface-visibility: hidden;
         }
 
         /* Downward scroll */
         .ws-col--right {
           animation: scrollDown 34s linear infinite;
           margin-top: -80px; /* offset so they don't start at same position */
+          transform: translate3d(0, 0, 0);
+          will-change: transform;
+          backface-visibility: hidden;
         }
 
         @keyframes scrollUp {
-          from { transform: translateY(0); }
-          to   { transform: translateY(-33.33%); }
+          from { transform: translate3d(0, 0, 0); }
+          to   { transform: translate3d(0, -33.33%, 0); }
         }
         @keyframes scrollDown {
-          from { transform: translateY(-33.33%); }
-          to   { transform: translateY(0); }
+          from { transform: translate3d(0, -33.33%, 0); }
+          to   { transform: translate3d(0, 0, 0); }
         }
 
         .ws-poster {
@@ -226,6 +232,7 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
           box-shadow: 0 4px 20px rgba(0,0,0,0.5);
           /* CSS gradient placeholder shown before image loads */
           background: linear-gradient(160deg, rgba(124,58,237,0.25) 0%, rgba(15,15,20,1) 100%);
+          transform: translate3d(0, 0, 0);
         }
         .ws-poster img {
           width: 100%;
@@ -250,29 +257,30 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
           pointer-events: none;
         }
 
-        /* Subtle ambient color orbs */
+        /* Subtle ambient color orbs — pure radial gradients without CPU blur filters */
         .ws-glow {
           position: absolute;
           border-radius: 50%;
           pointer-events: none;
-          filter: blur(90px);
           animation: glowPulse 8s ease-in-out infinite alternate;
+          transform: translate3d(0, 0, 0);
+          will-change: transform, opacity;
         }
         .ws-glow-1 {
-          width: 280px; height: 280px;
-          background: radial-gradient(circle, rgba(124,58,237,0.55) 0%, transparent 70%);
+          width: 320px; height: 320px;
+          background: radial-gradient(circle, rgba(124,58,237,0.45) 0%, rgba(124,58,237,0.15) 45%, transparent 70%);
           bottom: 30%; left: -80px;
         }
         .ws-glow-2 {
-          width: 240px; height: 240px;
-          background: radial-gradient(circle, rgba(10,132,255,0.40) 0%, transparent 70%);
+          width: 280px; height: 280px;
+          background: radial-gradient(circle, rgba(10,132,255,0.35) 0%, rgba(10,132,255,0.10) 45%, transparent 70%);
           bottom: 20%; right: -60px;
           animation-duration: 11s;
           animation-direction: alternate-reverse;
         }
         @keyframes glowPulse {
-          from { opacity: 0.35; transform: scale(0.9); }
-          to   { opacity: 0.65; transform: scale(1.1); }
+          from { opacity: 0.35; transform: translate3d(0, 0, 0) scale(0.9); }
+          to   { opacity: 0.65; transform: translate3d(0, 0, 0) scale(1.1); }
         }
 
         /* ─── Content ───────────────────────────────────────────── */

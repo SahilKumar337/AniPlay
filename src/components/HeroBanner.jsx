@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { Play, Plus, Check, Star } from 'lucide-react';
-import { getTitle, getCover } from '../api/anilist';
+import { getTitle } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 
 const AUTO_INTERVAL = 7000;
@@ -202,8 +203,10 @@ export default function HeroBanner({ animes = [] }) {
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <button
-              onClick={() => navigate(`/anime/${anime.id}`)}
+            <motion.button
+              onClick={() => navigate(`/anime/${anime.id}`, { viewTransition: true })}
+              whileTap={{ scale: 0.94 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 28 }}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
                 padding: '10px 24px', borderRadius: 28,
@@ -211,25 +214,27 @@ export default function HeroBanner({ animes = [] }) {
                 color: '#fff', border: 'none', fontSize: 13, fontWeight: 800,
                 cursor: 'pointer',
                 boxShadow: '0 4px 20px color-mix(in srgb, var(--accent) 40%, transparent)',
-                transition: 'transform 0.2s ease, box-shadow 0.2s ease',
               }}
             >
               <Play size={15} fill="#fff" strokeWidth={0} />
               Play
-            </button>
-            <button
+            </motion.button>
+            <motion.button
               onClick={() => inList ? removeFromWatchlist(anime.id) : addToWatchlist(anime)}
+              whileTap={{ scale: 0.90 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 28 }}
               style={{
                 width: 38, height: 38, borderRadius: 19, flexShrink: 0,
                 background: inList ? 'rgba(124,58,237,0.2)' : 'rgba(255,255,255,0.1)',
                 border: `1.5px solid ${inList ? 'rgba(124,58,237,0.5)' : 'rgba(255,255,255,0.2)'}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 color: inList ? 'var(--accent)' : '#fff', cursor: 'pointer',
-                transition: 'all 0.3s cubic-bezier(0.25, 1, 0.3, 1)',
+                touchAction: 'manipulation',
+                transition: 'background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease',
               }}
             >
               {inList ? <Check size={17} /> : <Plus size={17} />}
-            </button>
+            </motion.button>
           </div>
         </div>
 

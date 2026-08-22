@@ -37,8 +37,8 @@ export function invalidateStreamCache(anime, episode) {
   console.log(`[ClientEngine] Invalidated stream cache for: ${cacheKey}`);
 }
 
-export async function getAniNekoServers(anime, episode, onServersFound) {
-  const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}`;
+export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko = false) {
+  const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}${onlyNeko ? '-neko' : ''}`;
   
   // Check client cache first
   if (clientStreamCache.has(cacheKey)) {
@@ -100,12 +100,19 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     if (data?.servers?.length) {
       data.servers.forEach(s => {
         const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim().split(' ')[0];
-        // Allow all known good server prefixes:
-        // Neko-StreamHG, Neko-Earnvids, NekoHD (old name), WavesHD, Waves-*, AniHD, AniVid
-        const isAllowed = baseName.startsWith('Neko')
-          || baseName.startsWith('Waves')
-          || ['WavesHD', 'AniHD', 'AniVid'].includes(baseName);
-        if (!isAllowed) return; // skip unrecognized servers
+        // Allowed servers: NekoHD (direct HLS, no Cloudflare)
+        // BLOCKED: Neko-StreamHG, Neko-Earnvids, otakuhg — Cloudflare-protected
+        const sNameLow = (s.name || '').toLowerCase();
+        const sEmbedLow = (s.embedUrl || '').toLowerCase();
+        const sVideoLow = (s.videoUrl || '').toLowerCase();
+        if (sNameLow.includes('streamhg') || sNameLow.includes('earnvids') || sNameLow.includes('otakuhg')) return;
+        if (sEmbedLow.includes('otakuhg') || sEmbedLow.includes('streamhg') || sEmbedLow.includes('earnvids')) return;
+        if (sVideoLow.includes('otakuhg') || sVideoLow.includes('streamhg') || sVideoLow.includes('earnvids')) return;
+
+        const isAllowed = onlyNeko
+          ? baseName.startsWith('Neko')
+          : (baseName.startsWith('Neko') || baseName.startsWith('Waves') || ['WavesHD', 'AniHD', 'AniVid'].includes(baseName));
+        if (!isAllowed) return; // skip non-allowed servers
 
         // Prevent duplicate server items
         if (!combinedServers.some(x => x.name === s.name && x.type === s.type)) {
@@ -115,15 +122,15 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // Prioritize: Neko-StreamHG > Neko-Earnvids > other Neko > WavesHD > AniHD > AniVid
+      // Prioritize ultra-fast direct CDN streaming servers: AniHD > Neko-HD-2 (Cloudflare) > WavesHD > AniVid > NekoHD (HD-1 ByteDance)
       combinedServers.sort((a, b) => {
         const getPriority = (name) => {
-          if (name.includes('StreamHG')) return 0;
-          if (name.includes('Earnvids')) return 1;
-          if (name.startsWith('Neko')) return 2;
-          if (name.includes('Waves') || name === 'WavesHD') return 3;
-          if (name === 'AniHD') return 4;
-          if (name === 'AniVid') return 5;
+          if (name.startsWith('AniHD') || name === 'AniHD') return 0;
+          if (name.includes('HD-2') || name === 'Neko-HD-2' || name === 'Neko-HD-2 (DUB)') return 1;
+          if (name.includes('Waves') || name === 'WavesHD') return 2;
+          if (name.startsWith('AniVid') || name === 'AniVid') return 3;
+          if (name === 'NekoHD' || name === 'NekoHD (DUB)' || name === 'NekoHD-HardSub') return 4;
+          if (name.startsWith('Neko')) return 5;
           return 6;
         };
         return getPriority(a.name) - getPriority(b.name);
@@ -136,8 +143,6 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
   };
 
   // Each scraper tries all title variants in PARALLEL — first success wins instantly.
-  // allTitles is passed to scrapers so they can internally search with ALL naming systems
-  // (e.g. both romaji and English names) and use cross-language trigram matching.
   const tryAllTitles = async (scraperFn, scraperName) => {
     const attempts = titles.map(async (title) => {
       try {
@@ -160,24 +165,31 @@ export async function getAniNekoServers(anime, episode, onServersFound) {
     }
   };
 
-  const nekoPromise    = tryAllTitles(scrapeAniNeko,   'AniNeko');
-  const wavesPromise   = tryAllTitles(scrapeAniWaves,  'AniWaves');
-  const anikotoPromise = tryAllTitles(scrapeAniKoto,   'AniKoto');
+  const nekoPromise = tryAllTitles(scrapeAniNeko, 'AniNeko');
 
-  const results = await Promise.allSettled([
-    runWithTimeout(nekoPromise,    18000, 'AniNeko').catch(e  => { console.warn(e.message); return null; }),
-    runWithTimeout(wavesPromise,   18000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
-    runWithTimeout(anikotoPromise, 18000, 'AniKoto').catch(e  => { console.warn(e.message); return null; }),
-  ]);
+  let results;
+  if (onlyNeko) {
+    // Ultra-fast path: only fetch AniNeko (takes ~200-400ms, no waiting for third-party scrapers)
+    results = await Promise.allSettled([
+      runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; })
+    ]);
+  } else {
+    const wavesPromise   = tryAllTitles(scrapeAniWaves,  'AniWaves');
+    const anikotoPromise = tryAllTitles(scrapeAniKoto,   'AniKoto');
+
+    results = await Promise.allSettled([
+      runWithTimeout(nekoPromise,    18000, 'AniNeko').catch(e  => { console.warn(e.message); return null; }),
+      runWithTimeout(wavesPromise,   18000, 'AniWaves').catch(e => { console.warn(e.message); return null; }),
+      runWithTimeout(anikotoPromise, 18000, 'AniKoto').catch(e  => { console.warn(e.message); return null; }),
+    ]);
+  }
 
   if (combinedServers.length === 0) {
     throw new Error(`Failed to resolve any video servers. Details:\n${errors.join('\n')}`);
   }
 
   const nekoSuccess = results[0].status === 'fulfilled' && results[0].value;
-  const wavesSuccess = results[1].status === 'fulfilled' && results[1].value;
-  const anikotoSuccess = results[2].status === 'fulfilled' && results[2].value;
-  const isPartial = !nekoSuccess || !wavesSuccess || !anikotoSuccess;
+  const isPartial = onlyNeko ? !nekoSuccess : (!nekoSuccess || results[1]?.status !== 'fulfilled' || results[2]?.status !== 'fulfilled');
 
   const resultData = {
     ok: true,

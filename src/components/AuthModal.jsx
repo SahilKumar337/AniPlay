@@ -35,7 +35,7 @@ const APPLE_INPUT_STYLE = {
   fontSize: 15,
   fontWeight: 500,
   outline: 'none',
-  transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+  transition: 'border-color 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease',
   boxSizing: 'border-box',
   fontFamily: 'inherit',
 };
@@ -222,12 +222,12 @@ export default function AuthModal({ isOpen, onClose }) {
     >
       <style>{`
         @keyframes applePopEnter {
-          0% { opacity: 0; transform: scale(0.92) translateY(16px); filter: blur(8px); }
-          100% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
+          0% { opacity: 0; transform: translate3d(0, 18px, 0) scale(0.94); }
+          100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
         }
         @keyframes applePopExit {
-          0% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
-          100% { opacity: 0; transform: scale(0.94) translateY(14px); filter: blur(8px); }
+          0% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+          100% { opacity: 0; transform: translate3d(0, 14px, 0) scale(0.96); }
         }
       `}</style>
 
@@ -239,9 +239,9 @@ export default function AuthModal({ isOpen, onClose }) {
           padding: '34px 28px', position: 'relative',
           boxShadow: '0 32px 96px rgba(0, 0, 0, 0.8), inset 0 1px 1px rgba(255, 255, 255, 0.2)',
           boxSizing: 'border-box',
-          animation: isClosing ? 'applePopExit 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards' : 'applePopEnter 0.32s cubic-bezier(0.16, 1, 0.3, 1)',
-          willChange: 'transform, opacity, filter',
-          transform: 'translateZ(0)',
+          animation: isClosing ? 'applePopExit 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards' : 'applePopEnter 0.30s cubic-bezier(0.16, 1, 0.3, 1)',
+          willChange: 'transform, opacity',
+          transform: 'translate3d(0, 0, 0)',
           backfaceVisibility: 'hidden',
         }}
       >
@@ -256,7 +256,8 @@ export default function AuthModal({ isOpen, onClose }) {
             borderRadius: '50%', width: 34, height: 34,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: 'rgba(255, 255, 255, 0.85)', cursor: 'pointer', zIndex: 2,
-            transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+            touchAction: 'manipulation',
+            transition: 'background-color 0.2s ease, transform 0.15s ease',
             boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
           }}
           onTouchStart={e => e.currentTarget.style.transform = 'scale(0.92)'}

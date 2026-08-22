@@ -11,6 +11,7 @@ import { useApp } from "../context/AppContext";
 import { useNavigate } from "react-router-dom";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App as CapApp } from "@capacitor/app";
+import { registerBackButtonHandler } from "../utils/backButton";
 import AuthModal from "../components/AuthModal";
 import { cloudSignOut, supabase, fetchUserProfile, saveAvatarToProfile } from "../api/supabase";
 import { getTitle } from "../api/anilist";
@@ -195,17 +196,21 @@ function Toggle({ value, onChange }) {
       width: 50, height: 28, borderRadius: 14, flexShrink: 0, cursor: "pointer",
       background: value ? "var(--accent)" : "rgba(255,255,255,0.1)",
       position: "relative",
-      transition: "background 0.28s cubic-bezier(0.4,0,0.2,1)",
+      transition: "background 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)",
       boxShadow: value ? "0 0 16px -4px var(--accent)" : "inset 0 1px 3px rgba(0,0,0,0.3)",
       border: "1px solid rgba(255,255,255,0.08)",
+      touchAction: 'manipulation',
+      transform: 'translateZ(0)',
     }}>
       <div style={{
         position: "absolute", top: 4,
-        left: value ? 24 : 4,
+        left: 4,
         width: 18, height: 18, borderRadius: "50%",
         background: "#fff",
         boxShadow: "0 2px 8px rgba(0,0,0,0.45)",
-        transition: "left 0.26s cubic-bezier(0.34,1.5,0.64,1)",
+        transform: value ? 'translate3d(22px, 0, 0)' : 'translate3d(0, 0, 0)',
+        transition: "transform 0.26s cubic-bezier(0.2, 0.9, 0.28, 1)",
+        willChange: 'transform',
       }} />
     </div>
   );
@@ -286,6 +291,14 @@ function SettingsCard({ title, emoji, children, zIndex = 1 }) {
 /* ── Full Settings Panel ─────────────────────────────────────────────────── */
 function SettingsPanel({ onBack }) {
   const { settings, updateSettings, watchlist, favorites, progress } = useApp();
+
+  useEffect(() => {
+    const cleanup = registerBackButtonHandler(() => {
+      onBack();
+      return true;
+    });
+    return cleanup;
+  }, [onBack]);
 
   const ACCENT_COLORS = [
     { value: "#7c3aed", label: "Violet" }, { value: "#e11d48", label: "Rose" },
@@ -414,7 +427,9 @@ function SettingsPanel({ onBack }) {
           background: 'rgba(255,255,255,0.09)', border: '1px solid rgba(255,255,255,0.12)',
           color: 'var(--text-primary)', cursor: 'pointer',
           padding: '8px 16px', borderRadius: 12, fontSize: 13, fontWeight: 700,
-          transition: 'all 0.2s', flexShrink: 0,
+          touchAction: 'manipulation',
+          transition: 'background-color 0.2s ease, transform 0.15s ease',
+          flexShrink: 0,
           display: 'flex', alignItems: 'center', gap: 5,
         }}>← Back</button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -471,7 +486,8 @@ function SettingsPanel({ onBack }) {
                 <div key={c.value} title={c.label} onClick={() => updateSettings({ accentColor: c.value })}
                   style={{
                     width: 24, height: 24, borderRadius: "50%", background: c.value, cursor: "pointer", flexShrink: 0,
-                    transition: "all 0.22s cubic-bezier(0.34,1.3,0.64,1)",
+                    touchAction: 'manipulation',
+                    transition: "transform 0.22s cubic-bezier(0.34,1.3,0.64,1), box-shadow 0.22s ease, border-color 0.22s ease",
                     border: settings.accentColor === c.value ? "2.5px solid #fff" : "2px solid rgba(255,255,255,0.1)",
                     boxShadow: settings.accentColor === c.value ? `0 0 12px 2px ${c.value}88` : "none",
                     transform: settings.accentColor === c.value ? "scale(1.25)" : "scale(1)",
@@ -669,6 +685,42 @@ export default function Profile() {
   const [devTaps, setDevTaps] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // Handle Android hardware/gesture back button for Settings and Modals
+  useEffect(() => {
+    const cleanup = registerBackButtonHandler(() => {
+      if (showEditProfile) {
+        setShowEditProfile(false);
+        return true;
+      }
+      if (showAbout) {
+        setShowAbout(false);
+        return true;
+      }
+      if (showPrivacy) {
+        setShowPrivacy(false);
+        return true;
+      }
+      if (showSignOut) {
+        setShowSignOut(false);
+        return true;
+      }
+      if (showCloudLogOut) {
+        setShowCloudLogOut(false);
+        return true;
+      }
+      if (showAuthModal) {
+        setShowAuthModal(false);
+        return true;
+      }
+      if (showSettings) {
+        setShowSettings(false);
+        return true;
+      }
+      return false;
+    });
+    return cleanup;
+  }, [showSettings, showEditProfile, showAbout, showPrivacy, showSignOut, showCloudLogOut, showAuthModal]);
 
   const handleManualSync = async () => {
     if (syncing) return;

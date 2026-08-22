@@ -12,10 +12,6 @@ const IS_NATIVE = Capacitor.isNativePlatform();
 export async function setupNotificationChannels() {
   if (!IS_NATIVE) return;
   try {
-    const perm = await LocalNotifications.checkPermissions();
-    if (perm.display !== 'granted') {
-      await LocalNotifications.requestPermissions();
-    }
 
     await LocalNotifications.createChannel({
       id: 'aniplay_alerts',

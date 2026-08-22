@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Bell, Play, X, WifiOff, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -47,7 +47,7 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
         opacity: removing ? 0 : 1,
         transform: removing ? 'scale(0.8) translateY(16px) rotate(-3deg)' : 'none',
         overflow: removing ? 'hidden' : 'visible',
-        transition: 'all 0.42s cubic-bezier(0.34, 1.25, 0.64, 1)',
+        transition: 'transform 0.42s cubic-bezier(0.34, 1.25, 0.64, 1), opacity 0.42s ease, max-width 0.42s ease',
       }}
     >
       <div
@@ -228,15 +228,25 @@ export default function Home() {
     }
   }, [airing, watchlist]);
 
+  const scrolledRef = useRef(false);
   useEffect(() => {
+    let ticking = false;
     const handleScroll = () => {
-      setScrolled((window.scrollY || document.documentElement.scrollTop) > 20);
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          const isOver = (window.scrollY || document.documentElement.scrollTop || 0) > 20;
+          if (isOver !== scrolledRef.current) {
+            scrolledRef.current = isOver;
+            setScrolled(isOver);
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
-    window.addEventListener('touchmove', handleScroll, { passive: true });
     return () => {
       window.removeEventListener('scroll', handleScroll);
-      window.removeEventListener('touchmove', handleScroll);
     };
   }, []);
 
@@ -332,7 +342,7 @@ export default function Home() {
         WebkitBackdropFilter: scrolled ? 'blur(32px) saturate(200%) brightness(0.65)' : 'none',
         borderBottom: scrolled ? '0.5px solid rgba(255, 255, 255, 0.06)' : '0.5px solid transparent',
         boxShadow: scrolled ? '0 1px 0 0 rgba(255,255,255,0.03), 0 4px 30px rgba(0,0,0,0.5)' : 'none',
-        transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+        transition: 'background-color 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease, backdrop-filter 0.35s ease',
         willChange: 'transform',
         isolation: 'isolate',
         pointerEvents: 'none',

@@ -52,87 +52,121 @@ export function getCachedM3U8(embedUrl) {
 }
 
 /**
- * Fast direct HTTP extractor for known embed providers.
- * Resolves streams in <200ms without opening a heavy native WebView.
+ * Universal unpacker for packed JavaScript (eval(function(p,a,c,k,e,d)...))
  */
-async function scrapeEmbedDirectly(embedUrl, referer) {
+export function unpackUniversalJS(html) {
+  if (!html) return null;
+
+  const adDomains = ['doubleclick', 'googleads', 'adserver', 'popads', 'adsystem', '/ad-tags/'];
+  const cleanHtml = html.replace(/\\\//g, '/');
+
+  // 1. Direct .m3u8 link scan in HTML (including unescaped and escaped)
+  const allM3u8Matches = [
+    ...(cleanHtml.match(/https?:\/\/[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*/gi) || []),
+    ...(html.match(/https?:\/\/[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*/gi) || [])
+  ];
+  for (const m of allM3u8Matches) {
+    const clean = m.replace(/\\/g, '');
+    if (!adDomains.some(d => clean.includes(d))) {
+      console.log('[EmbedScraper] Found stream via direct HTML scan:', clean.slice(0, 80));
+      return clean;
+    }
+  }
+
+  // 2. Scan Playerjs / jwplayer / videojs file configs
+  const fileConfigMatch = cleanHtml.match(/(?:file|sources?|src)\s*:\s*["'](https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)["']/i);
+  if (fileConfigMatch && !adDomains.some(d => fileConfigMatch[1].includes(d))) {
+    console.log('[EmbedScraper] Found stream via player config:', fileConfigMatch[1].slice(0, 80));
+    return fileConfigMatch[1];
+  }
+
+  // 3. Packed JS unpacker (StreamHG, Earnvids, VidHide, StreamWish, Bibiemb, etc.)
+  const evalRegex = /eval\(function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)[\s\S]*?\.split\s*\(\s*['"]\|['"]\s*\)\s*\)\s*\)/gi;
+  let match;
+  while ((match = evalRegex.exec(html)) !== null) {
+    try {
+      const rawEval = match[0];
+      const argsMatch = rawEval.match(/}\s*\(\s*'([\s\S]*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\s*\.split/);
+      if (argsMatch) {
+        let p = argsMatch[1];
+        const a = parseInt(argsMatch[2], 10);
+        let c = parseInt(argsMatch[3], 10);
+        const k = argsMatch[4].split('|');
+        while (c--) if (k[c]) p = p.replace(new RegExp('\\b' + c.toString(a) + '\\b', 'g'), k[c]);
+
+        const unpackedM3u8 = p.replace(/\\\//g, '/').match(/https?:\/\/[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*/gi) || [];
+        for (const m of unpackedM3u8) {
+          const clean = m.replace(/\\/g, '');
+          if (!adDomains.some(d => clean.includes(d))) {
+            console.log('[EmbedScraper] Resolved stream from unpacked JS:', clean.slice(0, 80));
+            return clean;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[EmbedScraper] Unpack block error:', e.message);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fast direct HTTP extractor for known embed providers.
+ * Resolves streams directly via HTTP in ~1-2 seconds without opening a heavy native WebView.
+ */
+export async function scrapeEmbedDirectly(embedUrl, referer) {
   try {
     if (!embedUrl) return null;
     const urlObj = new URL(embedUrl);
     const origin = urlObj.origin;
-    
-    console.log(`[EmbedScraper] scrapeEmbedDirectly: ${embedUrl.slice(0, 120)}`);
-    
+
+    console.log(`[EmbedScraper] scrapeEmbedDirectly: ${embedUrl.slice(0, 100)}`);
+
     let html = '';
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
-      'Referer': referer || (origin + '/')
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'Referer': referer || (origin + '/'),
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
     };
-    
+
     if (Capacitor.isNativePlatform()) {
       const resp = await CapacitorHttp.request({
         url: embedUrl,
         method: 'GET',
         headers,
-        responseType: 'text'
+        responseType: 'text',
+        connectTimeout: 8000,
+        readTimeout: 8000
       });
-      html = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+      if (resp && resp.status === 200) {
+        html = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+      }
     } else {
       let fetchUrl = embedUrl;
       if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
         fetchUrl = `/api/scrape?url=${encodeURIComponent(embedUrl)}&referer=${encodeURIComponent(referer || origin + '/')}`;
       }
       const res = await fetch(fetchUrl, { headers });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      html = await res.text();
-    }
-    
-    if (!html) return null;
-    
-    // 1. Direct .m3u8 scan (e.g. vivibebe.site)
-    const directM3u8Match = html.match(/const\s+src\s*=\s*"([^"]+\.m3u8[^"]*)"/i) ||
-                           html.match(/src\s*:\s*"([^"]+\.m3u8[^"]*)"/i) ||
-                           html.match(/"file"\s*:\s*"([^"]+\.m3u8[^"]*)"/i) ||
-                           html.match(/['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i);
-                           
-    if (directM3u8Match) {
-      const m3u8Url = directM3u8Match[1].replace(/\\/g, '');
-      console.log('[EmbedScraper] Found direct .m3u8 link: ' + m3u8Url.slice(0, 100));
-      return m3u8Url;
-    }
-
-    // 2. Packed JS unpacker (e.g. StreamHG/otakuhg.site, Earnvids/otakuvid.online, VidHide, StreamWish)
-    const evalMatch = html.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]*?\.split\('\|'\)\)\)/);
-    if (evalMatch) {
-      try {
-        const rawEval = evalMatch[0];
-        const argsMatch = rawEval.match(/}\('([\s\S]*?)',\s*(\d+),\s*(\d+),\s*'([\s\S]*?)'\.split/);
-        if (argsMatch) {
-          let p = argsMatch[1];
-          const a = parseInt(argsMatch[2]);
-          let c = parseInt(argsMatch[3]);
-          const k = argsMatch[4].split('|');
-          while (c--) if (k[c]) p = p.replace(new RegExp('\\b' + c.toString(a) + '\\b', 'g'), k[c]);
-          
-          const m3u8Match = p.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/i) ||
-                            p.match(/["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i);
-          if (m3u8Match) {
-            const m3u8Url = (m3u8Match[1] || m3u8Match[0]).replace(/\\/g, '');
-            console.log('[EmbedScraper] Resolved stream from unpacked JS: ' + m3u8Url.slice(0, 100));
-            return m3u8Url;
-          }
-        }
-      } catch (unpackErr) {
-        console.warn('[EmbedScraper] Packed JS unpack error:', unpackErr.message);
+      if (res.ok) {
+        html = await res.text();
       }
     }
-    
-    // 3. getSourcesNew API scan (e.g. megaplay.buzz, vidtube.site, vidwish.live)
+
+    if (!html) return null;
+
+    // Run universal unpacker & scan
+    const directM3u8 = unpackUniversalJS(html);
+    if (directM3u8) {
+      return directM3u8;
+    }
+
+    // Fallback: getSourcesNew API scan (e.g. megaplay.buzz, vidtube.site, vidwish.live)
     let fileId = '';
-    const fileIdHtmlMatch = html.match(/File\s+(\d+)/i) || 
+    const fileIdHtmlMatch = html.match(/File\s+(\d+)/i) ||
                             html.match(/"id"\s*:\s*(\d+)/i) ||
                             html.match(/cid\s*:\s*'([^']+)'/i);
-                            
+
     if (fileIdHtmlMatch) {
       fileId = fileIdHtmlMatch[1];
     } else {
@@ -140,46 +174,51 @@ async function scrapeEmbedDirectly(embedUrl, referer) {
                             embedUrl.match(/\/(?:stream|embed)\/(\d+)/i);
       if (idInPathMatch) fileId = idInPathMatch[1];
     }
-    
+
     if (fileId) {
       const playType = embedUrl.toLowerCase().includes('dub') ? 'dub' : 'sub';
       const apiUrl = `${origin}/stream/getSourcesNew?id=${fileId}&type=${playType}&id=${fileId}&type=${playType}`;
-      console.log(`[EmbedScraper] Querying getSourcesNew: ${apiUrl}`);
-      
+
       let apiText = '';
       const apiHeaders = {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
         'Referer': embedUrl,
         'X-Requested-With': 'XMLHttpRequest'
       };
-      
+
       if (Capacitor.isNativePlatform()) {
         const apiResp = await CapacitorHttp.request({
           url: apiUrl,
           method: 'GET',
           headers: apiHeaders,
-          responseType: 'text'
+          responseType: 'text',
+          connectTimeout: 5000,
+          readTimeout: 5000
         });
-        apiText = typeof apiResp.data === 'string' ? apiResp.data : JSON.stringify(apiResp.data);
+        if (apiResp && apiResp.status === 200) {
+          apiText = typeof apiResp.data === 'string' ? apiResp.data : JSON.stringify(apiResp.data);
+        }
       } else {
         let fetchApiUrl = apiUrl;
         if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
           fetchApiUrl = `/api/scrape?url=${encodeURIComponent(apiUrl)}&referer=${encodeURIComponent(embedUrl)}`;
         }
         const apiRes = await fetch(fetchApiUrl, { headers: apiHeaders });
-        apiText = await apiRes.text();
+        if (apiRes.ok) apiText = await apiRes.text();
       }
-      
+
       if (apiText) {
-        const json = JSON.parse(apiText);
-        const m3u8Url = json.sources?.file || json.sources?.[0]?.file;
-        if (m3u8Url) {
-          console.log('[EmbedScraper] Resolved stream from getSourcesNew: ' + m3u8Url.slice(0, 100));
-          return m3u8Url;
-        }
+        try {
+          const json = JSON.parse(apiText);
+          const m3u8Url = json.sources?.file || json.sources?.[0]?.file;
+          if (m3u8Url) {
+            console.log('[EmbedScraper] Resolved stream from getSourcesNew: ' + m3u8Url.slice(0, 80));
+            return m3u8Url;
+          }
+        } catch {}
       }
     }
-    
+
     return null;
   } catch (err) {
     console.warn('[EmbedScraper] scrapeEmbedDirectly error:', err.message);

@@ -80,7 +80,7 @@ export default function HistoryPage() {
         backdropFilter: scrolled ? 'blur(40px) saturate(180%)' : 'none',
         WebkitBackdropFilter: scrolled ? 'blur(40px) saturate(180%)' : 'none',
         borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : '1px solid transparent',
-        transition: 'all 0.3s cubic-bezier(0.4,0,0.2,1)',
+        transition: 'background-color 0.3s ease, border-color 0.3s ease, backdrop-filter 0.3s ease',
       }}>
         {/* Title Row */}
         <div style={{
@@ -132,7 +132,8 @@ export default function HistoryPage() {
                     : 'rgba(255,255,255,0.05)',
                   color: active ? '#fff' : 'var(--text-muted)',
                   cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-                  transition: 'all 0.2s',
+                  touchAction: 'manipulation',
+                  transition: 'background-color 0.2s ease, color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease',
                   boxShadow: active ? '0 4px 14px -2px var(--accent)' : 'none',
                 }}
               >
