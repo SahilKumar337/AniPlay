@@ -1,17 +1,17 @@
 {
   "latestVersion": "1.5.5",
   "versionCode": 55,
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.5/AniPlay-v1.5.5.apk",
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.5/AniPlay.apk",
   "forceUpdate": false,
-  "changelog": "AniPlay v1.5.5 — Complete App Overhaul, Redesigned UI, Fluid Animations & Community Replies",
+  "changelog": "AniPlay v1.5.5 \u2014 Complete App Overhaul, Redesigned UI, Fluid Animations & Community Replies",
   "changelogItems": [
-    "✨ Complete UI Overhaul: Modern glassmorphism, refined typography, and ultra-clean cards",
-    "💬 Interactive Community: Full nested comment replies with threaded discussions & instant likes",
-    "🎬 Next-Gen Media Player: Seamless fullscreen playback, multi-track subtitles & zero-lag streaming",
-    "🔔 Smart Notifications & Alerts: Stay updated with episode drops & community interactions",
-    "⚡ Butter-Smooth 120Hz Animations: Zero-freeze transitions & orientation lock persistence",
-    "📥 High-Speed Offline Downloader: Multi-threaded segmented downloads with custom storage",
-    "🛡️ Privacy-First & Ultra-Fast: Pure offline-first architecture with instant playback"
+    "\u2728 Complete UI Overhaul: Modern glassmorphism, refined typography, and ultra-clean cards",
+    "\ud83d\udcac Interactive Community: Full nested comment replies with threaded discussions & instant likes",
+    "\ud83c\udfac Next-Gen Media Player: Seamless fullscreen playback, multi-track subtitles & zero-lag streaming",
+    "\ud83d\udd14 Smart Notifications & Alerts: Stay updated with episode drops & community interactions",
+    "\u26a1 Butter-Smooth 120Hz Animations: Zero-freeze transitions & orientation lock persistence",
+    "\ud83d\udce5 High-Speed Offline Downloader: Multi-threaded segmented downloads with custom storage",
+    "\ud83d\udee1\ufe0f Privacy-First & Ultra-Fast: Pure offline-first architecture with instant playback"
   ],
   "domains": {
     "neko": "https://anineko.to",
@@ -20,5 +20,6 @@
     "fallback_gogo": "https://anitaku.so",
     "animepahe": "https://animepahe.pw"
   },
-  "maintenanceMessage": null
+  "maintenanceMessage": null,
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.5/bundle.zip"
 }
