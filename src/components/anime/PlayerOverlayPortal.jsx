@@ -38,6 +38,8 @@ export default function PlayerOverlayPortal({
   setActiveUrl,
   setIsActiveHLS,
   handleScrapeError,
+  initialSeekTime = 0,
+  onSeekProgress = null,
 }) {
   const title = getTitle(anime);
 
@@ -77,7 +79,7 @@ export default function PlayerOverlayPortal({
             <Loader size={30} className="spin" color="var(--accent)" />
             <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Resolving stream sources...</p>
           </div>
-        ) : streamErr ? (
+        ) : streamErr && !activeUrl ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20, overflowY: 'auto' }}>
             <AlertCircle size={32} color="#e50914" />
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
@@ -85,39 +87,48 @@ export default function PlayerOverlayPortal({
               ↺ Retry
             </button>
           </div>
-        ) : activeUrl ? (
-          isActiveHLS ? (
-            <AniPlayer
-              url={activeUrl}
-              title={`${title} - Episode ${epParam}`}
-              referer={activeServer?.referer}
-              embedUrl={activeServer?.embedUrl}
-              subtitles={activeServer?.subtitles || []}
-              extraSubtitles={allSubtitleTracks}
-              onBack={onBack}
-              onFullscreenChange={(isFs) => {
-                setFsActive(isFs);
-                if (fsActiveRef) fsActiveRef.current = isFs;
-                if (isFs && setEpTransitionFs) setEpTransitionFs(false);
-              }}
-              currentEpisode={epParam}
-              totalEpisodes={totalEps}
-              onEpisodeChange={onEpisodeChange}
-              autoplay={settings?.autoplay !== false}
-              subtitleSettings={settings || null}
-              loading={loadStream}
-              startInFs={epTransitionFs}
-              keepFsOnEpChange={keepFsRef}
-              onStreamExpired={() => {
-                const fallbackServer = servers.find(s => s.name !== activeServer?.name && s.type === (activeServer?.type || 'sub'));
-                if (fallbackServer) {
-                  onSelectServer(fallbackServer, servers);
-                } else if (activeServer) {
-                  onSelectServer(activeServer, servers);
-                }
-              }}
-            />
-          ) : (
+        ) : (
+          // ── ALWAYS keep AniPlayer mounted once we have a URL, even during server switching.
+          // Unmounting causes ScreenOrientation/ImmersiveMode teardown → portrait flash.
+          // Instead we keep the player alive and show a translucent overlay while loading.
+          activeUrl && isActiveHLS ? (
+            <>
+              <AniPlayer
+                url={activeUrl}
+                title={`${title} - Episode ${epParam}`}
+                referer={activeServer?.referer}
+                embedUrl={activeServer?.embedUrl}
+                subtitles={activeServer?.subtitles || []}
+                extraSubtitles={allSubtitleTracks}
+                onBack={onBack}
+                onFullscreenChange={(isFs) => {
+                  setFsActive(isFs);
+                  if (fsActiveRef) fsActiveRef.current = isFs;
+                  if (isFs && setEpTransitionFs) setEpTransitionFs(false);
+                }}
+                currentEpisode={epParam}
+                totalEpisodes={totalEps}
+                onEpisodeChange={onEpisodeChange}
+                autoplay={settings?.autoplay !== false}
+                subtitleSettings={settings || null}
+                loading={loadStream}
+                startInFs={epTransitionFs}
+                keepFsOnEpChange={keepFsRef}
+                initialSeekTime={initialSeekTime}
+                onSeekProgress={onSeekProgress}
+                onStreamExpired={() => {
+                  const fallbackServer = servers.find(s => s.name !== activeServer?.name && s.type === (activeServer?.type || 'sub'));
+                  if (fallbackServer) {
+                    onSelectServer(fallbackServer, servers);
+                  } else if (activeServer) {
+                    onSelectServer(activeServer, servers);
+                  }
+                }}
+              />
+              {/* No overlay — AniPlayer silently loads the new episode in background.
+                  The old episode frame stays visible until the new stream is ready. */}
+            </>
+          ) : activeUrl && !isActiveHLS ? (
             <IframePlayer
               src={activeUrl}
               onBack={onBack}
@@ -130,8 +141,14 @@ export default function PlayerOverlayPortal({
                 }
               }}
             />
+          ) : (
+            // No URL yet — initial load spinner (before first server is found)
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
+              <Loader size={30} className="spin" color="var(--accent)" />
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Finding stream...</p>
+            </div>
           )
-        ) : null}
+        )}
       </div>
 
       {/* 2. Controls & Episodes Area below video */}

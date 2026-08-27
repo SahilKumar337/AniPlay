@@ -153,7 +153,10 @@ function formatSubtitleProxyUrl(targetUrl, referer) {
   if (!STREAM_PROXY) return targetUrl;
   const isNative = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
   if (isNative && (STREAM_PROXY.includes('localhost') || STREAM_PROXY.includes('127.0.0.1'))) {
-    return targetUrl;
+    // On native: encode both URL + referer so AniPlayer's native fetch path can
+    // extract the correct Referer header. Without this, the raw VTT URL alone
+    // causes 403s because the subtitle CDN requires the embed origin as Referer.
+    return `subtitle-native://fetch?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
   }
   try {
     const urlObj = new URL(STREAM_PROXY);
@@ -162,6 +165,7 @@ function formatSubtitleProxyUrl(targetUrl, referer) {
     return `/api/stream/subtitle?url=${encodeURIComponent(targetUrl)}&referer=${encodeURIComponent(referer)}`;
   }
 }
+
 
 const wavesSearchCache = new Map();
 const nekoSearchCache = new Map();
@@ -487,8 +491,8 @@ async function clientFetch(url, opts = {}) {
         url,
         method: 'GET',
         headers: reqHeaders,
-        connectTimeout: opts.timeout || 60000,
-        readTimeout: opts.timeout || 60000
+        connectTimeout: opts.timeout || 15000,
+        readTimeout: opts.timeout || 15000
       });
       
       const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
@@ -573,7 +577,7 @@ async function awSearch(title, isMovie = false) {
     return localResults;
   }
 
-  // SPEED: fire all strategies simultaneously ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â resolve as soon as the first one returns results.
+  // SPEED: fire all strategies simultaneously — resolve as soon as the first one returns results.
   // This is a true parallel race: if the full-title keyword responds in 800ms we don't wait
   // 4+ more seconds for the remaining strategies to finish.
   const results = await new Promise((resolve) => {
@@ -596,7 +600,7 @@ async function awSearch(title, isMovie = false) {
   // ACCURACY: score every candidate; exact normalized match always wins
   let best = results[0], maxScore = -1;
   for (const r of results) {
-    // Exact match short-circuit ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â guaranteed winner
+    // Exact match short-circuit — guaranteed winner
     if (norm(r.animeTitle) === norm(title)) return r;
 
     let score = titleScore(r.animeTitle, title, isMovie);
@@ -605,25 +609,25 @@ async function awSearch(title, isMovie = false) {
     if (score > maxScore) { maxScore = score; best = r; }
   }
 
-  // Strict 0.88 threshold Ã¢â‚¬â€ must match the full anime name with high confidence
+  // Strict 0.88 threshold — must match the full anime name with high confidence
   if (!best || maxScore < 0.88) {
     throw new Error(`No confident match on AniWaves for "${title}" (best score: ${maxScore.toFixed(2)})`);
   }
   return best;
 }
 
-// Session cache for Waves server lists: animeId/episode -> { servers, expires }
-// TTL = 25 minutes (matching Animetsu cache ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â embed URLs typically expire in ~30 min)
+// Persistent cache for Waves server lists: animeId/episode -> { servers, expires }
+// TTL = 25 minutes — stored in localStorage so it survives app restarts (zero re-scrape on revisit)
 const WAVES_CACHE_TTL_MS = 25 * 60 * 1000;
 
 function getWavesServersCache(animeId, episode) {
   try {
     const key = `waves_servers_${animeId}_${episode}`;
-    const raw = sessionStorage.getItem(key);
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const { data, expires } = JSON.parse(raw);
-    if (Date.now() > expires) { sessionStorage.removeItem(key); return null; }
-    console.log(`[AniWaves] Cache HIT for servers ep${episode} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â instant play`);
+    if (Date.now() > expires) { localStorage.removeItem(key); return null; }
+    console.log(`[AniWaves] Cache HIT for servers ep${episode} — instant play`);
     return data;
   } catch { return null; }
 }
@@ -631,7 +635,7 @@ function getWavesServersCache(animeId, episode) {
 function setWavesServersCache(animeId, episode, data) {
   try {
     const key = `waves_servers_${animeId}_${episode}`;
-    sessionStorage.setItem(key, JSON.stringify({ data, expires: Date.now() + WAVES_CACHE_TTL_MS }));
+    localStorage.setItem(key, JSON.stringify({ data, expires: Date.now() + WAVES_CACHE_TTL_MS }));
   } catch {}
 }
 
@@ -653,19 +657,30 @@ function setWavesEmbedCache(linkId, url) {
   } catch {}
 }
 
-// Fetch episode list for an anime and map episode number ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ internal episode ID
+// Fetch episode list for an anime and map episode number → internal episode ID
 // AniWaves (aniwatch-based) uses internal episode IDs in its server API, not episode numbers.
+// Per-episode IDs are persisted in localStorage with a 24h TTL — survives app restarts.
+const WAVES_EPID_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 async function awGetEpisodeId(animeId, episodeNumber, slug) {
   const cacheKey = `waves_epid_${animeId}_${episodeNumber}`;
   try {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) return cached;
+    const raw = localStorage.getItem(cacheKey);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed.id && Date.now() < parsed.expires) return parsed.id;
+        localStorage.removeItem(cacheKey);
+      } catch {
+        // Legacy plain-string value (pre-migration) — still valid
+        return raw;
+      }
+    }
   } catch {}
 
   const referer = slug ? `${AW}/watch/${slug}` : AW;
   const text = await clientFetch(`${AW}/ajax/anime/episode-list?id=${animeId}`, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': referer },
-    timeout: 6000,
+    timeout: 4000,
   });
   const parsed = JSON.parse(text);
   if (!parsed.status || !parsed.result) throw new Error('No episode list');
@@ -678,7 +693,9 @@ async function awGetEpisodeId(animeId, episodeNumber, slug) {
     const id  = m[1] || m[4];
     const num = parseInt(m[2] || m[3]);
     if (!isNaN(num) && id) {
-      try { sessionStorage.setItem(`waves_epid_${animeId}_${num}`, id); } catch {}
+      try {
+        localStorage.setItem(`waves_epid_${animeId}_${num}`, JSON.stringify({ id, expires: Date.now() + WAVES_EPID_CACHE_TTL_MS }));
+      } catch {}
       if (num === episodeNumber) foundId = id;
     }
   }
@@ -690,13 +707,13 @@ async function awGetServers(animeId, episode, slug) {
   const referer = slug ? `${AW}/watch/${slug}` : AW;
 
   // ACCURACY FIX: Resolve the real internal episode ID so we always get the correct episode.
-  // AniWaves uses internal DB IDs in its server API ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â passing raw episode number causes
+  // AniWaves uses internal DB IDs in its server API — passing raw episode number causes
   // wrong episodes when the site's numbering differs from AniList (e.g. due to specials/OVAs).
   let epsParam = episode; // fallback: raw episode number
   try {
     const episodeId = await awGetEpisodeId(animeId, episode, slug);
     epsParam = episodeId;
-    console.log(`[AniWaves] Resolved ep${episode} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ internal ID: ${episodeId}`);
+    console.log(`[AniWaves] Resolved ep${episode} → internal ID: ${episodeId}`);
   } catch (e) {
     console.warn(`[AniWaves] Episode ID lookup failed, using raw number: ${e.message}`);
   }
@@ -704,7 +721,7 @@ async function awGetServers(animeId, episode, slug) {
   const url = `${AW}/ajax/server/list?servers=${animeId}&eps=${epsParam}`;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': referer },
-    timeout: 8000,
+    timeout: 6000,
   });
   const parsed = JSON.parse(text);
   if (parsed.status !== 200 || !parsed.result) {
@@ -733,7 +750,7 @@ async function awGetServers(animeId, episode, slug) {
 }
 
 async function awGetEmbedUrl(linkId, watchPageSlug) {
-  // Check embed cache first ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â same linkId always resolves to same URL within session
+  // Check embed cache first — same linkId always resolves to same URL within session
   const cached = getWavesEmbedCache(linkId);
   if (cached) {
     console.log(`[AniWaves] Embed cache HIT for linkId ${linkId}`);
@@ -743,7 +760,7 @@ async function awGetEmbedUrl(linkId, watchPageSlug) {
   const url = `${AW}/ajax/sources?id=${encodeURIComponent(linkId)}&asi=0&autoPlay=0`;
   const text = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*', 'Referer': `${AW}/watch/${watchPageSlug}` },
-    timeout: 8000,
+    timeout: 4000,
   });
   const parsed = JSON.parse(text);
   if (parsed.status !== 200 || !parsed.result?.url) throw new Error(`No embed URL`);
@@ -759,35 +776,36 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
   const mappedSlug = getMappedSlug(animeId, 'waves');
   if (mappedSlug) {
     searchResult = { slug: mappedSlug, animeId: mappedSlug, animeTitle: title };
-    console.log(`[AniWaves] ID Cross-Ref HIT for AniList ID ${animeId} Ã¢Å¾â€ "${mappedSlug}"`);
+    console.log(`[AniWaves] ID Cross-Ref HIT for AniList ID ${animeId} ➔ "${mappedSlug}"`);
   } else if (!searchResult) {
     // Check localStorage before hitting the network
     const lsCached = lsGet(lsSearchKey('waves', title));
     if (lsCached) {
-      console.log(`[AniWaves] localStorage cache HIT for "${title}" Ã¢â‚¬â€ instant`);
+      console.log(`[AniWaves] localStorage cache HIT for "${title}" — instant`);
       searchResult = lsCached;
       wavesSearchCache.set(title, searchResult);
     } else {
-      // Try all provided title variants Ã¢â‚¬â€ first successful match wins
+      // Parallel race: all title variants fire simultaneously — first match wins.
+      // Old sequential loop would wait the full timeout per title before trying the next.
       const titlesToTry = allTitles?.length ? allTitles : [title];
-      let lastErr = null;
-      for (const t of titlesToTry) {
-        try {
-          searchResult = await awSearch(t, isMovie);
-          wavesSearchCache.set(title, searchResult);
-          lsSet(lsSearchKey('waves', title), searchResult);
-          break;
-        } catch (e) {
-          lastErr = e;
-          console.warn(`[AniWaves] awSearch failed for "${t}": ${e.message}`);
-        }
+      try {
+        searchResult = await Promise.any(
+          titlesToTry.map(t =>
+            awSearch(t, isMovie).then(r => {
+              wavesSearchCache.set(title, r);
+              lsSet(lsSearchKey('waves', title), r);
+              return r;
+            })
+          )
+        );
+      } catch {
+        throw new Error(`Anime "${title}" not found on AniWaves (tried ${titlesToTry.length} title variants)`);
       }
-      if (!searchResult) throw lastErr || new Error(`Anime "${title}" not found on AniWaves`);
     }
   }
   const { slug, animeId: wavesId, animeTitle } = searchResult;
 
-  // Check session cache Ã¢â‚¬â€ skip all API calls if same episode was already fetched
+  // Check session cache — skip all API calls if same episode was already fetched
   const cached = getWavesServersCache(wavesId, episode);
   if (cached) return { servers: cached, animeTitle, slug };
 
@@ -805,7 +823,7 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
           let finalVideoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
 
           try {
-            const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 5000 });
+            const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 3500 });
             const unpacked = unpackUniversalJS(embedHtml);
             if (unpacked) {
               finalVideoUrl = unpacked;
@@ -927,32 +945,76 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
       const searchQueries = [...allQueries].filter(Boolean);
 
       results = [];
-      const re = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
+      const allQueryTitles = allTitles?.length ? allTitles : [title];
+      const FAST_SCORE_THRESHOLD = 0.75; // same-language match — stop immediately
+      // The regex pattern (defined as string to avoid shared /g state — see below)
+      const RE_PATTERN = /<h3 class="nv-anime-title"><a href="\/watch\/([^"]+)">([^<]+)<\/a>/g;
 
-      // Search all queries in parallel for speed and aggregation
-      await Promise.all(searchQueries.map(async (keyword) => {
-        try {
-          const searchHtml = await clientFetch(`${ANINEKO}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: ANINEKO, timeout: 10000 });
-          re.lastIndex = 0;
-          let m;
-          while ((m = re.exec(searchHtml)) !== null) {
-            const found = { slug: m[1], title: m[2].trim() };
-            // Thread-safe inclusion check
-            if (!results.some(r => r.slug === found.slug)) {
-              results.push(found);
+      if (searchQueries.length === 0) throw new Error('No search queries generated for AniNeko');
+
+      // Early-exit race: fire all keyword queries in parallel, but resolve the moment
+      // the FIRST one returns results scoring >= 0.75 (same-language match).
+      // Remaining in-flight fetches are abandoned (fire-and-forget, zero side effects).
+      // Cross-language fallback: if no single query scores >= 0.75, collect all and pick best.
+      await new Promise((resolve) => {
+        let settled = false;
+        let pending = searchQueries.length;
+
+        const scoreResults = (candidates) => {
+          let localMax = -1;
+          for (const r of candidates) {
+            for (const qt of allQueryTitles) {
+              const targetTitle = suffix ? `${qt} (${suffix})` : qt;
+              const s = titleScore(r.title, targetTitle, isMovie);
+              if (s > localMax) localMax = s;
             }
           }
-        } catch (e) {
-          console.warn('[scrapeAniNeko] Search failed for ' + keyword + ':', e.message);
+          return localMax;
+        };
+
+        for (const keyword of searchQueries) {
+          clientFetch(`${ANINEKO}/browser?keyword=${encodeURIComponent(keyword)}`, { referer: ANINEKO, timeout: 7000 })
+            .then((searchHtml) => {
+              // IMPORTANT: create a fresh regex per callback — /g regexes have shared
+              // mutable lastIndex state that gets corrupted across concurrent .then() calls.
+              const localRe = new RegExp(RE_PATTERN.source, 'g');
+              const localResults = [];
+              let m;
+              while ((m = localRe.exec(searchHtml)) !== null) {
+                localResults.push({ slug: m[1], title: m[2].trim() });
+              }
+
+              // Merge into global results (deduplicated by slug)
+              for (const r of localResults) {
+                if (!results.some(x => x.slug === r.slug)) results.push(r);
+              }
+
+              // Fast path: if this batch alone scores well enough, stop immediately
+              if (!settled && localResults.length > 0) {
+                const score = scoreResults(localResults);
+                if (score >= FAST_SCORE_THRESHOLD) {
+                  settled = true;
+                  console.log(`[AniNeko] Early exit after keyword "${keyword}" (score ${score.toFixed(2)})`);
+                  resolve();
+                  return;
+                }
+              }
+
+              // Slow path: all queries done, use whatever was collected
+              if (--pending <= 0 && !settled) { settled = true; resolve(); }
+            })
+            .catch((e) => {
+              console.warn('[scrapeAniNeko] Search failed for ' + keyword + ':', e.message);
+              if (--pending <= 0 && !settled) { settled = true; resolve(); }
+            });
         }
-      }));
+      });
 
       if (!results.length) throw new Error(`Anime not found on AniNeko`);
 
       best = results[0];
       let maxScore = -1;
       // Score against ALL provided titles — pick whichever pairing gives the highest score
-      const allQueryTitles = allTitles?.length ? allTitles : [title];
       for (const r of results) {
         let score = 0;
         for (const qt of allQueryTitles) {
@@ -989,7 +1051,7 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
 
   const fetchedPages = await Promise.allSettled(
     urlsToFetch.map(async item => {
-      const html = await clientFetch(item.url, { referer: ANINEKO, timeout: 12000 });
+      const html = await clientFetch(item.url, { referer: ANINEKO, timeout: 7000 });
       return { html, isDubPage: item.isDubPage };
     })
   );
@@ -1079,10 +1141,12 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
     if (seen.has(s.videoUrl)) continue;
     seen.add(s.videoUrl);
 
-    // Skip dead doodstream / playmogo / vivibebe (ByteDance ibyteimg 403 domain forbidden)
+    // Skip truly dead embed hosts (dood: DMCA-gone, playmogo: domain parked)
+    // NOTE: vivibebe / ibyteimg were previously blocked for 403 errors but HD-1 uses
+    // those CDN domains and IS working — removing those blocks so NekoHD (HD-1) passes through.
     const sNameLow = s.rawText.toLowerCase();
     const sUrlLow = (s.videoUrl || '').toLowerCase();
-    if (sNameLow.includes('dood') || sUrlLow.includes('dood') || sUrlLow.includes('playmogo') || sUrlLow.includes('vivibebe') || sUrlLow.includes('ibyteimg')) continue;
+    if (sNameLow.includes('dood') || sUrlLow.includes('dood') || sUrlLow.includes('playmogo')) continue;
 
     const serverDisplayName = cleanServerName(s.rawText, s.isDub, s.isHardSub);
     const subtitleFile = (!s.isDub && (s.isSoftSub || !s.isHardSub) && bestSubtitleUrl) ? formatSubtitleProxyUrl(bestSubtitleUrl, s.videoUrl) : '';
@@ -1105,7 +1169,7 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
     servers.map(async (srv) => {
       try {
         if (!srv.embedUrl || srv.isHLS) return;
-        const embedHtml = await clientFetch(srv.embedUrl, { referer: ANINEKO + '/', timeout: 6000 });
+        const embedHtml = await clientFetch(srv.embedUrl, { referer: ANINEKO + '/', timeout: 4000 });
         const directM3u8 = unpackUniversalJS(embedHtml);
         if (directM3u8) {
           srv.videoUrl = directM3u8;
@@ -1118,8 +1182,10 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
     })
   );
 
-  // Filter out any servers that failed direct extraction so user only sees 100% playable servers
-  const validServers = servers.filter(s => s.isHLS && s.videoUrl && s.videoUrl.startsWith('http'));
+  // Keep servers that have a valid URL — prefer direct HLS but fall back to embed proxy.
+  // Previously, any server that failed .m3u8 extraction was silently dropped, which caused
+  // "no servers" when an anime only has HD-1 and it didn't yield a direct stream URL.
+  const validServers = servers.filter(s => s.videoUrl && s.videoUrl.startsWith('http'));
   const finalServers = validServers.length > 0 ? validServers : servers;
 
   // Cache the resolved servers for this episode
@@ -1144,7 +1210,7 @@ async function kotoJsonSearch(domain, keyword) {
   const rawText = await clientFetch(url, {
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json, */*' },
     referer: domain,
-    timeout: 5000,
+    timeout: 4000,
   });
   const parsed = JSON.parse(rawText);
   if (parsed.status === 404 || !parsed.result?.html) return [];
@@ -1167,7 +1233,7 @@ async function kotoJsonSearch(domain, keyword) {
  */
 async function kotoFilterSearch(domain, keyword) {
   const filterUrl = `${domain}/filter?keyword=${encodeURIComponent(keyword)}`;
-  const searchHtml = await clientFetch(filterUrl, { referer: domain, timeout: 10000 });
+  const searchHtml = await clientFetch(filterUrl, { referer: domain, timeout: 7000 });
   const itemRe = /<a\s+class="name d-title"\s+href="([^"]*?\/watch\/([^"\/]+)(?:\/ep-\d+)?)"[^>]*>([\s\S]*?)<\/a>/gi;
   let m;
   const results = [];
@@ -1302,7 +1368,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
       : `${domain}/watch/${best.slug}`;
 
     console.log(`[AniKoto] Fetching watch page to resolve real ID: ${watchUrl}`);
-    const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 10000 });
+    const watchHtml = await clientFetch(watchUrl, { referer: domain, timeout: 7000 });
     const idMatch = watchHtml.match(/data-id="(\d+)"/i)
       || watchHtml.match(/const mangaId = (\d+);/i)
       || watchHtml.match(/\/getinfo\/(\d+)/i);
@@ -1331,7 +1397,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
     const epsResp = await clientFetch(epsUrl, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
       referer: watchUrl,
-      timeout: 8000
+      timeout: 6000
     });
     const epsParsed = JSON.parse(epsResp);
     if (epsParsed.status !== 200 || !epsParsed.result) {
@@ -1381,7 +1447,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
   const srvResp = await clientFetch(srvUrl, {
     headers: { 'X-Requested-With': 'XMLHttpRequest' },
     referer: watchUrl,
-    timeout: 8000
+    timeout: 6000
   });
   const srvParsed = JSON.parse(srvResp);
   if (srvParsed.status !== 200 || !srvParsed.result) {
@@ -1434,7 +1500,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
       const resp = await clientFetch(getUrl, {
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
         referer: watchUrl,
-        timeout: 6000
+        timeout: 4000
       });
       const parsed = JSON.parse(resp);
       const embedUrl = parsed.result?.url || '';
@@ -1456,7 +1522,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
           const sourcesResp = await clientFetch(sourcesUrl, {
             headers: { 'X-Requested-With': 'XMLHttpRequest' },
             referer: embedUrl,
-            timeout: 6000
+            timeout: 4000
           });
           const sourcesData = JSON.parse(sourcesResp);
 
@@ -1491,7 +1557,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
       // If direct stream was not returned from getSources API, try fast universal JS unpacker
       if (!isHlsDirect && embedUrl) {
         try {
-          const embedHtml = await clientFetch(embedUrl, { referer: domain + '/', timeout: 4000 });
+          const embedHtml = await clientFetch(embedUrl, { referer: domain + '/', timeout: 3000 });
           const directM3u8 = unpackUniversalJS(embedHtml);
           if (directM3u8) {
             finalVideoUrl = directM3u8;

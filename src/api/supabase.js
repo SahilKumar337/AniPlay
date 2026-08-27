@@ -138,6 +138,91 @@ export async function syncCloudProgress(animeId, status, favorite, progressObj) 
 }
 
 /**
+ * ── One-time bulk backup on app update ──────────────────────────────────────
+ *
+ * Triggered once per version bump (gated by versionCode in Capacitor Preferences).
+ * Algorithm:
+ *   1. Fetch only existing anime_ids from Supabase (select 'anime_id' only → minimal egress ~1 byte/row)
+ *   2. Diff against local watchlist/progress to find entries NOT yet in cloud
+ *   3. Bulk-upsert only the missing rows (writes = free, tiny response egress)
+ *
+ * EGRESS IMPACT:
+ *   • Step 1 read:  ~10 bytes × N rows (e.g. 100 anime → ~1KB egress, once per update)
+ *   • Step 3 write: free (uploads are not egress)
+ *   • Write responses: ~200 bytes total
+ *   Net: ~1–2 KB egress per user per update — completely negligible.
+ */
+export async function backupLocalDataOnUpdate(watchlist = {}, progress = {}, favorites = {}) {
+  const user = await getLocalUser();
+  if (!user) return { backed_up: 0, skipped: 0 };
+
+  try {
+    // Step 1: Fetch only the anime_ids already in Supabase for this user (minimal egress)
+    const { data: existing, error: fetchError } = await supabase
+      .from('watchlist')
+      .select('anime_id')          // ← only 1 column, ~10 bytes per row
+      .eq('user_id', user.id);
+
+    if (fetchError) throw fetchError;
+
+    const existingIds = new Set((existing || []).map(r => String(r.anime_id)));
+
+    // Step 2: Build rows for anime that are NOT yet in Supabase
+    const rows = [];
+    const allLocalIds = new Set([
+      ...Object.keys(watchlist),
+      ...Object.keys(progress),
+    ]);
+
+    for (const id of allLocalIds) {
+      if (existingIds.has(String(id))) continue; // already synced — skip
+
+      const wEntry  = watchlist[id];
+      const pEntry  = progress[id];
+      const isFav   = !!favorites[id];
+
+      rows.push({
+        user_id:    user.id,
+        anime_id:   String(id),
+        status:     wEntry?.status || 'watching',
+        favorite:   isFav,
+        progress: {
+          episode:   pEntry?.episode  ?? null,
+          timestamp: pEntry?.timestamp ?? null,
+        },
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    if (rows.length === 0) {
+      console.log('[Backup] All local data already in Supabase — nothing to upload.');
+      return { backed_up: 0, skipped: existingIds.size };
+    }
+
+    // Step 3: Bulk upsert in chunks of 50 to avoid request size limits
+    const CHUNK = 50;
+    let uploaded = 0;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      const { error: upsertError } = await supabase
+        .from('watchlist')
+        .upsert(chunk, { onConflict: 'user_id,anime_id', ignoreDuplicates: true });
+      if (upsertError) {
+        console.warn('[Backup] Chunk upsert error:', upsertError.message);
+      } else {
+        uploaded += chunk.length;
+      }
+    }
+
+    console.log(`[Backup] ✅ Backed up ${uploaded} new entries (${existingIds.size} were already synced)`);
+    return { backed_up: uploaded, skipped: existingIds.size };
+  } catch (err) {
+    console.warn('[Backup] backupLocalDataOnUpdate failed silently:', err.message);
+    return { backed_up: 0, skipped: 0 };
+  }
+}
+
+/**
  * ── User Profile ──
  *
  * EGRESS OPTIMIZATION:
@@ -214,16 +299,17 @@ export function invalidateCommentCache(animeId) {
   }
 }
 
-// Episode param removed — comments are now anime-level (general), not per-episode
-export async function postCloudComment(animeId, username, content, parentId = null) {
+// Comments are anime-level discussion (episode 0) or episode-specific
+export async function postCloudComment(animeId, username, content, parentId = null, episode = 0) {
   const user = await getLocalUser();
   const payload = {
-    anime_id:  String(animeId),
-    episode:   null,          // general community comment, not episode-specific
-    username:  username || 'Anonymous',
+    anime_id:    String(animeId),
+    episode:     Number(episode) || 0, // DB has NOT NULL constraint on episode; 0 = general discussion
+    username:    username || 'Anonymous',
     content,
-    parent_id: parentId || null,
-    user_id:   user?.id || null,
+    parent_id:   parentId || null,
+    user_id:     user?.id || null,
+    likes:       0,
     likes_count: 0,
   };
 

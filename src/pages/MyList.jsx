@@ -172,7 +172,7 @@ function AnimeCard({ anime, status, progress, isFav, onRemove, onStatusChange, o
         }}>{title}</div>
 
         {/* Status pill */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
           <button
             onClick={e => { e.stopPropagation(); onOpenMenu(anime, status); }}
             style={{
@@ -189,13 +189,6 @@ function AnimeCard({ anime, status, progress, isFav, onRemove, onStatusChange, o
             </span>
             <ChevronDown size={8} color={cfg.color} strokeWidth={2.5} />
           </button>
-
-          {/* Episode */}
-          {ep && (
-            <span style={{ fontSize: 9.5, fontWeight: 700, color: cfg.color, whiteSpace: 'nowrap' }}>
-              {ep.episode}{anime.episodes ? `/${anime.episodes}` : ''}
-            </span>
-          )}
         </div>
       </div>
     </div>

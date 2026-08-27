@@ -37,6 +37,31 @@ export function invalidateStreamCache(anime, episode) {
   console.log(`[ClientEngine] Invalidated stream cache for: ${cacheKey}`);
 }
 
+/**
+ * Silently pre-scrapes episode N+1 in the background during playback.
+ * Uses the fast AniNeko-only path (onlyNeko=true) — takes ~200-500ms.
+ * No-op if: already cached, at the last episode, or totalEps unknown.
+ * Call this ~30s after playback starts to warm the cache for the next episode.
+ */
+export function prefetchNextEpisode(anime, currentEpisode, totalEps) {
+  if (!anime || !currentEpisode) return;
+  const nextEp = currentEpisode + 1;
+  if (totalEps && nextEp > totalEps) return; // already at last episode
+
+  const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${nextEp}-neko`;
+  if (clientStreamCache.has(cacheKey)) {
+    const cached = clientStreamCache.get(cacheKey);
+    if (Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`[Prefetch] Episode ${nextEp} already cached — skipping`);
+      return;
+    }
+  }
+
+  console.log(`[Prefetch] Silently scraping episode ${nextEp} for instant next-ep play...`);
+  // Fire-and-forget: errors are swallowed, this is a best-effort optimization
+  getAniNekoServers(anime, nextEp, null, true).catch(() => {});
+}
+
 export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko = false) {
   const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${episode}${onlyNeko ? '-neko' : ''}`;
   
@@ -139,33 +164,34 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
       if (onServersFound) {
         onServersFound([...combinedServers]);
       }
+
+      // Prefetch the top-priority server's M3U8 playlist immediately after resolution
+      // so the player reads pre-fetched variants without any additional network wait.
+      const topSrv = combinedServers[0];
+      if (topSrv?.isHLS && topSrv?.videoUrl && topSrv.videoUrl.startsWith('http')) {
+        prefetchM3U8(topSrv.videoUrl, topSrv.referer).catch(() => {});
+      }
     }
   };
 
-  // Each scraper tries all title variants in PARALLEL — first success wins instantly.
-  const tryAllTitles = async (scraperFn, scraperName) => {
-    const attempts = titles.map(async (title) => {
-      try {
-        console.log(`[ClientEngine] ${scraperName} trying: "${title}" ep ${episode}`);
-        const data = await scraperFn(title, episode, isMovie, anime.id, allTitles);
-        if (data?.servers?.length) return data;
-        throw new Error('no servers');
-      } catch (e) {
-        console.warn(`[ClientEngine] ${scraperName} failed for "${title}": ${e.message}`);
-        errors.push(`${scraperName}[${title.slice(0, 30)}]: ${e.message}`);
-        throw e;
-      }
-    });
+  // Single call per scraper — each scraper already handles all title variants internally
+  // via its allTitles param. Firing N calls was redundant and multiplied network requests.
+  const primaryTitle = anime.title?.romaji || anime.title?.english || titles[0];
+  const tryScraper = async (scraperFn, scraperName) => {
     try {
-      const result = await Promise.any(attempts);
-      handleScraperResult(result);
-      return result;
-    } catch {
+      console.log(`[ClientEngine] ${scraperName} scraping ep ${episode} (primary: "${primaryTitle}")`);
+      const data = await scraperFn(primaryTitle, episode, isMovie, anime.id, allTitles);
+      if (data?.servers?.length) { handleScraperResult(data); return data; }
+      errors.push(`${scraperName}: returned no servers`);
+      return null;
+    } catch (e) {
+      console.warn(`[ClientEngine] ${scraperName} failed: ${e.message}`);
+      errors.push(`${scraperName}: ${e.message}`);
       return null;
     }
   };
 
-  const nekoPromise = tryAllTitles(scrapeAniNeko, 'AniNeko');
+  const nekoPromise = tryScraper(scrapeAniNeko, 'AniNeko');
 
   let results;
   if (onlyNeko) {
@@ -174,8 +200,8 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
       runWithTimeout(nekoPromise, 12000, 'AniNeko').catch(e => { console.warn(e.message); return null; })
     ]);
   } else {
-    const wavesPromise   = tryAllTitles(scrapeAniWaves,  'AniWaves');
-    const anikotoPromise = tryAllTitles(scrapeAniKoto,   'AniKoto');
+    const wavesPromise   = tryScraper(scrapeAniWaves,  'AniWaves');
+    const anikotoPromise = tryScraper(scrapeAniKoto,   'AniKoto');
 
     results = await Promise.allSettled([
       runWithTimeout(nekoPromise,    18000, 'AniNeko').catch(e  => { console.warn(e.message); return null; }),
@@ -369,4 +395,57 @@ export async function resolvePlaceholderServer(anime, episode, serverName, serve
     }
   }
   throw new Error(`Failed to resolve streaming link for ${serverName}`);
+}
+
+// ── M3U8 Prefetch Cache ──────────────────────────────────────────────────────
+// Stores pre-fetched and pre-parsed HLS playlist variants keyed by videoUrl.
+// TTL: 20 minutes (playlist segments typically expire in ~30 min).
+const m3u8PrefetchCache = new Map();
+const M3U8_PREFETCH_TTL = 20 * 60 * 1000;
+
+/**
+ * Prefetch and parse an HLS master playlist immediately after server resolution.
+ * The parsed quality variants are stored in cache AND attached to the server obj
+ * as `server._prefetchedVariants`, so AniPlayer reads them with zero extra wait.
+ *
+ * Called fire-and-forget: errors are silently swallowed.
+ */
+export async function prefetchM3U8(videoUrl, referer) {
+  if (!videoUrl || !videoUrl.startsWith('http')) return;
+
+  // Skip if already prefetched and still fresh
+  const existing = m3u8PrefetchCache.get(videoUrl);
+  if (existing && Date.now() - existing.timestamp < M3U8_PREFETCH_TTL) {
+    console.log(`[Prefetch] M3U8 already prefetched: ${videoUrl.slice(0, 60)}...`);
+    return existing.variants;
+  }
+
+  try {
+    console.log(`[Prefetch] Pre-fetching HLS playlist: ${videoUrl.slice(0, 60)}...`);
+    const playlistText = await fetchM3U8Playlist(videoUrl, referer);
+    const variants = parseMasterPlaylist(videoUrl, playlistText);
+    if (variants.length > 0) {
+      m3u8PrefetchCache.set(videoUrl, { variants, timestamp: Date.now() });
+      console.log(`[Prefetch] HLS playlist cached \u2014 ${variants.length} quality levels: ${variants.map(v => v.label).join(', ')}`);
+      return variants;
+    }
+  } catch (e) {
+    // Silently swallow — prefetch is a best-effort optimization
+    console.log(`[Prefetch] M3U8 prefetch failed (non-critical): ${e.message}`);
+  }
+  return null;
+}
+
+/**
+ * Returns pre-fetched HLS variants if available and still fresh.
+ * Call this before parsing the playlist from scratch in the player.
+ */
+export function getPrefetchedM3U8Variants(videoUrl) {
+  if (!videoUrl) return null;
+  const cached = m3u8PrefetchCache.get(videoUrl);
+  if (cached && Date.now() - cached.timestamp < M3U8_PREFETCH_TTL) {
+    console.log(`[Prefetch] M3U8 cache HIT \u2014 serving ${cached.variants.length} variants instantly`);
+    return cached.variants;
+  }
+  return null;
 }

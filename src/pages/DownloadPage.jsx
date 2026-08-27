@@ -81,10 +81,52 @@ function LocalPlayerOverlay({ item, onClose }) {
           setError("Video file not found. It may have been deleted from your Downloads folder.");
           return;
         }
+
+        // ── Ensure subtitle content is available ──
+        // The native plugin may return subtitlePath (file path) but no subtitleContent
+        // (inlined VTT text). When that happens, fetch the content ourselves so AniPlayer
+        // gets it via the instant `content` path — no URL resolution needed.
+        let subtitleContent = uris.subtitleContent || null;
+        if (!subtitleContent && uris.subtitleUri) {
+          try {
+            // Try window.fetch first (Capacitor local file server)
+            const res = await window.fetch(uris.subtitleUri);
+            if (res.ok) {
+              const text = await res.text();
+              if (text && text.length > 5 && (text.includes('-->') || text.includes('WEBVTT') || text.trimStart().startsWith('['))) {
+                subtitleContent = text;
+                console.log(`[DownloadPage] Fetched subtitle content (${text.length} chars) from local file`);
+              }
+            }
+          } catch (fetchErr) {
+            console.warn('[DownloadPage] window.fetch subtitle failed:', fetchErr.message);
+          }
+
+          // Fallback: CapacitorHttp for file:// paths
+          if (!subtitleContent && window.Capacitor?.isNativePlatform?.()) {
+            try {
+              const { CapacitorHttp } = await import('@capacitor/core');
+              let localPath = uris.subtitleUri;
+              if (localPath.includes('_capacitor_file_')) {
+                const match = localPath.match(/_capacitor_file_(.+)/);
+                if (match) localPath = 'file://' + decodeURIComponent(match[1]);
+              }
+              const resp = await CapacitorHttp.request({ url: localPath, method: 'GET', responseType: 'text' });
+              if (resp.status === 200 && resp.data) {
+                subtitleContent = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+                console.log(`[DownloadPage] CapacitorHttp fetched subtitle content (${subtitleContent.length} chars)`);
+              }
+            } catch (e) {
+              console.warn('[DownloadPage] CapacitorHttp subtitle fallback failed:', e.message);
+            }
+          }
+        }
+
+        if (cancelled) return;
         setPlayerData({
           videoUri: uris.videoUri,
           subtitleUri: uris.subtitleUri || null,
-          subtitleContent: uris.subtitleContent || null
+          subtitleContent: subtitleContent
         });
       } catch (e) {
         if (!cancelled) setError(e.message || "Failed to open video");
@@ -93,6 +135,7 @@ function LocalPlayerOverlay({ item, onClose }) {
     load();
     return () => { cancelled = true; };
   }, [item]);
+
 
   const subtracks = playerData && (playerData.subtitleContent || playerData.subtitleUri)
     ? [{

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { useApp } from '../context/AppContext';
 import { useAnimeDetail } from '../hooks/useAnimeDetail';
 import { useAnimeStream } from '../hooks/useAnimeStream';
@@ -40,6 +41,24 @@ export default function AnimePage() {
   // 1. Data hooks
   const { anime, loading, error } = useAnimeDetail(id);
 
+  // 2. Calculations (must be before useAnimeStream so totalEps is available for prefetch)
+  const totalEps = useMemo(() => {
+    if (!anime) return 1;
+    const eps = anime.episodes || 0;
+    const isAiring = anime.status === 'RELEASING';
+    const airedCount = anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1
+      ? anime.nextAiringEpisode.episode - 1
+      : 0;
+    return isAiring ? Math.max(1, airedCount, eps) : Math.max(eps, 1);
+  }, [anime]);
+
+  const allEps = useMemo(() => Array.from({ length: totalEps }, (_, i) => i + 1), [totalEps]);
+  const prog = anime ? getEpisodeProgress(anime.id) : null;
+  const resumeEp = prog?.episode ? Math.min(prog.episode, totalEps) : 1;
+
+  const recs = useMemo(() => anime?.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [], [anime]);
+  const chars = useMemo(() => (anime?.characters?.edges || []).map(e => ({ ...e.node, voiceActors: e.voiceActors || [] })), [anime]);
+
   const {
     servers,
     subServers,
@@ -64,6 +83,7 @@ export default function AnimePage() {
     playParam,
     settings,
     showToast,
+    totalEps,
   });
 
   const {
@@ -79,24 +99,6 @@ export default function AnimePage() {
     handleDownloadClick,
     startDownload,
   } = useAnimeDownload(anime, showToast);
-
-  // 2. Calculations
-  const totalEps = useMemo(() => {
-    if (!anime) return 1;
-    const eps = anime.episodes || 0;
-    const isAiring = anime.status === 'RELEASING';
-    const airedCount = anime.nextAiringEpisode && anime.nextAiringEpisode.episode > 1
-      ? anime.nextAiringEpisode.episode - 1
-      : 0;
-    return isAiring ? Math.max(1, airedCount, eps) : Math.max(eps, 1);
-  }, [anime]);
-
-  const allEps = useMemo(() => Array.from({ length: totalEps }, (_, i) => i + 1), [totalEps]);
-  const prog = anime ? getEpisodeProgress(anime.id) : null;
-  const resumeEp = prog?.episode ? Math.min(prog.episode, totalEps) : 1;
-
-  const recs = useMemo(() => anime?.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [], [anime]);
-  const chars = useMemo(() => (anime?.characters?.edges || []).map(e => ({ ...e.node, voiceActors: e.voiceActors || [] })), [anime]);
 
   // Reset scroll and tab when navigating to a new anime
   useEffect(() => {
@@ -146,17 +148,42 @@ export default function AnimePage() {
   // Sync episode progress when playing
   useEffect(() => {
     if (anime && epParam) {
-      setEpisodeProgress(anime.id, epParam);
+      // Reset seekPosition when changing episodes (fresh start for new ep)
+      const existingProg = getEpisodeProgress(anime.id);
+      const isSameEp = existingProg?.episode === epParam;
+      setEpisodeProgress(anime.id, epParam,
+        isSameEp ? (existingProg?.seekPosition ?? null) : null,  // keep seek only if same ep
+        isSameEp ? (existingProg?.duration ?? null) : null
+      );
       addToRecentlyViewed(anime, epParam);
     }
   }, [anime, epParam, setEpisodeProgress, addToRecentlyViewed]);
+
+  // Save within-episode position every 10s (called by AniPlayer interval)
+  const handleSeekProgress = useCallback((currentTime, duration) => {
+    if (!anime || !epParam) return;
+    setEpisodeProgress(anime.id, epParam, currentTime, duration);
+  }, [anime, epParam, setEpisodeProgress]);
+
+  // Initial seek time: only resume if we're reopening the SAME episode
+  const initialSeekTime = useMemo(() => {
+    if (!prog || prog.episode !== epParam) return 0;
+    return prog.seekPosition ?? 0;
+  }, [prog, epParam]);
 
   const handleEpisodeSelect = useCallback((newEp) => {
     const wasFs = fsActiveRef.current;
     if (wasFs) {
       keepFsRef.current = true;
       setEpTransitionFs(true);
-      setTimeout(() => { keepFsRef.current = false; }, 800);
+      // Extended timeout: covers slow server fetches (HD-1 can take 3–4s)
+      // keepFsRef prevents the unmount cleanup from resetting orientation
+      setTimeout(() => { keepFsRef.current = false; }, 4000);
+      // Belt-and-suspenders: re-lock landscape immediately so even if something
+      // briefly resets orientation, we snap back before the user notices
+      if (window.Capacitor?.isNativePlatform?.()) {
+        ScreenOrientation.lock({ orientation: 'landscape' }).catch(() => {});
+      }
     } else {
       setEpTransitionFs(false);
     }
@@ -370,6 +397,8 @@ export default function AnimePage() {
           prog={prog}
           setActiveUrl={setActiveUrl}
           setIsActiveHLS={setIsActiveHLS}
+          initialSeekTime={initialSeekTime}
+          onSeekProgress={handleSeekProgress}
         />
       )}
 

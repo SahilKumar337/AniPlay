@@ -1,3 +1,42 @@
+# AniPlay v1.5.5 Major Release: The Complete Overhaul Update 🚀
+
+We are thrilled to unveil **AniPlay v1.5.5** — our biggest and most transformative update yet! This release completely redesigns the app from the ground up with stunning visual aesthetics, buttery-smooth animations, a full-featured community discussion system, smart notifications, and next-generation playback features.
+
+---
+
+## ✨ 1. COMPLETELY REDESIGNED UI & FLUID ANIMATIONS
+* **Next-Gen Glassmorphism Design**: High-contrast modern dark mode with tailored HSL accent themes, ultra-clean navigation headers, and beautiful glowing elements.
+* **120Hz Butter-Smooth Micro-Animations**: GPU-accelerated spring physics and gesture interactions across all screens, cards, and modal dialogs.
+* **Decluttered MyList**: Streamlined card layout with status badges, favorite badges, and smooth entrance/removal transitions.
+* **Immersive Hero Banners**: Dynamic gradient backdrops and responsive typography for a cinematic browsing experience.
+
+## 💬 2. INTERACTIVE COMMUNITY & NESTED REPLIES
+* **Threaded Nested Discussions**: Reply directly to any comment with dedicated inline reply boxes and collapsible conversation threads.
+* **Instant Likes & Real-time Reactions**: Like comments with animated micro-feedback; your reactions are instantly remembered.
+* **Community Profiles**: Seamless username and avatar display with participant badges.
+
+## 🎬 3. ENHANCED HIGH-PERFORMANCE MEDIA PLAYER
+* **Seamless Episode Switching**: Switch episodes instantly in fullscreen without annoying portrait flashes or screen orientation resets.
+* **Multi-Track Subtitle Pipeline**: Multi-source subtitle fallbacks, custom font sizing, opacity adjustments, and live sync offset controls.
+* **Zero-Lag HLS Engine**: Ultra-low latency streaming with automatic quality adaptation and background stream prefetching.
+* **Custom Gestures & Shortcuts**: Double-tap skip, brightness/volume slide controls, and aspect ratio fit modes.
+
+## 🔔 4. SMART NOTIFICATIONS & SYSTEM ALERTS
+* **Episode Drop Alerts**: Real-time notifications when new episodes of your favorite anime release.
+* **Community Notifications**: Instant alerts when someone likes or replies to your comments in discussions.
+* **In-App Toast System**: Sleek feedback banners for cloud syncs, downloads, and playback actions.
+
+## 📥 5. ULTRA-FAST OFFLINE DOWNLOADER
+* **Parallel Multi-Segment Downloads**: Turbocharged download engine with custom resolution picker (1080p, 720p, 480p).
+* **Flexible Storage**: Save downloaded episodes to custom storage directories or SD cards.
+* **Offline Playback**: Watch your downloaded anime anywhere with full subtitle and audio track support.
+
+## 🛡️ 6. PRIVACY-FIRST & HIGH PERFORMANCE
+* **Safe & Lightweight**: Zero intrusive trackers or forced popups. Pure anime streaming at maximum speed.
+* **Offline-First Sync**: Instant local responses with background cloud synchronization.
+
+---
+
 # AniPlay v1.5.1 Patch Release: Servers & Matching Update 🚀
 
 We are proud to present **AniPlay version 1.5.1**, which fixes title-matching, extends server coverage, and improves playback recovery.

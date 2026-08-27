@@ -287,7 +287,9 @@ export default function AniPlayer({
   onStreamExpired = null,
   startInFs = false,
   keepFsOnEpChange = null,
-  isLocal = false,    // NEW: true = local file (content:// URI), skip HLS.js entirely
+  isLocal = false,
+  initialSeekTime = 0,      // seconds to seek to on first load
+  onSeekProgress = null,    // (currentTime, duration) => void — called every 10s while playing
 }) {
   const wrapRef = useRef(null);
   const videoRef   = useRef(null);
@@ -660,37 +662,77 @@ export default function AniPlayer({
       return;
     }
 
-    const url = currentSubTrack.file || '';
-    log(`Fetching subtitles from: ${url || 'preloaded-content'}`);
+    // ── Core subtitle text loader for a single track ──
+    const loadSubtitleFromTrack = async (track) => {
+      const url = track.file || '';
+      log(`[Subtitle] Attempting track "${track.label || 'unknown'}" from: ${url.slice(0, 80) || 'preloaded-content'}`);
 
-    const loadSubtitlesText = async () => {
       // 1. Instant path: direct pre-loaded string content (e.g. offline downloaded subtitle)
-      if (currentSubTrack?.content && typeof currentSubTrack.content === 'string' && currentSubTrack.content.trim().length > 0) {
+      if (track?.content && typeof track.content === 'string' && track.content.trim().length > 0) {
         log('[AniPlayer] Using embedded/pre-loaded subtitle content directly');
-        return currentSubTrack.content;
+        return track.content;
       }
 
       // 2. Local offline file URL path (e.g. http://localhost/_capacitor_file_/... or file://...)
       if (isLocal || url.includes('_capacitor_file_') || url.startsWith('file://') || url.startsWith('http://localhost') || url.startsWith('local://')) {
+        // Try window.fetch first (works in most WebView scenarios)
         try {
           log(`[AniPlayer] Fetching local subtitle via WebView asset loader: ${url}`);
           const res = await window.fetch(url);
           if (res.ok) {
             const text = await res.text();
-            if (text && text.length > 5) return text;
+            if (text && text.length > 5 && (text.includes('-->') || text.includes('WEBVTT') || text.trimStart().startsWith('['))) {
+              return text;
+            }
+            log('[AniPlayer] window.fetch returned non-subtitle content, trying CapacitorHttp fallback...');
           }
         } catch (err) {
           log(`[AniPlayer] window.fetch on local subtitle failed: ${err.message}`);
         }
+
+        // Fallback: CapacitorHttp handles file:// and _capacitor_file_ paths better on Android
+        if (isNative) {
+          try {
+            // Convert _capacitor_file_ URL back to file:// for CapacitorHttp
+            let localPath = url;
+            if (url.includes('_capacitor_file_')) {
+              const match = url.match(/_capacitor_file_(.+)/);
+              if (match) localPath = 'file://' + decodeURIComponent(match[1]);
+            }
+            log(`[AniPlayer] CapacitorHttp fallback for local subtitle: ${localPath.slice(0, 80)}`);
+            const resp = await CapacitorHttp.request({ url: localPath, method: 'GET', responseType: 'text' });
+            if (resp.status === 200 && resp.data) {
+              const text = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+              if (text && text.length > 5) return text;
+            }
+          } catch (e) {
+            log(`[AniPlayer] CapacitorHttp local subtitle fallback failed: ${e.message}`);
+          }
+        }
       }
 
       // 3. Remote subtitle URL path on native platform
-      const subReferer = currentSubTrack?.referer || referer;
-
-      // On native: extract real subtitle URL & referer from proxy URL params.
+      const subReferer = track?.referer || referer;
       let targetUrl = url;
       let targetReferer = subReferer;
-      if (isNative && !url.includes('_capacitor_file_') && !url.startsWith('file://')) {
+
+      // Handle subtitle-native:// scheme: extract real URL + referer encoded by scrapers
+      if (url.startsWith('subtitle-native://')) {
+        try {
+          const parsed = new URL(url.replace('subtitle-native://', 'https://subtitle-native.local/'));
+          const innerUrl = parsed.searchParams.get('url');
+          const innerRef = parsed.searchParams.get('referer');
+          if (innerUrl) {
+            targetUrl = decodeURIComponent(innerUrl);
+            if (innerRef) targetReferer = decodeURIComponent(innerRef);
+            log(`[AniPlayer] subtitle-native:// decoded → ${targetUrl.slice(0, 80)}, referer: ${targetReferer.slice(0, 60)}`);
+          }
+        } catch (e) {
+          log(`[AniPlayer] subtitle-native:// parse failed: ${e.message}`);
+        }
+      }
+      // Handle proxy URL params (web/fallback path)
+      else if (isNative && !url.includes('_capacitor_file_') && !url.startsWith('file://')) {
         try {
           const parsed = new URL(url.startsWith('http') ? url : (window.location.origin + url));
           const innerUrl = parsed.searchParams.get('url');
@@ -737,6 +779,7 @@ export default function AniPlayer({
           }
         } catch (e) {
           console.warn('[AniPlayer] CapacitorHttp subtitle request failed:', e.message);
+          throw e; // propagate so retry chain can try next track
         }
       }
 
@@ -746,85 +789,107 @@ export default function AniPlayer({
       return await res.text();
     };
 
-    loadSubtitlesText()
-      .then(text => {
-        if (text && typeof text === 'object') {
-          log('Subtitle response auto-parsed as JSON object, converting to string...');
-          try {
-            text = JSON.stringify(text);
-          } catch (e) {
-            log(`JSON stringify failed: ${e.message}`);
+    // ── Parse subtitle text into cues ──
+    const parseSubtitleText = (text) => {
+      if (!text) {
+        log('Subtitle response was empty or blocked');
+        return [];
+      }
+
+      if (text && typeof text === 'object') {
+        try { text = JSON.stringify(text); } catch { return []; }
+      }
+
+      log(`Subtitle response type: ${typeof text}, length: ${text ? text.length : 0}`);
+      if (text && typeof text === 'string') {
+        log(`Subtitle start snippet: ${text.slice(0, 100)}`);
+      }
+
+      // Try JSON first (some scrapers return [{startTime, endTime, text}])
+      if (typeof text === 'string' && (text.trimStart().startsWith('[') || text.trimStart().startsWith('{'))) {
+        try {
+          const data = JSON.parse(text);
+          log(`Loaded ${data.length} subtitle cues (JSON format)`);
+          return Array.isArray(data) ? data : [];
+        } catch {}
+      }
+
+      // Parse WebVTT / SRT format
+      if (text.includes('WEBVTT') || text.includes('-->')) {
+        const parsed = [];
+        const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
+        for (const block of blocks) {
+          const lines = block.trim().split('\n');
+          const tsIdx = lines.findIndex(l => l.includes('-->'));
+          if (tsIdx === -1) continue;
+          const tsParts = lines[tsIdx].split('-->');
+          if (tsParts.length < 2) continue;
+
+          const parseTime = (t) => {
+            const parts = t.trim().replace(',', '.').split(':');
+            let secs = 0;
+            if (parts.length === 3) secs = +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
+            else if (parts.length === 2) secs = +parts[0] * 60 + parseFloat(parts[1]);
+            return secs;
+          };
+
+          const startTime = parseTime(tsParts[0]);
+          const endTime = parseTime(tsParts[1].trim().split(/\s+/)[0]);
+          const rawSubText = lines.slice(tsIdx + 1).join('\n').trim();
+          const cleanSubText = rawSubText.replace(/<[^>]+>/g, '').trim();
+
+          if (cleanSubText && isFinite(startTime) && isFinite(endTime)) {
+            parsed.push({ startTime, endTime, text: cleanSubText });
           }
         }
+        log(`Loaded ${parsed.length} subtitle cues (WebVTT/SRT format)`);
+        return parsed;
+      }
 
-        log(`Subtitle response type: ${typeof text}, length: ${text ? text.length : 0}`);
-        if (text && typeof text === 'string') {
-          log(`Subtitle start snippet: ${text.slice(0, 100)}`);
-        }
+      log('Unknown subtitle format — could not parse');
+      return [];
+    };
 
-        if (!text) {
-          log('Subtitle response was empty or blocked');
-          setCues([]);
+    // ── Main: try current track, then retry with fallbacks ──
+    (async () => {
+      // Try the active track first
+      try {
+        const text = await loadSubtitleFromTrack(currentSubTrack);
+        const cueList = parseSubtitleText(text);
+        if (cueList.length > 0) {
+          setCues(cueList);
           return;
         }
-        // Try JSON first (some scrapers return [{startTime, endTime, text}])
-        if (typeof text === 'string' && (text.trimStart().startsWith('[') || text.trimStart().startsWith('{'))) {
-          try {
-            const data = JSON.parse(text);
-            log(`Loaded ${data.length} subtitle cues (JSON format)`);
-            setCues(Array.isArray(data) ? data : []);
+        log('[Subtitle] Primary track returned 0 cues, trying fallbacks...');
+      } catch (err) {
+        log(`[Subtitle] Primary track failed: ${err.message}, trying fallbacks...`);
+      }
+
+      // Retry chain: try every other available track before giving up
+      for (const fallbackTrack of subs) {
+        if (fallbackTrack.id === activeSub) continue; // skip the one that just failed
+        if (!fallbackTrack.file && !fallbackTrack.content) continue;
+        try {
+          const text = await loadSubtitleFromTrack(fallbackTrack);
+          const cueList = parseSubtitleText(text);
+          if (cueList.length > 0) {
+            log(`[Subtitle] Fallback track "${fallbackTrack.label}" succeeded with ${cueList.length} cues`);
+            setCues(cueList);
             return;
-          } catch {}
-        }
-
-        // Parse WebVTT format
-        if (text.includes('WEBVTT') || text.includes('-->')) {
-          const parsed = [];
-          // Split on double newline (cue separator)
-          const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
-          for (const block of blocks) {
-            const lines = block.trim().split('\n');
-            // Find the timestamp line
-            const tsIdx = lines.findIndex(l => l.includes('-->'));
-            if (tsIdx === -1) continue;
-            const tsParts = lines[tsIdx].split('-->');
-            if (tsParts.length < 2) continue;
-
-            const parseTime = (t) => {
-              // Handle HH:MM:SS.mmm or MM:SS.mmm
-              const parts = t.trim().replace(',', '.').split(':');
-              let secs = 0;
-              if (parts.length === 3) secs = +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
-              else if (parts.length === 2) secs = +parts[0] * 60 + parseFloat(parts[1]);
-              return secs;
-            };
-
-            const startTime = parseTime(tsParts[0]);
-            const endTime = parseTime(tsParts[1].trim().split(/\s+/)[0]);
-            const rawSubText = lines.slice(tsIdx + 1).join('\n').trim();
-            const cleanSubText = rawSubText.replace(/<[^>]+>/g, '').trim();
-
-            if (cleanSubText && isFinite(startTime) && isFinite(endTime)) {
-              parsed.push({ startTime, endTime, text: cleanSubText });
-            }
           }
-          log(`Loaded ${parsed.length} subtitle cues (WebVTT/SRT format)`);
-          setCues(parsed);
-          return;
+        } catch {
+          // continue to next fallback
         }
+      }
 
-        log('Unknown subtitle format — could not parse');
-        setCues([]);
-      })
-      .catch(err => {
-        log(`Failed to fetch subtitles: ${err.message}`);
-        setCues([]);
-        if (!isLocal) {
-          // Show toast notification only for online streams
-          setSubToast('Subtitles unavailable');
-          setTimeout(() => setSubToast(null), 3500);
-        }
-      });
+      // All tracks exhausted
+      log('[Subtitle] All subtitle tracks exhausted — no cues loaded');
+      setCues([]);
+      if (!isLocal) {
+        setSubToast('Subtitles unavailable');
+        setTimeout(() => setSubToast(null), 3500);
+      }
+    })();
   }, [activeSub, subs, referer, log]);
 
   /* ── Video events ─────────────────────────────────────────── */
@@ -849,6 +914,12 @@ export default function AniPlayer({
     const onMeta = () => {
       log(`Video loadedmetadata: duration=${v.duration.toFixed(1)}`);
       setDuration(v.duration);
+      // Resume from stored seek position (Netflix-style "continue where you left off")
+      // Only seek if > 5s into episode and not within last 30s (episode considered done)
+      if (initialSeekTime > 5 && v.duration > 0 && initialSeekTime < v.duration - 30) {
+        log(`[Resume] Seeking to stored position: ${initialSeekTime.toFixed(1)}s`);
+        v.currentTime = initialSeekTime;
+      }
     };
     const onWait = () => {
       log('Video event: waiting (buffering)');
@@ -901,6 +972,29 @@ export default function AniPlayer({
       v.removeEventListener('ended',          onEnded);
     };
   }, [log, autoplay, onEpisodeChange, currentEpisode, totalEpisodes]);
+
+  // ── Save seek position every 10s while playing (Netflix-style resume) ──
+  // Fires onSeekProgress(currentTime, duration) at 10s intervals.
+  // Throttled: only fires while video is actually playing, not paused/buffering.
+  // Egress impact: ZERO — this is a local Preferences write, not a Supabase read.
+  const onSeekProgressRef = useRef(onSeekProgress);
+  useEffect(() => { onSeekProgressRef.current = onSeekProgress; }, [onSeekProgress]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !onSeekProgressRef.current) return;
+
+    const interval = setInterval(() => {
+      if (v.paused || v.ended || v.duration < 5) return;
+      const ct = v.currentTime;
+      const dur = v.duration;
+      // Don't save in first 5s (avoids saving resume point at 0) or last 30s (episode done)
+      if (ct < 5 || ct > dur - 30) return;
+      onSeekProgressRef.current(ct, dur);
+    }, 10000); // every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [url]); // restart interval when URL changes (new episode)
 
   // ── Autoplay countdown when video ends ─────────────────────────
   useEffect(() => {

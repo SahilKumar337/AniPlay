@@ -24,7 +24,15 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
   const cover = getCover(item.anime);
   const totalEps = item.anime.episodes || 24;
   const currentEp = item.ep || item.episode || 1;
-  const progressPct = Math.min((currentEp / totalEps) * 100, 100);
+
+  // Within-episode progress: use seekPosition/duration if available (Netflix-style)
+  // Fallback: episode/total (series completion bar)
+  const seekPos = item.seekPosition ?? null;
+  const duration = item.duration ?? null;
+  const hasSeekData = seekPos != null && duration != null && duration > 0;
+  const progressPct = hasSeekData
+    ? Math.min((seekPos / duration) * 100, 100)
+    : Math.min((currentEp / totalEps) * 100, 100);
 
   const isCached = cover ? imageCache.has(cover) : false;
   const [imgLoaded, setImgLoaded] = useState(isCached);
@@ -89,6 +97,11 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
             display: 'block', marginBottom: 5,
           }}>
             EP {currentEp}{totalEps && totalEps !== 24 ? ` / ${totalEps}` : ''}
+            {hasSeekData && (
+              <span style={{ opacity: 0.6, fontWeight: 500 }}>
+                {' · '}{Math.round((duration - seekPos) / 60)}m left
+              </span>
+            )}
           </span>
 
           {/* Premium progress bar */}
@@ -153,11 +166,14 @@ export default function Home() {
       if (!item || !item.anime) return;
       const id = String(item.anime.id);
       const epNum = progress?.[id]?.episode || progress?.[id]?.ep || item.episode || item.ep || 1;
+      const seekPosition = progress?.[id]?.seekPosition ?? null;
+      const duration = progress?.[id]?.duration ?? null;
       if (!seenMap.has(id)) {
         seenMap.set(id, {
           anime: item.anime,
           ep: epNum,
-          progress: item.progress || 0,
+          seekPosition,
+          duration,
           timestamp: Math.max(progress?.[id]?.timestamp || 0, item.timestamp || 0),
         });
       }
@@ -171,7 +187,8 @@ export default function Home() {
           seenMap.set(String(id), {
             anime: animeMeta,
             ep: item.episode || item.ep || 1,
-            progress: 0,
+            seekPosition: item.seekPosition ?? null,
+            duration: item.duration ?? null,
             timestamp: item.timestamp || 0,
           });
         }

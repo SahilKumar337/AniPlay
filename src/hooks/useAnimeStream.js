@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { getAniNekoServers, getCachedServers, resolvePlaceholderServer } from '../api/stream';
+import { getAniNekoServers, getCachedServers, resolvePlaceholderServer, prefetchNextEpisode } from '../api/stream';
 import { scrapeEmbedNative, scrapeEmbedDirectly } from '../api/embedScraper';
 import { enrichDubSubtitles, buildAllSubtitleTracks } from '../utils/animeStreamUtils';
 
@@ -10,6 +10,7 @@ export function useAnimeStream({
   playParam,
   settings,
   showToast,
+  totalEps,
 }) {
   const [servers, setServers] = useState([]);
   const [allSubtitleTracks, setAllSubtitleTracks] = useState([]);
@@ -26,22 +27,33 @@ export function useAnimeStream({
   const resolvedEmbedCacheRef = useRef(new Map());
   const activeUrlRef = useRef('');
   const lastFetchedRef = useRef(null);
+  const prefetchTimerRef = useRef(null);
+  // Ref mirror of servers state — lets selectServer/fetchStream access latest servers
+  // without those functions being in a re-render loop (servers → callback → useEffect → servers)
+  const serversRef = useRef([]);
+  const audioTrackRef = useRef(audioTrack);
+
+  // Keep refs in sync with state
+  useEffect(() => { serversRef.current = servers; }, [servers]);
+  useEffect(() => { audioTrackRef.current = audioTrack; }, [audioTrack]);
 
   const subServers = servers.filter(s => s.type === 'sub');
   const dubServers = servers.filter(s => s.type === 'dub');
 
+  // selectServer: reads serversRef.current as fallback — stable callback, no array dep
   const selectServer = useCallback(async (srv, srvList) => {
     if (!srv) return;
     setActiveServer(srv);
     setActiveName(srv.name || '');
     setActiveType(srv.type || 'sub');
-    if (srv.type && srv.type !== audioTrack) {
+    if (srv.type && srv.type !== audioTrackRef.current) {
       setAudioTrack(srv.type);
+      audioTrackRef.current = srv.type;
     }
     setStreamErr(null);
     setExtracting(false);
 
-    const listToUse = srvList || servers || [];
+    const listToUse = srvList || serversRef.current || [];
     const sameTypeServers = srv.type === 'dub'
       ? listToUse.filter(s => s.type === 'dub')
       : listToUse.filter(s => s.type === 'sub');
@@ -78,6 +90,7 @@ export function useAnimeStream({
           return s;
         });
         setServers(updatedList);
+        serversRef.current = updatedList;
         selectServer({ ...srv, ...resolved }, updatedList);
         return;
       } catch (err) {
@@ -163,16 +176,37 @@ export function useAnimeStream({
       activeUrlRef.current = srv.videoUrl;
       setIsActiveHLS(Boolean(srv.isHLS));
     }
-  }, [anime, epParam, servers]);
+  }, [anime, epParam]); // ← no 'servers' dep — uses serversRef.current instead
 
   const fetchStream = useCallback(async () => {
     if (!anime || !epParam) return;
     const fetchKey = `${anime.id}_${epParam}`;
-    if (lastFetchedRef.current === fetchKey && servers.length > 0) return;
-    lastFetchedRef.current = fetchKey;
 
-    setLoadStream(true);
+    // Dedup guard: only skip if we already fetched THIS episode AND have a URL.
+    // If URL is empty (e.g. autoplay cleared it), fall through to re-select.
+    if (lastFetchedRef.current === fetchKey && serversRef.current.length > 0 && activeUrlRef.current) return;
+
+    // Fast-path: servers already in memory (e.g. prefetched) but URL is empty.
+    // Skip the network call and jump straight to server selection.
+    if (lastFetchedRef.current === fetchKey && serversRef.current.length > 0 && !activeUrlRef.current) {
+      const track = audioTrackRef.current || 'sub';
+      const trackServers = serversRef.current.filter(s => s.type === track);
+      const chosen = trackServers.length > 0 ? trackServers[0] : serversRef.current[0];
+      if (chosen) {
+        setLoadStream(true);
+        await selectServer(chosen, serversRef.current);
+        setLoadStream(false);
+      }
+      return;
+    }
+
+    lastFetchedRef.current = fetchKey;
     setStreamErr(null);
+    setLoadStream(true);
+    // NOTE: we intentionally do NOT clear activeUrl/servers here.
+    // Keeping the old URL alive means AniPlayer stays mounted during the episode
+    // transition → no orientation reset, no blocked touch events.
+    // AniPlayer will automatically reinit its HLS when it receives the new url prop.
 
     try {
       const cached = getCachedServers(anime, epParam);
@@ -191,30 +225,42 @@ export function useAnimeStream({
 
       const enriched = enrichDubSubtitles(srvList);
       setServers(enriched);
+      serversRef.current = enriched;
 
       const allTracks = buildAllSubtitleTracks(enriched);
       setAllSubtitleTracks(allTracks);
 
-      const preferredTrack = audioTrack || 'sub';
-      const trackServers = enriched.filter(s => s.type === preferredTrack);
+      const track = audioTrackRef.current || 'sub';
+      const trackServers = enriched.filter(s => s.type === track);
       const chosen = trackServers.length > 0 ? trackServers[0] : enriched[0];
-      if (chosen && chosen.type && chosen.type !== audioTrack) {
+      if (chosen && chosen.type && chosen.type !== audioTrackRef.current) {
         setAudioTrack(chosen.type);
+        audioTrackRef.current = chosen.type;
       }
 
       await selectServer(chosen, enriched);
+
+      // Schedule silent next-episode prefetch 30s into playback
+      if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+      prefetchTimerRef.current = setTimeout(() => {
+        prefetchNextEpisode(anime, epParam, totalEps);
+      }, 30000);
     } catch (err) {
       console.error('[useAnimeStream] Error:', err);
       setStreamErr('Failed to load video stream. Tap retry.');
     } finally {
       setLoadStream(false);
     }
-  }, [anime, epParam, audioTrack, servers.length, selectServer]);
+  }, [anime, epParam, selectServer]); // ← no 'servers' or 'audioTrack' dep — uses refs
 
   useEffect(() => {
     if (playParam && epParam && anime) {
       fetchStream();
     }
+    // Cancel any in-flight prefetch timer when episode changes
+    return () => {
+      if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    };
   }, [playParam, epParam, anime, fetchStream]);
 
   return {

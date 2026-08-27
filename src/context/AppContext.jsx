@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Preferences } from '@capacitor/preferences';
 import { App } from '@capacitor/app';
-import { supabase, fetchCloudWatchlist, syncCloudProgress, fetchUserProfile, updateCloudRecentlyViewed, updateCloudSettings } from '../api/supabase';
+import { supabase, fetchCloudWatchlist, syncCloudProgress, fetchUserProfile, updateCloudRecentlyViewed, updateCloudSettings, backupLocalDataOnUpdate } from '../api/supabase';
 import { getAnimesByIds } from '../api/anilist';
 
 const AppContext = createContext(null);
@@ -592,6 +592,61 @@ export function AppProvider({ children }) {
     }
   }, [loaded, user, syncWithCloud]);
 
+  // ── One-time bulk backup on app update ─────────────────────────────────
+  // Runs ONCE per version bump — never on every launch.
+  // Gate: compares installed versionCode (from CapApp) with last-backed-up
+  // versionCode stored in Preferences. If different → diff upload → save new code.
+  useEffect(() => {
+    if (!loaded || !user) return;
+    const currentWatchlist  = watchlistRef.current;
+    const currentProgress   = progressRef.current;
+    const currentFavorites  = favoritesRef.current;
+    // Only bother if user has local data worth backing up
+    const hasLocalData = Object.keys(currentWatchlist).length > 0 ||
+                         Object.keys(currentProgress).length  > 0;
+    if (!hasLocalData) return;
+
+    async function runBackupIfNeeded() {
+      try {
+        const BACKUP_VER_KEY = 'aniplay_last_backup_version';
+        let installedVersion = '0';
+        try {
+          // Use CapApp to read real installed versionName (e.g. "1.7.5")
+          const info = await App.getInfo();
+          installedVersion = info.version || '0';
+        } catch (_) {
+          // Not native — skip
+          return;
+        }
+
+        const { value: lastBackedVersion } = await Preferences.get({ key: BACKUP_VER_KEY });
+
+        if (lastBackedVersion === installedVersion) {
+          // Already backed up for this version — do nothing
+          return;
+        }
+
+        console.log(`[Backup] New version detected (${lastBackedVersion || 'none'} → ${installedVersion}). Running backup...`);
+        const result = await backupLocalDataOnUpdate(
+          currentWatchlist,
+          currentProgress,
+          currentFavorites
+        );
+        console.log(`[Backup] Done — uploaded: ${result.backed_up}, already synced: ${result.skipped}`);
+
+        // Mark this version as backed up — won't run again until next update
+        await Preferences.set({ key: BACKUP_VER_KEY, value: installedVersion });
+      } catch (err) {
+        console.warn('[Backup] Version-gated backup skipped:', err.message);
+      }
+    }
+
+    // Delay 8s after app load so it doesn't compete with initial sync
+    const timer = setTimeout(runBackupIfNeeded, 8000);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, user]); // ← only re-check when user logs in or data loads
+
   // Auth observer — registered ONCE, uses ref to avoid infinite re-registrations
   useEffect(() => {
     // Restore existing session on app open
@@ -874,21 +929,30 @@ export function AppProvider({ children }) {
 
   const isFavorite = useCallback((animeId) => Boolean(favorites[animeId]), [favorites]);
 
-  const setEpisodeProgress = useCallback((animeId, epOrObj) => {
+  const setEpisodeProgress = useCallback((animeId, epOrObj, seekPosition = null, duration = null) => {
     const rawEp = typeof epOrObj === 'object' && epOrObj !== null ? epOrObj.episode : epOrObj;
     const episode = typeof rawEp === 'object' && rawEp !== null ? (rawEp.episode || 1) : (Number(rawEp) || 1);
     const timestamp = (typeof epOrObj === 'object' && epOrObj !== null && epOrObj.timestamp) || Date.now();
-    setProgress(prev => ({ ...prev, [animeId]: { episode, timestamp } }));
+    // Store seek position (seconds into episode) and duration for Netflix-style resume
+    const seek = seekPosition != null ? Math.floor(seekPosition) : (progressRef.current[animeId]?.seekPosition ?? null);
+    const dur  = duration    != null ? Math.floor(duration)    : (progressRef.current[animeId]?.duration    ?? null);
+    setProgress(prev => ({ ...prev, [animeId]: { episode, timestamp, seekPosition: seek, duration: dur } }));
     pushAnimeToCloudRef.current?.(animeId, { episode, timestamp });
     triggerDebouncedSyncRef.current?.();
   }, []);
 
   const getEpisodeProgress = useCallback((animeId) => {
-    const p = progress[animeId];
+    const p = progressRef.current[animeId];
     if (!p) return null;
     const rawEp = typeof p.episode === 'object' && p.episode !== null ? p.episode.episode : p.episode;
-    return { episode: Number(rawEp) || 1, timestamp: p.timestamp || 0 };
-  }, [progress]);
+    return {
+      episode:     Number(rawEp) || 1,
+      timestamp:   p.timestamp || 0,
+      seekPosition: p.seekPosition ?? null,   // seconds into the episode (for resume)
+      duration:    p.duration ?? null,         // total episode duration in seconds
+    };
+  }, []); // STABLE — reads progressRef.current, not progress state
+
 
   const addToRecentlyViewed = useCallback((anime, episode) => {
     let nextRecently = [];
