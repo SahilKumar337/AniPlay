@@ -22,6 +22,7 @@ import HistoryPage from './pages/HistoryPage';
 import Notifications from './pages/Notifications';
 import Navbar from './components/Navbar';
 import { requestInitialPermissions } from './api/permissions';
+import Landing from './pages/Landing';
 
 // registerPlugin must run after all imports are resolved
 const APKUpdater = registerPlugin('APKUpdater');
@@ -237,6 +238,7 @@ function AppInner({ showWelcome, onEnter }) {
                 <Route path="/watched" element={<WatchedPage />} />
                 <Route path="/history" element={<HistoryPage />} />
                 <Route path="/notifications" element={<Notifications />} />
+                <Route path="/landing" element={<Landing />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>

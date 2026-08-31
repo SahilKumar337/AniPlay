@@ -3,10 +3,11 @@
   "appName": "AniPlay",
   "webDir": "dist",
   "android": {
-    "allowMixedContent": true,
+    "allowMixedContent": false,
     "captureInput": true,
     "webContentsDebuggingEnabled": false
   },
+
   "server": {
     "allowNavigation": [
       "anilab-backend.onrender.com",

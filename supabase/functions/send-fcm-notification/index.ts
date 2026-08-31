@@ -13,9 +13,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  // Restrict CORS to Supabase origin only — this function is not called from browsers
+  'Access-Control-Allow-Origin': 'https://supabase.co',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-webhook-secret',
 };
+
 
 // ── Generate a signed JWT for Google OAuth2 using the service account ────────
 async function getAccessToken(serviceAccount: Record<string, string>): Promise<string> {
@@ -97,7 +99,27 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // ── Webhook Secret Authentication ─────────────────────────────────────────
+  // SECURITY: Verify the Supabase DB webhook secret before processing any payload.
+  // Set WEBHOOK_SECRET in Supabase Dashboard → Edge Functions → Secrets.
+  // Configure the same value in: Supabase → Database → Webhooks → HTTP headers.
+  const webhookSecret = Deno.env.get('WEBHOOK_SECRET');
+  if (webhookSecret) {
+    const receivedSecret = req.headers.get('x-webhook-secret') || req.headers.get('authorization')?.replace('Bearer ', '');
+    if (!receivedSecret || receivedSecret !== webhookSecret) {
+      console.error('[FCM] Unauthorized webhook call — invalid or missing WEBHOOK_SECRET');
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  } else {
+    // Warn loudly in logs if secret is not configured — fail open only in dev
+    console.warn('[FCM] WARNING: WEBHOOK_SECRET is not set. Set it in Supabase Edge Function Secrets for production security!');
+  }
+
   try {
+
     // ── Parse Supabase DB Webhook payload ──────────────────────────────────
     const payload = await req.json();
     const record  = payload?.record;

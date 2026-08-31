@@ -50,7 +50,49 @@ async function resetDeviceBrightness() {
 }
 
 
+
+/* ─── Subtitle HTML Sanitizer ──────────────────────────────────
+   Converts VTT inline tags to safe HTML with a strict whitelist.
+   Immune to nested-tag bypass attacks (e.g. <scr<script>ipt>).
+   Only allows: <em>, <strong>, <br>, <span> (no attrs), <ruby>, <rt>.
+   All other tags and all attributes containing "on*" or "javascript:" are stripped.
+──────────────────────────────────────────────────────────────── */
+const SAFE_SUBTITLE_TAGS = new Set(['em', 'strong', 'br', 'span', 'ruby', 'rt']);
+
+function sanitizeSubtitleHtml(raw) {
+  if (!raw) return '';
+
+  // Step 1: Map VTT-specific tags to safe HTML equivalents
+  let text = raw
+    .replace(/<i>/gi, '<em>')
+    .replace(/<\/i>/gi, '</em>')
+    .replace(/<b>/gi, '<strong>')
+    .replace(/<\/b>/gi, '</strong>');
+
+  // Step 2: Process all tags — keep whitelisted tags (stripped of attributes), remove the rest
+  text = text.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g, (match, tagName) => {
+    const lower = tagName.toLowerCase();
+    if (!SAFE_SUBTITLE_TAGS.has(lower)) {
+      return ''; // strip unknown/dangerous tags entirely
+    }
+    // Only allow the bare self-closing <br/> or <tag>...</tag> — no attributes
+    const isClosing = match.startsWith('</');
+    if (lower === 'br') return '<br/>';
+    return isClosing ? `</${lower}>` : `<${lower}>`;
+  });
+
+  // Step 3: Paranoid final pass — strip any residual javascript: or event handlers
+  // that may have slipped through malformed tag structures
+  text = text
+    .replace(/javascript:/gi, '')
+    .replace(/\bon\w+\s*=/gi, '');
+
+  return text;
+}
+
+
 /* ─── Way 4: CapacitorHttp hls.js loader ──────────────────────
+
    On Android, each HLS manifest and fragment is fetched through
    CapacitorHttp which bypasses CORS at the OS network layer.
    This eliminates the need for any backend HLS proxy server.
@@ -1360,12 +1402,8 @@ export default function AniPlayer({
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
   const activeCue = Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= (c.startTime + subDelay) && curTime <= (c.endTime + subDelay)) : null;
-  // Convert VTT HTML tags (<i>, <b> etc) to real HTML, strip unknown ones cleanly
-  const cueHtml = activeCue ? activeCue.text
-    .replace(/<i>/g, '<em>').replace(/<\/i>/g, '</em>')
-    .replace(/<b>/g, '<strong>').replace(/<\/b>/g, '</strong>')
-    .replace(/<[^>]+>/g, '') // strip remaining unknown tags
-    : '';
+  const cueHtml = activeCue ? sanitizeSubtitleHtml(activeCue.text) : '';
+
 
   /* ─── Render ──────────────────────────────────────────────── */
   const playerContent = (

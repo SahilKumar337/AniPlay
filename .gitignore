@@ -74,3 +74,17 @@ aniplay-529fa-e0693d7e6b5c.json
 .env.*
 !.env.example
 supabase/.env
+
+# 🔐 User data exports / database dumps — NEVER commit these!
+# These contain real user emails, password hashes, watchlists, and comments!
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+# Exception: Allow non-user-data CSVs if explicitly needed
+# (re-add specific files with !filename.csv in local .gitignore)
+
+# 🔐 Google / Firebase service account keys
+*-e0693d7e6b5c.json
+*firebase-adminsdk*.json
+*serviceaccount*.json
