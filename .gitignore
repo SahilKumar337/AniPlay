@@ -84,7 +84,12 @@ supabase/.env
 # Exception: Allow non-user-data CSVs if explicitly needed
 # (re-add specific files with !filename.csv in local .gitignore)
 
-# 🔐 Google / Firebase service account keys
+# 🔐 Google / Firebase service account keys & config
 *-e0693d7e6b5c.json
 *firebase-adminsdk*.json
 *serviceaccount*.json
+google-services.json
+android/app/google-services.json
+
+# 🔐 Supabase temporary configs
+supabase/.temp/
