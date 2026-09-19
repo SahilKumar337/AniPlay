@@ -39,11 +39,9 @@ test-results/
 scratch/
 
 # Scraper Backend, Server Files & API Engines (hidden from public repo)
-api/
-src/api/
-native/src/api/
+/api/
 my-anime-api/
-server/
+/server/
 test_py_app.py
 stop_server.bat
 stop_server.sh
