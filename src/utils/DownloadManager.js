@@ -54,6 +54,7 @@ class DownloadManager {
     this.activeProgress = {};
     this.completedList  = [];
     this.pendingMeta    = {}; // taskId → { animeId, animeTitle, cover, episode, track }
+    this.cancelledTasks = new Set();
 
     // ── Restore persisted metadata from previous sessions ──
     try {
@@ -81,6 +82,15 @@ class DownloadManager {
         OfflineDownloader.addListener('downloadProgress', (data) => {
           const { taskId, progress, status, error, remuxError } = data;
           if (taskId) {
+            // If the user cancelled or deleted this task, ignore any late progress events from Java
+            if (this.cancelledTasks.has(taskId) || status === 'cancelled' || status === 'deleted') {
+              delete this.activeProgress[taskId];
+              delete this.pendingMeta[taskId];
+              this.completedList = this.completedList.filter(x => x.taskId !== taskId);
+              this.notify({ taskId, status: 'deleted', progress: 0 });
+              return;
+            }
+
             const meta = this.pendingMeta[taskId] || {};
             if (status === 'completed' || status === 'error' || status === 'failed') {
               delete this.activeProgress[taskId];
@@ -182,6 +192,7 @@ class DownloadManager {
     }
 
     // Store metadata NOW so DownloadPage immediately has access
+    this.cancelledTasks.delete(taskId);
     this.pendingMeta[taskId] = { animeId, animeTitle, cover, episode: String(episode), track };
     this.activeProgress[taskId] = 0;
     this.notify({ taskId, progress: 0, status: 'downloading' });
@@ -207,7 +218,7 @@ class DownloadManager {
     if (onProgress) {
       const unsub = this.addListener((data) => {
         if (data.taskId === taskId) {
-          onProgress(data.progress || 0);
+          onProgress(data.progress || 0, data.status);
           if (data.status === 'completed' || data.status === 'error' || data.status === 'failed') {
             unsub();
           }
@@ -295,28 +306,34 @@ class DownloadManager {
     }
   }
 
-  // Cancel and immediately kill an active or queued download
-  async cancelDownload(animeId, episode, track = 'sub') {
+  // Cancel and immediately kill an active or queued download, and delete files from disk
+  async cancelDownload(animeId, episode, track = 'sub', animeTitle = '') {
     const taskId = `${animeId}_${episode}_${track}`;
+    this.cancelledTasks.add(taskId);
     delete this.activeProgress[taskId];
     delete this.pendingMeta[taskId];
     this.completedList = this.completedList.filter(x => x.taskId !== taskId);
     _metaRemove(taskId);
 
-    if (isNative && OfflineDownloader?.cancelDownload) {
+    if (isNative && OfflineDownloader) {
       try {
-        await OfflineDownloader.cancelDownload({ taskId, animeId: String(animeId), episode: String(episode), track });
+        if (OfflineDownloader.cancelDownload) {
+          await OfflineDownloader.cancelDownload({ taskId, animeId: String(animeId), episode: String(episode), track });
+        }
+        if (OfflineDownloader.deleteEpisode) {
+          await OfflineDownloader.deleteEpisode({ animeTitle: animeTitle || '', episode: String(episode), track, animeId: String(animeId) });
+        }
       } catch (e) {
-        console.warn('[DownloadManager] Native cancelDownload error:', e);
+        console.warn('[DownloadManager] Native cancel/delete error:', e);
       }
     }
 
-    this.notify({ taskId, status: 'cancelled', progress: 0 });
+    this.notify({ taskId, status: 'deleted', progress: 0 });
   }
 
-  // Delete a downloaded episode
-  async deleteDownload(animeId, episode, track = 'sub') {
-    return this.cancelDownload(animeId, episode, track);
+  // Delete a downloaded episode completely from storage
+  async deleteDownload(animeId, episode, track = 'sub', animeTitle = '') {
+    return this.cancelDownload(animeId, episode, track, animeTitle);
   }
 
   // Open stream in external downloader (1DM/ADM) or player (VLC/MX Player)

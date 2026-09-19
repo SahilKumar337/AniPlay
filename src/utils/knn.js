@@ -42,6 +42,9 @@ export function getFeatureVector(anime) {
   return vec;
 }
 
+let lastRecentlyViewedRef = null;
+let lastProfileVector = null;
+
 /**
  * Compute the user's preference profile vector (centroid of recently viewed).
  */
@@ -49,6 +52,10 @@ export function getUserProfileVector(recentlyViewed) {
   if (!recentlyViewed || recentlyViewed.length === 0) {
     // Return a default neutral vector
     return new Array(GENRES.length + 2).fill(0.5);
+  }
+
+  if (recentlyViewed === lastRecentlyViewedRef && lastProfileVector) {
+    return lastProfileVector;
   }
 
   const profile = new Array(GENRES.length + 2).fill(0);
@@ -75,6 +82,8 @@ export function getUserProfileVector(recentlyViewed) {
     profile[i] /= totalWeight;
   }
 
+  lastRecentlyViewedRef = recentlyViewed;
+  lastProfileVector = profile;
   return profile;
 }
 

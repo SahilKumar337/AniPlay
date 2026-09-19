@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CapacitorHttp } from '@capacitor/core';
-import { Loader } from 'lucide-react';
+import LoadingWheel from './ui/LoadingWheel';
 
 const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 
@@ -287,11 +287,9 @@ export default function IframePlayer({ src, onBack, onStreamCaptured }) {
           background: '#000',
           zIndex: 10, pointerEvents: 'none',
         }}>
-          <Loader size={38} color="rgba(255,255,255,0.7)" style={{ animation: 'spin 1s linear infinite' }} />
+          <LoadingWheel size={44} text="Connecting stream..." />
         </div>
       )}
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

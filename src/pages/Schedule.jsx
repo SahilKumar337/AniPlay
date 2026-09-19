@@ -254,7 +254,7 @@ function ScheduleItem({ item, navigate, isInWatchlist, addToWatchlist, removeFro
     <div
       className="schedule-item"
       style={{ opacity: isPast ? 0.6 : 1 }}
-      onClick={() => navigate(`/anime/${anime.id}`)}
+      onClick={() => navigate(`/anime/${anime.id}`, { state: { anime }, viewTransition: true })}
       id={`schedule-item-${item.id}`}
     >
       <img src={cover} alt={title} className="schedule-thumb" />

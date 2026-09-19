@@ -1,4 +1,6 @@
 import { Drawer } from 'vaul';
+import { useEffect } from 'react';
+import { registerBackButtonHandler } from '../../utils/backButton';
 
 export default function AppDrawer({
   open,
@@ -13,6 +15,15 @@ export default function AppDrawer({
   activeSnapPoint,
   setActiveSnapPoint,
 }) {
+  // Android hardware/gesture back button closes the drawer smoothly
+  useEffect(() => {
+    if (!open) return;
+    return registerBackButtonHandler(() => {
+      onOpenChange?.(false);
+      return true;
+    });
+  }, [open, onOpenChange]);
+
   return (
     <Drawer.Root
       open={open}
@@ -31,7 +42,7 @@ export default function AppDrawer({
             <div className="vaul-drawer-header">
               <div>
                 {title && (
-                  <Drawer.Title style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  <Drawer.Title style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
                     {title}
                   </Drawer.Title>
                 )}

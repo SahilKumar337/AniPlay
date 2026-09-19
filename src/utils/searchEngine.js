@@ -234,6 +234,10 @@ export function searchAndRankAnime(query, animes) {
   // Filter out completely unrelated anime, keep only those with non-zero match scores
   const filtered = scored.filter(item => item.score > 0.05);
 
+  if (filtered.length === 0 && animes.length > 0) {
+    return animes; // Never wipe out valid API search results
+  }
+
   // Sort by score descending (best matches first)
   filtered.sort((a, b) => b.score - a.score);
 

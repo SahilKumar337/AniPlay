@@ -55,13 +55,24 @@ function WebVideoPlayer({ url }) {
   );
 }
 
-export default function AniPlayer({ url, onBack }) {
-  // Initialize the native player (only on Native platforms to avoid hook validation errors)
-  const player = Platform.OS !== 'web' ? useVideoPlayer(url, (p) => {
+function NativeVideoPlayer({ url }) {
+  const player = useVideoPlayer(url, (p) => {
     p.loop = false;
     p.play();
-  }) : null;
+  });
 
+  return (
+    <VideoView
+      player={player}
+      style={styles.video}
+      useNativeControls={true}
+      allowsFullscreen={false} // Disable standard toggle since we lock it at component level
+      allowsPictureInPicture={true}
+    />
+  );
+}
+
+export default function AniPlayer({ url, onBack }) {
   // Lock orientation and hide navigation bars on mount (Native only)
   useEffect(() => {
     if (Platform.OS === 'web') return;
@@ -114,13 +125,7 @@ export default function AniPlayer({ url, onBack }) {
 
   return (
     <View style={styles.container}>
-      <VideoView
-        player={player}
-        style={styles.video}
-        useNativeControls={true}
-        allowsFullscreen={false} // Disable standard toggle since we lock it at component level
-        allowsPictureInPicture={true}
-      />
+      <NativeVideoPlayer url={url} />
     </View>
   );
 }

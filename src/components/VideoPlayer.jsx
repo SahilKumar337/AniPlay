@@ -2,8 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Hls from 'hls.js';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize,
-  RotateCcw, RotateCw, Loader, Settings, ChevronLeft
+  RotateCcw, RotateCw, Settings, ChevronLeft
 } from 'lucide-react';
+import LoadingWheel from './ui/LoadingWheel';
+import { getNetworkProfile, findLowestQualityLevel } from '../utils/networkSpeed';
 
 const fmt = (sec) => {
   if (!sec || isNaN(sec)) return '0:00';
@@ -53,11 +55,18 @@ export default function VideoPlayer({ src, isM3U8 = false, poster, onError, titl
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
     if (isM3U8 && Hls.isSupported()) {
+      const netProfile = getNetworkProfile();
       const hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: false,
-        backBufferLength: 90,
-        startLevel: -1,
+        enableWorker: false,
+        startFragPrefetch: true,       // Prefetch first segment immediately
+        lowLatencyMode: true,
+        startLevel: -1,                // Auto-select starting quality
+        abrEwmaDefaultEstimate: netProfile.initialEstimateBps,
+        abrBandWidthFactor: netProfile.isSlow ? 0.7 : 0.9,
+        maxBufferLength: netProfile.isSlow ? 15 : 60,
+        maxMaxBufferLength: netProfile.isSlow ? 30 : 120,
+        maxBufferSize: 60 * 1000 * 1000,
+        backBufferLength: 30,          // Keep 30s behind for seek-back
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.1,
         nudgeMaxRetries: 10,
@@ -70,6 +79,13 @@ export default function VideoPlayer({ src, isM3U8 = false, poster, onError, titl
         const levels = data.levels || [];
         const quals = levels.map((l, i) => ({ label: l.height ? `${l.height}p` : `Level ${i}`, index: i }));
         setQualities(quals.length > 1 ? [{ label: 'Auto', index: -1 }, ...quals] : []);
+
+        if (netProfile.isSlow && levels.length > 1) {
+          const lowest = findLowestQualityLevel(levels);
+          hls.startLevel = lowest.index;
+          hls.nextLoadLevel = lowest.index;
+        }
+
         video.play().catch(() => {});
       });
       hls.on(Hls.Events.ERROR, (_, data) => {
@@ -299,15 +315,9 @@ export default function VideoPlayer({ src, isM3U8 = false, poster, onError, titl
         <div style={{
           position: 'absolute', inset: 0, background: '#000',
           display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: 14, zIndex: 10,
+          alignItems: 'center', justifyContent: 'center', zIndex: 10,
         }}>
-          <div style={{
-            width: 52, height: 52, borderRadius: '50%',
-            border: '3px solid rgba(255,255,255,0.1)',
-            borderTopColor: '#e50914',
-            animation: 'spin 0.85s linear infinite',
-          }} />
-          <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>Loading stream…</p>
+          <LoadingWheel size={48} text="Loading stream…" />
         </div>
       )}
 
@@ -436,7 +446,7 @@ export default function VideoPlayer({ src, isM3U8 = false, poster, onError, titl
             }}
           >
             {loading
-              ? <div style={{ width: 28, height: 28, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', animation: 'spin 0.8s linear infinite' }} />
+              ? <LoadingWheel size={24} />
               : playing
                 ? <Pause size={28} fill="#fff" color="#fff" />
                 : <Play size={28} fill="#fff" color="#fff" style={{ marginLeft: 3 }} />

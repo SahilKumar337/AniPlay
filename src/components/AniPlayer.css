@@ -71,35 +71,33 @@
   pointer-events: none;
   z-index: 10;
 }
-/* Dual-ring: outer faint orbit track + inner accent ring */
+/* Dual-ring: outer faint orbit track + inner accent glowing ring */
 .anip__spinner-ring {
   position: relative;
-  width: 50px;
-  height: 50px;
+  width: 54px;
+  height: 54px;
   flex-shrink: 0;
+  filter: drop-shadow(0 0 14px rgba(139, 92, 246, 0.65));
 }
 .anip__spinner-ring::before,
 .anip__spinner-ring::after {
   content: '';
   position: absolute;
   border-radius: 50%;
-  border-style: solid;
   inset: 0;
 }
-/* Outer ring: faint white orbit */
+/* Outer ring: subtle glassy orbit track */
 .anip__spinner-ring::before {
-  border-width: 3px;
-  border-color: rgba(255, 255, 255, 0.10);
+  border: 3px solid rgba(255, 255, 255, 0.12);
 }
-/* Inner ring: accent colored, spinning */
+/* Inner glowing gradient arc */
 .anip__spinner-ring::after {
-  inset: 5px;
-  border-width: 3px;
-  border-color: transparent;
-  border-top-color: var(--accent, #6c63ff);
-  border-right-color: color-mix(in srgb, var(--accent, #6c63ff) 40%, transparent);
-  animation: anip-spin-accent 0.75s cubic-bezier(0.5, 0, 0.5, 1) infinite;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent, #6c63ff) 35%, transparent);
+  inset: -1px;
+  border: 3.5px solid transparent;
+  border-top-color: #8b5cf6;
+  border-right-color: #06b6d4;
+  border-bottom-color: #ec4899;
+  animation: anip-spin-accent 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 @keyframes anip-spin { to { transform: rotate(360deg); } }
 @keyframes anip-spin-accent { to { transform: rotate(360deg); } }
@@ -230,7 +228,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px 40px;
+  /* Default (non-fullscreen, portrait) — push below transparent status bar */
+  padding: calc(var(--sat, env(safe-area-inset-top, 14px)) + 10px) 14px 40px;
   background: linear-gradient(to bottom, rgba(0,0,0,0.80) 0%, transparent 100%);
   pointer-events: none;
 }
@@ -668,11 +667,12 @@
   .anip__vol     { width: 96px; }
 }
 
-/* Fullscreen — always show volume slider */
+/* Fullscreen — always show volume slider and respect status bar inset */
 .anip--fs .anip__vol          { display: block !important; }
 .anip--fs .anip__badge        { display: inline !important; }
-.anip--fs .anip__bottom-group { padding: 0 20px 18px; }
-.anip--fs .anip__top-bar      { padding: 18px 20px 44px; }
+.anip--fs .anip__bottom-group { padding: 0 20px calc(18px + var(--android-safe-bottom, env(safe-area-inset-bottom, 0px))); }
+/* KEY FIX: push top-bar below the transparent status bar in fullscreen landscape */
+.anip--fs .anip__top-bar      { padding: calc(var(--sat, env(safe-area-inset-top, 14px)) + 14px) 20px 44px; }
 .anip--fs .anip__title        { font-size: 15px; }
 
 /* ── Developer Diagnostics Panel ───────────────────────────── */

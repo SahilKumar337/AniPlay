@@ -612,7 +612,7 @@ export default function Landing() {
             <a href="/AniPlay.apk" download className="btn-primary-hero lg">
               <span className="btn-icon-wrap">📥</span>
               <div>
-                <div className="btn-eyebrow">ANDROID · FREE · v1.5.5</div>
+                <div className="btn-eyebrow">ANDROID · FREE · v1.5.6</div>
                 <div className="btn-label">Download APK</div>
               </div>
               <div className="btn-shimmer" />

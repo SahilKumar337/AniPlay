@@ -9,6 +9,9 @@ import {
 } from 'lucide-react';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
+import VideoAdOverlay from './ads/VideoAdOverlay';
+import adEngine from '../services/adEngine';
+import { getNetworkProfile, findLowestQualityLevel, recordNetworkSample, subscribeNetworkChanges } from '../utils/networkSpeed';
 import './AniPlayer.css';
 
 const EmbedScraper = registerPlugin('EmbedScraper');
@@ -69,12 +72,10 @@ function sanitizeSubtitleHtml(raw) {
     .replace(/<b>/gi, '<strong>')
     .replace(/<\/b>/gi, '</strong>');
 
-  // Step 2: Process all tags — keep whitelisted tags (stripped of attributes), remove the rest
-  text = text.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g, (match, tagName) => {
-    const lower = tagName.toLowerCase();
-    if (!SAFE_SUBTITLE_TAGS.has(lower)) {
-      return ''; // strip unknown/dangerous tags entirely
-    }
+  // Step 2: Whitelist-only tag stripping with full attribute removal
+  text = text.replace(/<\/?([a-z0-9]+)[^>]*>/gi, (match, tag) => {
+    const lower = tag.toLowerCase();
+    if (!SAFE_SUBTITLE_TAGS.has(lower)) return '';
     // Only allow the bare self-closing <br/> or <tag>...</tag> — no attributes
     const isClosing = match.startsWith('</');
     if (lower === 'br') return '<br/>';
@@ -99,15 +100,76 @@ function sanitizeSubtitleHtml(raw) {
 ──────────────────────────────────────────────────────────────── */
 const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 
+/* ─── MPEG-TS / fMP4 Header De-obfuscator ───────────────────────
+   MegaCloud / MegaPlay disguise video segments on TikTok CDN (and other CDNs)
+   by prepending a 252-byte dummy PNG image header (\x89PNG\r\n\x1a\n...IEND...).
+   This utility strips the dummy image header and returns clean MPEG-TS / fMP4 bytes
+   so Hls.js demuxes and decodes with zero stalling or buffer append errors.
+──────────────────────────────────────────────────────────────── */
+function stripObfuscatedHeader(data) {
+  if (!data) return data;
+  let u8;
+  if (data instanceof ArrayBuffer) {
+    u8 = new Uint8Array(data);
+  } else if (ArrayBuffer.isView(data)) {
+    u8 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  } else {
+    return data;
+  }
+
+  if (u8.length < 188) return data;
+
+  // Already standard MPEG-TS (first byte is sync byte 0x47)
+  if (u8[0] === 0x47 && (u8.length < 376 || u8[188] === 0x47)) return data;
+
+  // Standard fMP4 box ('ftyp' or 'moof')
+  if (u8.length > 8 && (
+    (u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70) || // ftyp
+    (u8[4] === 0x6d && u8[5] === 0x6f && u8[6] === 0x6f && u8[7] === 0x66)    // moof
+  )) {
+    return data;
+  }
+
+  // MegaCloud / MegaPlay .image or .png wrapper (known 252-byte PNG header check for O(1) instant return)
+  if (u8.length > 252 + 376 && u8[252] === 0x47 && u8[252 + 188] === 0x47 && u8[252 + 376] === 0x47) {
+    return u8.buffer.slice(u8.byteOffset + 252, u8.byteOffset + u8.length);
+  }
+
+  // General sync word scan for any other dummy image headers (scans first 2048 bytes)
+  const maxScan = Math.min(u8.length - 376, 2048);
+  for (let o = 1; o < maxScan; o++) {
+    if (u8[o] === 0x47 && u8[o + 188] === 0x47 && u8[o + 376] === 0x47) {
+      return u8.buffer.slice(u8.byteOffset + o, u8.byteOffset + u8.length);
+    }
+  }
+
+  return data;
+}
+
 function base64ToArrayBuffer(base64) {
-  var binary_string = window.atob(base64);
-  var len = binary_string.length;
-  var bytes = new Uint8Array(len);
-  for (var i = 0; i < len; i++) {
-      bytes[i] = binary_string.charCodeAt(i);
+  if (!base64) return new ArrayBuffer(0);
+  if (base64 instanceof ArrayBuffer) return base64;
+  if (ArrayBuffer.isView(base64)) return base64.buffer;
+  let clean = typeof base64 === 'string' ? base64 : String(base64);
+  const commaIdx = clean.indexOf(',');
+  if (commaIdx !== -1) {
+    clean = clean.slice(commaIdx + 1);
+  }
+  clean = clean.replace(/[\r\n\s]/g, '');
+  while (clean.length % 4 !== 0) {
+    clean += '=';
+  }
+  const binary_string = window.atob(clean);
+  const len = binary_string.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary_string.charCodeAt(i);
   }
   return bytes.buffer;
 }
+
+// Cache of hosts that require CapacitorHttp due to lack of CORS headers on Android
+const corsBlockedHostnames = new Set();
 
 function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
   return class CapacitorHlsLoader extends DefaultLoader {
@@ -129,13 +191,73 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
     load(context, config, callbacks) {
       const url = context.url;
       const isLocalhost = url.includes('localhost:8081') || url.includes('127.0.0.1:8081');
+
+      // Wrap callbacks to always strip obfuscated dummy image headers (e.g. MegaCloud 252-byte PNG wrapper)
+      const sanitizeCallbacks = (cb) => ({
+        ...cb,
+        onSuccess: (response, stats, ctx, networkDetails) => {
+          if (this._aborted) return;
+          if (response && response.data) {
+            response.data = stripObfuscatedHeader(response.data);
+          }
+          cb.onSuccess(response, stats, ctx, networkDetails);
+        },
+        onError: (error, ctx, networkDetails) => {
+          if (this._aborted) return;
+          cb.onError(error, ctx, networkDetails);
+        }
+      });
+
       if (!isNative || isLocalhost) {
-        // Use default fetch loader for localhost/local downloads to ensure offline play works without CapacitorHttp checking internet state
-        return super.load(context, config, callbacks);
+        return super.load(context, config, sanitizeCallbacks(callbacks));
       }
 
-      const isPlaylist = context.type === 'manifest' || context.type === 'level';
       this._aborted = false;
+
+      // Extract target Referer and Origin for referer-protected CDNs
+      let targetReferer = refererUrl;
+      if (embedUrl) {
+        try {
+          const parsedEmbed = new URL(embedUrl);
+          targetReferer = parsedEmbed.origin + '/';
+        } catch (e) {}
+      }
+
+      let hostname = '';
+      try { hostname = new URL(url).hostname.toLowerCase(); } catch (_) {}
+
+      // Identify whether this request is a playlist (manifest, media/level playlist, audio/subtitle playlist)
+      // or a binary media segment (video TS/MP4 fragment).
+      const isPlaylist = Boolean(
+        !context.frag &&
+        (
+          context.type === 'manifest' ||
+          context.type === 'level' ||
+          context.type === 'audioTrack' ||
+          context.type === 'subtitleTrack' ||
+          context.responseType !== 'arraybuffer' ||
+          url.includes('.m3u8')
+        )
+      );
+
+      // Protected hostnames that strictly enforce custom Referer and block browser XHR:
+      // CapacitorHttp handles all cross-origin streaming CDNs directly to bypass CORS
+      const isRefererProtected = Boolean(
+        hostname.includes('akirax') ||
+        hostname.includes('imgnex') ||
+        hostname.includes('norami') ||
+        hostname.includes('shiora') ||
+        hostname.includes('mikora') ||
+        hostname.includes('megap') ||
+        hostname.includes('nexabloom') ||
+        hostname.includes('tyrionx') ||
+        hostname.includes('streamzone') ||
+        hostname.includes('tcdn') ||
+        hostname.includes('bcdn') ||
+        hostname.includes('anihd') ||
+        hostname.includes('megacloud') ||
+        corsBlockedHostnames.has(hostname)
+      );
 
       const fetchViaCapacitorHttp = () => {
         if (this._aborted) return;
@@ -148,27 +270,28 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
               'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
             };
 
-            let targetReferer = refererUrl;
-            if (embedUrl) {
-              try {
-                const parsedEmbed = new URL(embedUrl);
-                targetReferer = parsedEmbed.origin + '/';
-              } catch (e) {}
-            }
-
             if (targetReferer) {
-              try {
-                reqHeaders['Origin'] = new URL(targetReferer).origin;
-              } catch (e) {
-                reqHeaders['Origin'] = targetReferer.replace(/\/$/, '');
+              if (isPlaylist) {
+                try {
+                  reqHeaders['Origin'] = new URL(targetReferer).origin;
+                } catch (e) {
+                  reqHeaders['Origin'] = targetReferer.replace(/\/$/, '');
+                }
               }
               reqHeaders['Referer'] = targetReferer;
-            } else {
-              reqHeaders['Origin'] = 'https://anineko.to';
-              reqHeaders['Referer'] = 'https://anineko.to/';
+            } else if (isPlaylist) {
+              reqHeaders['Origin'] = 'https://anineko.es';
+              reqHeaders['Referer'] = 'https://anineko.es/';
             }
 
-            if (embedUrl && isNative) {
+            if (context.headers) {
+              Object.assign(reqHeaders, context.headers);
+            }
+            if (context.rangeEnd) {
+              reqHeaders['Range'] = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
+            }
+
+            if (isPlaylist && embedUrl && isNative) {
               try {
                 const targetHost = new URL(url).origin;
                 const cookies = await CapacitorCookies.getCookies({ url: targetHost });
@@ -190,10 +313,11 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
 
             if (this._aborted) return;
 
-            if (response.status >= 400) {
+            if (!response.status || response.status < 200 || response.status >= 400) {
+              const code = response.status || 0;
               callbacks.onError(
-                { code: response.status, text: `HTTP ${response.status}` },
-                context, null
+                { code, text: `HTTP ${code}` },
+                context, response, this.stats
               );
               return;
             }
@@ -201,65 +325,100 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
             const now = performance.now();
             let data = response.data;
 
-            if (!isPlaylist && typeof data === 'string') {
-              data = base64ToArrayBuffer(data);
+            if (!isPlaylist) {
+              if (typeof data === 'string') {
+                data = base64ToArrayBuffer(data);
+              } else if (data instanceof Blob) {
+                data = await data.arrayBuffer();
+              }
+              // Strip obfuscated image headers before passing to Hls.js
+              data = stripObfuscatedHeader(data);
+            } else if (typeof data !== 'string') {
+              data = String(data || '');
             }
 
-            const stats = {
+            const byteLen = (data && (data.byteLength || data.length)) || 0;
+            const elapsedSec = Math.max(0.001, (now - t0) / 1000);
+            const calculatedBw = Math.round((byteLen * 8) / elapsedSec);
+
+            if (this.stats) {
+              this.stats.loaded = byteLen;
+              this.stats.total = byteLen;
+              this.stats.bwEstimate = calculatedBw;
+              this.stats.loading.first = Math.max(now, this.stats.loading.start || t0);
+              this.stats.loading.end = now;
+              this.stats.aborted = false;
+            }
+
+            const stats = this.stats || {
               aborted: false,
-              loaded: data.byteLength || data.length || 0,
+              loaded: byteLen,
               retry: 0,
-              total: data.byteLength || data.length || 0,
+              total: byteLen,
               chunkCount: 0,
-              bwEstimate: 0,
-              loading: { start: t0, first: now, end: now },
+              bwEstimate: calculatedBw,
+              loading: { start: t0, first: t0, end: now },
               parsing: { start: now, end: now },
               buffering: { start: now, first: now, end: now },
             };
-            callbacks.onSuccess({ data, url: response.url || url }, stats, context, response);
+
+            callbacks.onSuccess({ data, url: response.url || url, code: response.status || 200 }, stats, context, response);
           } catch (err) {
             if (this._aborted) return;
-            callbacks.onError({ code: 0, text: err.message || String(err) }, context, null);
+            console.error('[CapacitorHlsLoader] Exception during load:', err);
+            callbacks.onError({ code: 0, text: err.message || String(err) }, context, null, this.stats);
           }
         })();
       };
 
-      if (!isPlaylist) {
-        // Video fragments: Try direct fetch first for high line-speed throughput.
-        // If direct fetch is blocked by CORS/Referer, seamlessly fall back to CapacitorHttp!
-        const wrappedCallbacks = {
-          ...callbacks,
-          onError: (error, ctx, networkDetails) => {
-            if (this._aborted) return;
-            console.log(`[CapacitorHlsLoader] Direct fragment fetch failed (${error?.text || error?.code}), falling back to CapacitorHttp for: ${url.slice(0, 60)}`);
-            fetchViaCapacitorHttp();
-          }
-        };
-        try {
-          return super.load(context, config, wrappedCallbacks);
-        } catch (e) {
-          fetchViaCapacitorHttp();
-          return;
-        }
+      // 1. Playlists (manifest/level) and strictly referer-protected hosts always use CapacitorHttp
+      if (isPlaylist || isRefererProtected) {
+        fetchViaCapacitorHttp();
+        return;
       }
 
-      // Playlists (manifests/levels) require strict Referer & Origin headers on mobile
-      fetchViaCapacitorHttp();
+      // 2. Open CDNs (TikTok CDN, StreamHG centaurus, Earnvids dramiyos): direct line-speed native browser XHR
+      const wrappedCallbacks = {
+        ...callbacks,
+        onSuccess: (response, stats, ctx, networkDetails) => {
+          if (this._aborted) return;
+          if (response && response.data) {
+            response.data = stripObfuscatedHeader(response.data);
+          }
+          callbacks.onSuccess(response, stats, ctx, networkDetails);
+        },
+        onError: (error, ctx, networkDetails) => {
+          if (this._aborted) return;
+          // If direct fetch is blocked by CORS (code 0) or Forbidden/Referer (code 403 / 4xx)
+          if (error && (error.code === 0 || error.code === 403 || (error.code >= 400 && error.code < 500)) && !this._aborted) {
+            if (hostname) corsBlockedHostnames.add(hostname);
+            fetchViaCapacitorHttp();
+          } else {
+            callbacks.onError(error, ctx, networkDetails);
+          }
+        }
+      };
+      try {
+        return super.load(context, config, wrappedCallbacks);
+      } catch (e) {
+        if (hostname) corsBlockedHostnames.add(hostname);
+        fetchViaCapacitorHttp();
+        return;
+      }
     }
   };
 }
 
-
-/* ─── helpers ──────────────────────────────────────────────── */
-function fmt(s) {
-  if (!isFinite(s) || s < 0) return '0:00';
+const fmt = (s) => {
+  if (isNaN(s) || s < 0) return '0:00';
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
   return h > 0
     ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
     : `${m}:${String(sec).padStart(2,'0')}`;
-}
+};
+const formatTime = fmt;
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
 
@@ -314,6 +473,8 @@ function SwipeBar({ type, value, visible }) {
 export default function AniPlayer({
   url,
   title,
+  serverName = '',
+  isHardSub = false,
   subtitles,
   extraSubtitles,
   referer,
@@ -344,6 +505,26 @@ export default function AniPlayer({
   const gesture    = useRef(null);
   const seekDrag   = useRef(false);
 
+  // Resume & Watch Progress Synchronization Refs
+  const lastKnownTimeRef = useRef(0);
+  const lastKnownDurRef = useRef(0);
+  const resumeSeekAppliedRef = useRef(false);
+  const targetResumeTimeRef = useRef(0);
+  const onSeekProgressRef = useRef(onSeekProgress);
+  useEffect(() => { onSeekProgressRef.current = onSeekProgress; }, [onSeekProgress]);
+
+  // Synchronous, multi-event progress flusher
+  const flushProgress = useCallback((explicitTime = null) => {
+    const v = videoRef.current;
+    const ct = (explicitTime !== null && explicitTime !== undefined)
+      ? explicitTime
+      : (v && v.currentTime > 0 ? v.currentTime : lastKnownTimeRef.current);
+    const dur = (v && v.duration > 0) ? v.duration : lastKnownDurRef.current;
+    if (ct > 2 && onSeekProgressRef.current) {
+      onSeekProgressRef.current(ct, dur);
+    }
+  }, []);
+
   /* state */
   const [playing,   setPlaying]   = useState(false);
   const [curTime,   setCurTime]   = useState(0);
@@ -357,9 +538,11 @@ export default function AniPlayer({
   const [ctrlVis,   setCtrlVis]   = useState(true);
   const [qualities, setQualities] = useState([]);
   const [activeQ,   setActiveQ]   = useState(-1);
+  const [playingResolution, setPlayingResolution] = useState('');
   const [subs,      setSubs]      = useState(subtitles || []);
   const [activeSub, setActiveSub] = useState(-1);
   const [cues,      setCues]      = useState([]);
+  const [embeddedCueText, setEmbeddedCueText] = useState('');
   // Single mutual-exclusive panel state — prevents two menus overlapping at once
   // null = closed, 'quality' | 'subtitles' | 'sync' | 'speed' = open panel
   const [activePanel, setActivePanel] = useState(null);
@@ -380,16 +563,14 @@ export default function AniPlayer({
 
   const [showSkipIntro,    setShowSkipIntro]    = useState(false);
   const [showSkipOutro,    setShowSkipOutro]    = useState(false);
+
+  const isHardSubServer = !!isHardSub || 
+                          (serverName || '').toLowerCase().includes('hardsub') || 
+                          (serverName || '').toLowerCase().includes('hard');
+  const selectedTrack = (Array.isArray(subs) && subs.find(s => s.id === activeSub)) || null;
+  const isEnglishActive = selectedTrack ? (selectedTrack.label || '').toLowerCase().includes('eng') : true;
+  const shouldSuppressOverlay = activeSub === -1 || (isHardSubServer && isEnglishActive);
   const [skipNotification, setSkipNotification] = useState('');
-
-  const introSkippedRef = useRef(false);
-  const outroSkippedRef = useRef(false);
-
-  // Playback speed
-  const [speed, setSpeed] = useState(1);
-  // showSpeed is derived from activePanel above (showSpeed_inner)
-  const showSpeed = showSpeed_inner;
-  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   // Debug & Diagnostics
   const logsRef      = useRef([]);
@@ -405,19 +586,127 @@ export default function AniPlayer({
     console.log(`[AniPlayer] ${msg}`);
   }, []);
 
+  const introSkippedRef = useRef(false);
+  const outroSkippedRef = useRef(false);
+  const currentSessionKey = `${title || 'anime'}_ep_${currentEpisode}`;
+  const prevSessionRef = useRef(currentSessionKey);
+  const initialSeekTimeRef = useRef(initialSeekTime);
+  useEffect(() => { initialSeekTimeRef.current = initialSeekTime; }, [initialSeekTime]);
+
+  const videoAdShownRef = useRef(false);
+  const activeVideoAdRef = useRef(null);
+  const [activeVideoAd, setActiveVideoAd] = useState(null);
+
+  // Clean episode session boundary: flush previous episode and isolate in-memory tracking
+  useEffect(() => {
+    if (prevSessionRef.current !== currentSessionKey) {
+      prevSessionRef.current = currentSessionKey;
+      lastKnownTimeRef.current = 0;
+      lastKnownDurRef.current = 0;
+      targetResumeTimeRef.current = initialSeekTimeRef.current > 2 ? initialSeekTimeRef.current : 0;
+      resumeSeekAppliedRef.current = false;
+      const v = videoRef.current;
+      if (v) {
+        try { v.currentTime = 0; } catch (_) {}
+      }
+      setCurTime(0);
+      videoAdShownRef.current = false;
+      activeVideoAdRef.current = null;
+      setActiveVideoAd(null);
+    }
+    return () => {
+      // Flushes progress of current episode when switching away to another episode or unmounting
+      flushProgress();
+    };
+  }, [currentSessionKey, flushProgress]);
+
+  // When initialSeekTime updates (e.g. from server switch seek position), synchronize target
+  useEffect(() => {
+    if (initialSeekTime > 2) {
+      targetResumeTimeRef.current = Math.max(targetResumeTimeRef.current || 0, initialSeekTime);
+      lastKnownTimeRef.current = targetResumeTimeRef.current;
+      resumeSeekAppliedRef.current = false;
+      const v = videoRef.current;
+      if (v && v.readyState >= 1 && v.duration > 0 && Math.abs(v.currentTime - targetResumeTimeRef.current) > 2) {
+        try {
+          v.currentTime = targetResumeTimeRef.current;
+          resumeSeekAppliedRef.current = true;
+          log(`[Resume] Applied seek from initialSeekTime effect: ${targetResumeTimeRef.current.toFixed(1)}s`);
+        } catch (_) {}
+      }
+    }
+  }, [initialSeekTime, log]);
+
+  // When switching servers, loading is true. Pause video immediately so old stream audio stops.
+  // When loading finishes, automatically resume playback so video starts instantly.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (loading) {
+      if (!v.paused) v.pause();
+    } else if (!loading && !activeVideoAdRef.current) {
+      if (v.paused && !needsTap) {
+        v.play().then(() => setNeedsTap(false)).catch(err => {
+          if (err.name === 'NotAllowedError') {
+            v.muted = true;
+            v.play().catch(() => {});
+          }
+        });
+      }
+    }
+  }, [loading, needsTap]);
+
+  const handleVideoAdComplete = useCallback(() => {
+    log('Video ad finished or skipped, resuming anime playback...');
+    activeVideoAdRef.current = null;
+    setActiveVideoAd(null);
+    const v = videoRef.current;
+    if (v) {
+      v.play().then(() => setNeedsTap(false)).catch(e => console.log('Resume after ad failed:', e));
+    }
+  }, [log]);
+
+  // Playback speed
+  const [speed, setSpeed] = useState(1);
+  // showSpeed is derived from activePanel above (showSpeed_inner)
+  const showSpeed = showSpeed_inner;
+  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
 
   /* ── HLS ──────────────────────────────────────────────────── */
+  const lastLoadedEpisodeRef = useRef(null);
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !url) return;
 
     log(`Initializing stream: ${url.slice(0, 100)}...`);
 
-    // Save current playback position so we can resume at the same point
-    // when switching servers mid-episode (not for episode changes — those start fresh)
-    const savedTime = (videoRef.current?.currentTime > 2) ? videoRef.current.currentTime : 0;
+    // Check if this stream is loading for the SAME episode or a NEW episode:
+    const isSameEpisode = (lastLoadedEpisodeRef.current === currentEpisode);
+    lastLoadedEpisodeRef.current = currentEpisode;
 
-    // Reset all state on URL change
+    // Only inherit mid-stream playback position if switching servers/tracks WITHIN the same episode!
+    // When changing to a different episode, delete old episode's memory and strictly start from initialSeekTime (or 0)
+    let resumeTarget = 0;
+    if (isSameEpisode) {
+      const currentVideoTime = (v.currentTime > 2)
+        ? v.currentTime
+        : (lastKnownTimeRef.current > 2 ? lastKnownTimeRef.current : 0);
+      resumeTarget = currentVideoTime > 2 ? currentVideoTime : (initialSeekTimeRef.current > 2 ? initialSeekTimeRef.current : 0);
+    } else {
+      // NEW episode: purge in-memory track, reset video element, load only new episode's initialSeekTime
+      lastKnownTimeRef.current = 0;
+      lastKnownDurRef.current = 0;
+      resumeTarget = (initialSeekTimeRef.current > 2) ? initialSeekTimeRef.current : 0;
+      try { v.currentTime = 0; } catch (_) {}
+    }
+
+    targetResumeTimeRef.current = resumeTarget;
+    lastKnownTimeRef.current = resumeTarget > 2 ? resumeTarget : 0;
+    resumeSeekAppliedRef.current = false;
+
+    // Reset stream state on URL change (Do NOT reset videoAdShownRef or activeVideoAd here!
+    // Server resolution and quality switches fire URL changes during playback)
     introSkippedRef.current = false;
     outroSkippedRef.current = false;
     setShowSkipIntro(false);
@@ -429,8 +718,12 @@ export default function AniPlayer({
     setHasStarted(false);
     setQualities([]);
     setActiveQ(-1);
+    setPlayingResolution('');
     setSubs(subtitles || []);
-    setActiveSub(-1);
+    // If subtitles are already provided (e.g. offline download), auto-select the first one immediately
+    // so cues load without waiting for the subTracksJson effect (which only fires on subtitle prop change).
+    // For streaming, -1 is correct — the subtitle sync effect will auto-select after tracks are loaded.
+    setActiveSub((subtitles && subtitles.length > 0) ? (subtitles[0].id ?? 0) : -1);
     setActivePanel(null); // close all menus when URL/server changes
     setStuckCount(0);
 
@@ -438,14 +731,39 @@ export default function AniPlayer({
     v.load();
 
     const tryPlay = () => {
+      // Check if an in-stream video ad should play before starting episode
+      if (!videoAdShownRef.current && !isLocal && adEngine.isAdsEnabled() && adEngine.shouldShowVideoAd()) {
+        videoAdShownRef.current = true;
+        const videoAd = adEngine.getRandomVideoAd();
+        if (videoAd) {
+          log('Triggering in-stream video ad before playback...');
+          adEngine.markVideoAdShown();
+          activeVideoAdRef.current = videoAd;
+          setActiveVideoAd(videoAd);
+          v.pause();
+          return;
+        }
+      }
+
+      // If an in-stream video ad is currently active, keep main video paused!
+      if (activeVideoAdRef.current) {
+        log('Video ad is currently active, keeping main video paused...');
+        v.pause();
+        return;
+      }
+
       log('Calling video.play()...');
       v.play().then(() => {
         log('video.play() SUCCEEDED');
         setNeedsTap(false);
-        // Resume at same position when switching servers mid-episode
-        if (savedTime > 0) {
-          log(`Resuming from saved position: ${savedTime.toFixed(1)}s`);
-          v.currentTime = savedTime;
+        // Only seek here if video element is ready (readyState >= 1 and duration > 0)
+        // If readyState is 0, do NOT mark resumeSeekAppliedRef as true! Let loadedmetadata/canplay/timeupdate seek!
+        if (targetResumeTimeRef.current > 2 && !resumeSeekAppliedRef.current && v.readyState >= 1 && v.duration > 0) {
+          log(`Resuming from target position in play(): ${targetResumeTimeRef.current.toFixed(1)}s`);
+          try {
+            v.currentTime = targetResumeTimeRef.current;
+            resumeSeekAppliedRef.current = true;
+          } catch (_) {}
         }
       }).catch(err => {
         log(`video.play() FAILED: ${err.name} - ${err.message}`);
@@ -467,6 +785,8 @@ export default function AniPlayer({
     let hls;
     let mediaErrRetries = 0;
     let networkErrRetries = 0;
+    let onPlayable = null;
+    let onVideoErr = null;
 
     // ── LOCAL FILE MODE: bypass HLS.js, use native video element directly ──
     // content:// MediaStore URIs work natively in Capacitor's Android WebView
@@ -475,70 +795,101 @@ export default function AniPlayer({
       log('Local file mode: setting src directly on native video element');
       v.src = url;
       v.load();
+      if (targetResumeTimeRef.current > 2) {
+        try {
+          v.currentTime = targetResumeTimeRef.current;
+          resumeSeekAppliedRef.current = true;
+        } catch (_) {}
+      }
       tryPlay();
       return () => {
+        flushProgress();
         v.removeAttribute('src');
         v.load();
       };
     }
 
     if (Hls.isSupported()) {
-      log('Hls.js is supported. Spawning player...');
+      const netProfile = getNetworkProfile();
+      log(`Hls.js is supported. NetworkProfile: type=${netProfile.effectiveType}, downlink=${netProfile.downlink?.toFixed?.(2)}Mbps, rtt=${netProfile.rtt}ms, isSlow=${netProfile.isSlow}`);
       hls = new Hls({
         enableWorker: true,
         startFragPrefetch: true,
         testBandwidth: false,
         capLevelToPlayerSize: true,
+        lowLatencyMode: false, // Must be false for VOD to prevent video decoder starvation while audio plays
+        progressive: false,    // Must be false on mobile WebViews to avoid partial TS chunk corruptions
+        startPosition: (targetResumeTimeRef.current > 2 || initialSeekTimeRef.current > 2) ? Math.max(targetResumeTimeRef.current || 0, initialSeekTimeRef.current || 0) : -1,
         startLevel: -1,
-        abrEwmaDefaultEstimate: 4000000,
-        abrBandWidthFactor: 0.9,
-        abrBandWidthUpFactor: 0.7,
-        maxBufferLength: 40,
-        maxMaxBufferLength: 80,
-        maxBufferSize: 60 * 1000 * 1000,
-        backBufferLength: 15,
+        abrEwmaDefaultEstimate: netProfile.initialEstimateBps,
+        abrBandWidthFactor: netProfile.isSlow ? 0.7 : 0.85,
+        abrBandWidthUpFactor: netProfile.isSlow ? 0.5 : 0.7,
+        maxBufferLength: netProfile.isSlow ? 20 : 35, // Solid golden buffer prevents A/V desync
+        maxMaxBufferLength: netProfile.isSlow ? 40 : 70,
+        maxBufferSize: netProfile.isSlow ? 40 * 1000 * 1000 : 80 * 1000 * 1000,
+        backBufferLength: 25,
         maxBufferHole: 0.5,
-        manifestLoadingTimeOut: 12000,
-        manifestLoadingMaxRetry: 4,
-        manifestLoadingRetryDelay: 500,
-        levelLoadingTimeOut: 12000,
-        levelLoadingMaxRetry: 4,
-        levelLoadingRetryDelay: 500,
-        fragLoadingTimeOut: 25000,
-        fragLoadingMaxRetry: 4,
-        fragLoadingRetryDelay: 500,
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 6,
+        manifestLoadingRetryDelay: 1200,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 6,
+        levelLoadingRetryDelay: 1200,
+        fragLoadingTimeOut: 20000,
+        fragLoadingMaxRetry: 6,
+        fragLoadingRetryDelay: 1200,
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.1,
         nudgeMaxRetries: 10,
+        maxStarvationDelay: 4,
+        maxLoadingDelay: 4,
         autoStartLoad: true,
-        // Inject custom Capacitor Loader to bypass CORS on Android natively
+        loader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
         pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
         fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
       });
 
       hlsRef.current = hls;
 
+      hls.on(Hls.Events.BUFFER_STALLED, () => {
+        log('[HLS] Buffer stalled event received — nudging playback to resume video...');
+        try {
+          if (v && !v.paused) {
+            v.currentTime = v.currentTime + 0.05;
+          }
+        } catch (_) {}
+      });
+
       hls.on(Hls.Events.ERROR, (_, data) => {
         log(`HLS Error: type=${data.type}, details=${data.details}, fatal=${data.fatal}`);
         if (!data.fatal) return;
 
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkErrRetries < 1) {
-          // First network error: try a simple startLoad (handles transient blips)
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkErrRetries < 5) {
+          // Retry network errors up to 5 times with backoff before giving up
           networkErrRetries++;
-          log(`Fatal network error (retry ${networkErrRetries}/1), calling startLoad...`);
-          hls.startLoad();
+          log(`Fatal network error (retry ${networkErrRetries}/5), calling startLoad in ${networkErrRetries * 800}ms...`);
+          setTimeout(() => {
+            if (hlsRef.current) hls.startLoad();
+          }, networkErrRetries * 800);
         } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR && onStreamExpired) {
-          // Second network error: CDN token has expired. Silently request a fresh URL.
-          log('Fatal network error after retry — CDN token likely expired. Requesting fresh stream URL...');
+          // Token expired or server unreachable after 5 retries. Request fresh URL or next server.
+          log('Fatal network error after 5 retries — requesting fresh stream URL or server failover...');
           setWaiting(true);
           setHlsErr(null);
           hls.destroy();
           hlsRef.current = null;
           onStreamExpired();
-        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 2) {
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 3) {
           mediaErrRetries++;
-          log(`Fatal media error, retrying recoverMediaError (${mediaErrRetries}/2)...`);
+          log(`Fatal media error, retrying recoverMediaError (${mediaErrRetries}/3)...`);
           hls.recoverMediaError();
+        } else if (onStreamExpired && (networkErrRetries >= 5 || mediaErrRetries >= 3)) {
+          log('Fatal unrecoverable error after retries — triggering automated server failover...');
+          setWaiting(true);
+          setHlsErr(null);
+          hls.destroy();
+          hlsRef.current = null;
+          onStreamExpired();
         } else {
           log('Fatal HLS error unrecoverable. Displaying error overlay.');
           // Pass error type key so JSX can show the right contextual message
@@ -560,26 +911,98 @@ export default function AniPlayer({
         if (cleanPlayStarted) return;
         cleanPlayStarted = true;
         setWaiting(false);
+        if (activeVideoAdRef.current) {
+          log('Stream ready in background, but ad is active. Keeping anime video paused.');
+          v.pause();
+          return;
+        }
         tryPlay();
       };
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
         log(`Manifest parsed: found ${d.levels.length} quality levels`);
-        setQualities(d.levels.map((l, i) => ({
-          id: i,
-          label: l.height ? `${l.height}p` : `Level ${i + 1}`
-        })));
+        if (d.levels?.length) {
+          const parsedQualities = d.levels.map((l, i) => ({
+            id: i,
+            label: l.height ? `${l.height}p` : `Level ${i + 1}`
+          }));
+          setQualities(parsedQualities);
+
+          // Netflix & YouTube Slow Network Optimization:
+          // If connection is 2G/3G, low downlink, high RTT, or data saver:
+          // start immediately at the lowest resolution so the tiny first fragment (<200KB)
+          // finishes downloading in <150ms with instant playback!
+          const activeNet = getNetworkProfile();
+          if (activeNet.isSlow && d.levels.length > 1) {
+            const lowest = findLowestQualityLevel(d.levels);
+            const lowestLabel = lowest.level?.height ? `${lowest.level.height}p` : `Level ${lowest.index + 1}`;
+            log(`[NetworkSpeed] Slow network detected (${activeNet.effectiveType}, ${activeNet.downlink?.toFixed?.(2)}Mbps, RTT=${activeNet.rtt}ms). Selecting lowest resolution ${lowestLabel} (level ${lowest.index}) for instant zero-buffer start.`);
+            hls.startLevel = lowest.index;
+            hls.nextLoadLevel = lowest.index;
+            setPlayingResolution(lowestLabel);
+          }
+        }
+        tryPlay();
       });
 
-      // Smooth zero-clipping start: trigger play when initial media frames are safely in decoder buffer
+      // Continuous EWMA network speed calibration from loaded video fragments
+      hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
+        if (data?.stats?.total && data?.stats?.loading?.end && data?.stats?.loading?.start) {
+          const durMs = data.stats.loading.end - data.stats.loading.start;
+          recordNetworkSample(data.stats.total, durMs);
+        }
+      });
+
+      // Synchronize active playing resolution badge when HLS ABR switches levels
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+        if (hls.levels && hls.levels[data.level]) {
+          const lvl = hls.levels[data.level];
+          const resLabel = lvl.height ? `${lvl.height}p` : `Level ${data.level + 1}`;
+          log(`[HLS] Level switched to ${resLabel} (${Math.round((lvl.bitrate || 0) / 1000)} kbps)`);
+          setPlayingResolution(resLabel);
+        }
+      });
+
+      // Smooth fast start: trigger play as soon as initial frames are decoded
       hls.on(Hls.Events.BUFFER_APPENDED, () => {
-        if (!cleanPlayStarted && v.buffered.length > 0 && v.buffered.end(0) > 0.2) {
+        if (!cleanPlayStarted) {
+          startCleanPlayback();
+        }
+        if (!resumeSeekAppliedRef.current && v.duration > 0) {
+          const target = Math.max(targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : 0, initialSeekTime > 2 ? initialSeekTime : 0);
+          if (target > 2 && target < v.duration - 5 && Math.abs(v.currentTime - target) > 2) {
+            log(`[Resume] BUFFER_APPENDED seek: jumping to ${target.toFixed(1)}s`);
+            try {
+              v.currentTime = target;
+              resumeSeekAppliedRef.current = true;
+            } catch (_) {}
+          } else if (target > 2 && Math.abs(v.currentTime - target) <= 2) {
+            resumeSeekAppliedRef.current = true;
+          }
+        }
+      });
+      hls.on(Hls.Events.FRAG_PARSED, () => {
+        if (!cleanPlayStarted) {
           startCleanPlayback();
         }
       });
 
-      const onCanPlay = () => startCleanPlayback();
-      v.addEventListener('canplay', onCanPlay, { once: true });
+      onPlayable = () => startCleanPlayback();
+      onVideoErr = () => {
+        log('HTML5 video element error event fired:', v.error?.code, v.error?.message);
+        if (!cleanPlayStarted && onStreamExpired) {
+          setTimeout(() => {
+            if (!cleanPlayStarted && onStreamExpired) {
+              log('Video failed before playback started — triggering server failover');
+              onStreamExpired();
+            }
+          }, 3000);
+        }
+      };
+      v.addEventListener('loadeddata', onPlayable, { once: true });
+      v.addEventListener('canplay', onPlayable, { once: true });
+      v.addEventListener('playing', onPlayable);
+      v.addEventListener('error', onVideoErr);
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, d) => {
         log(`Subtitle tracks updated: found ${d.subtitleTracks?.length || 0} tracks`);
@@ -608,6 +1031,24 @@ export default function AniPlayer({
 
       hls.attachMedia(v);
 
+      const unsubNet = subscribeNetworkChanges((newNet) => {
+        if (!hlsRef.current) return;
+        if (newNet.isSlow) {
+          log(`[NetworkSpeed] Dynamic network change: degraded to ${newNet.effectiveType}. Lowering buffer target.`);
+          hlsRef.current.config.maxBufferLength = 15;
+          hlsRef.current.config.abrBandWidthUpFactor = 0.5;
+          if (newNet.isCriticalSlow && hlsRef.current.autoLevelEnabled && hlsRef.current.levels?.length > 1) {
+            const lowest = findLowestQualityLevel(hlsRef.current.levels);
+            if (lowest.index >= 0) {
+              hlsRef.current.nextLevel = lowest.index;
+            }
+          }
+        } else {
+          hlsRef.current.config.maxBufferLength = 30;
+          hlsRef.current.config.abrBandWidthUpFactor = 0.7;
+        }
+      });
+
     } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
       log('Native HLS support detected (Safari/iOS), playing directly...');
       v.src = url;
@@ -620,70 +1061,177 @@ export default function AniPlayer({
 
     return () => {
       log('Cleaning up player instance.');
-      if (hls) hls.destroy();
+      if (typeof unsubNet === 'function') {
+        try { unsubNet(); } catch (_) {}
+      }
+      flushProgress();
+      if (onPlayable) {
+        v.removeEventListener('loadeddata', onPlayable);
+        v.removeEventListener('canplay', onPlayable);
+        v.removeEventListener('playing', onPlayable);
+      }
+      if (onVideoErr) {
+        v.removeEventListener('error', onVideoErr);
+      }
+      if (hls) {
+        try {
+          hls.destroy();
+        } catch (_) {}
+      }
       hlsRef.current = null;
     };
-  }, [url, log]);
+  }, [url, serverName, referer, embedUrl]);
 
 
   // Sync subtitle tracks when props change — merge server-specific + global source tracks
   const subTracksJson = JSON.stringify(subtitles);
   const extraTracksJson = JSON.stringify(extraSubtitles);
   useEffect(() => {
-    const serverSubs = (subtitles || []).map((s, idx) => ({
-      id: s.id !== undefined ? s.id : idx,
-      label: s.label || s.lang || `Track ${idx + 1}`,
-      file: s.file || s.url || '',
-      content: s.content || null,
-      kind: s.kind || 'captions',
-      default: s.default || false,
-    }));
-    const globalExtras = (extraSubtitles || []).map((s, idx) => ({
-      id: s.id !== undefined ? s.id : idx + 100,
-      label: s.label || s.lang || `Track ${idx + 1}`,
-      file: s.file || s.url || '',
-      content: s.content || null,
-      kind: s.kind || 'captions',
-      default: s.default || false,
-    }));
-
-    const filterEnglish = (list) => {
-      return list.filter(s => {
-        const labelLower = (s.label || 'english').toLowerCase();
-        return labelLower.includes('english') || labelLower.includes('eng');
-      }).map(s => ({
-        ...s,
-        label: 'English'
-      }));
+    const guessLangFromFile = (file) => {
+      if (!file) return '';
+      const f = file.toLowerCase();
+      if (f.includes('/ar.') || f.includes('_ara') || f.includes('arabic')) return 'Arabic';
+      if (f.includes('/es.') || f.includes('_spa') || f.includes('spanish')) return 'Spanish';
+      if (f.includes('/fr.') || f.includes('_fre') || f.includes('french')) return 'French';
+      if (f.includes('/de.') || f.includes('_ger') || f.includes('german')) return 'German';
+      if (f.includes('/it.') || f.includes('_ita') || f.includes('italian')) return 'Italian';
+      if (f.includes('/pt.') || f.includes('_por') || f.includes('portuguese')) return 'Portuguese';
+      if (f.includes('/ru.') || f.includes('_rus') || f.includes('russian')) return 'Russian';
+      if (f.includes('/ja.') || f.includes('_jpn') || f.includes('japanese')) return 'Japanese';
+      if (f.includes('/en.') || f.includes('_eng') || f.includes('english')) return 'English';
+      return '';
     };
 
-    let filteredServer = filterEnglish(serverSubs);
-    let filteredExtras = filterEnglish(globalExtras);
+    const cleanLabel = (lbl, file) => {
+      if (!lbl) return guessLangFromFile(file) || 'Unknown';
+      let clean = lbl.replace(/\s*[-–—]?\s*\([^)]*\)/g, '').trim();
+      return clean || lbl;
+    };
 
-    if (filteredServer.length === 0 && filteredExtras.length === 0 && (serverSubs.length > 0 || globalExtras.length > 0)) {
-      filteredServer = serverSubs;
-      filteredExtras = globalExtras;
-    }
+    // Normalize language label for dedup: "eng", "English", "English)" → "English"
+    const normalizeLanguage = (label, file) => {
+      const l = (label || '').toLowerCase().replace(/[^a-z]/g, '');
+      if (l.startsWith('eng')) return 'English';
+      if (l.startsWith('jpn') || l.startsWith('jap')) return 'Japanese';
+      if (l.startsWith('spa') || l.startsWith('esp')) return 'Spanish';
+      if (l.startsWith('fre') || l.startsWith('fra')) return 'French';
+      if (l.startsWith('ger') || l.startsWith('deu')) return 'German';
+      if (l.startsWith('por')) return 'Portuguese';
+      if (l.startsWith('ita')) return 'Italian';
+      if (l.startsWith('ara')) return 'Arabic';
+      if (l.startsWith('hin')) return 'Hindi';
+      if (l.startsWith('kor')) return 'Korean';
+      if (l.startsWith('chi') || l.startsWith('zho')) return 'Chinese';
+      if (l.startsWith('rus')) return 'Russian';
+      const guessed = guessLangFromFile(file);
+      if (guessed) return guessed;
+      return label || 'Unknown';
+    };
 
-    const merged = [];
-    const seenLabels = new Set();
-    for (const track of [...filteredServer, ...filteredExtras]) {
-      if (!seenLabels.has(track.label)) {
-        seenLabels.add(track.label);
-        merged.push(track);
+    const serverSubs = (Array.isArray(subtitles) ? subtitles : []).map((s, idx) => ({
+      id: s.id !== undefined ? s.id : idx,
+      label: cleanLabel(s.label || s.lang, s.file || s.url) || `Track ${idx + 1}`,
+      file: s.file || s.url || '',
+      content: s.content || null,
+      kind: s.kind || 'captions',
+      default: s.default || false,
+      referer: s.referer || referer || '',
+      alternatives: Array.isArray(s.alternatives) ? [...s.alternatives] : [],
+    }));
+    const globalExtras = (Array.isArray(extraSubtitles) ? extraSubtitles : []).map((s, idx) => ({
+      id: s.id !== undefined ? s.id : idx + 100,
+      label: cleanLabel(s.label || s.lang, s.file || s.url) || `Track ${idx + 1}`,
+      file: s.file || s.url || '',
+      content: s.content || null,
+      kind: s.kind || 'captions',
+      default: s.default || false,
+      referer: s.referer || referer || '',
+      alternatives: Array.isArray(s.alternatives) ? [...s.alternatives] : [],
+    }));
+
+    // ── Deduplicate by normalized language — keep primary + group same-language alternatives ──
+    const byLanguage = new Map();
+    const allTracks = [...serverSubs, ...globalExtras];
+
+    for (const track of allTracks) {
+      if (!track.file && !track.content) continue;
+      const langKey = normalizeLanguage(track.label, track.file);
+      if (langKey === 'Unknown' && !track.label) continue;
+
+      if (!byLanguage.has(langKey)) {
+        track.label = langKey;
+        const initialAlts = Array.isArray(track.alternatives) ? [...track.alternatives] : [];
+        track.alternatives = initialAlts;
+        byLanguage.set(langKey, track);
+      } else {
+        const primary = byLanguage.get(langKey);
+        // Add as backup candidate for the same language
+        if (track.file && track.file !== primary.file && !primary.alternatives.some(a => a.file === track.file)) {
+          primary.alternatives.push({
+            file: track.file,
+            content: track.content,
+            referer: track.referer,
+            label: langKey,
+          });
+        }
+        if (Array.isArray(track.alternatives)) {
+          for (const alt of track.alternatives) {
+            if (alt.file && alt.file !== primary.file && !primary.alternatives.some(a => a.file === alt.file)) {
+              primary.alternatives.push(alt);
+            }
+          }
+        }
       }
     }
 
+    // On HardSub servers: ensure an "English" entry exists in the menu!
+    // The video stream has burned-in English subtitles, so selecting English is valid and default.
+    if (isHardSubServer && !byLanguage.has('English')) {
+      byLanguage.set('English', {
+        id: 9999,
+        label: 'English',
+        file: '',
+        content: null,
+        kind: 'captions',
+        default: true,
+        referer: '',
+        alternatives: []
+      });
+    }
+
+    const merged = Array.from(byLanguage.values());
+
+    // Sort: English first (Default), then other languages alphabetically
+    merged.sort((a, b) => {
+      const aEng = a.label.toLowerCase().includes('eng');
+      const bEng = b.label.toLowerCase().includes('eng');
+      if (aEng && !bEng) return -1;
+      if (!aEng && bEng) return 1;
+      return a.label.localeCompare(b.label);
+    });
+
     setSubs(merged);
-    // Auto-select first English track if available
+
+    // Auto-select English or default track if available
     if (merged.length > 0) {
-      setActiveSub(merged[0].id !== undefined ? merged[0].id : 0);
+      const defaultTrack = merged.find(t => t.default && t.label.toLowerCase().includes('eng')) ||
+                           merged.find(t => t.label.toLowerCase().includes('eng')) ||
+                           merged.find(t => t.default) ||
+                           merged[0];
+      setActiveSub(defaultTrack.id !== undefined ? defaultTrack.id : 0);
     } else {
       setActiveSub(-1);
     }
-  }, [subTracksJson, extraTracksJson]);
+  }, [subTracksJson, extraTracksJson, isHardSubServer]);
 
-  useEffect(() => { if (hlsRef.current) hlsRef.current.currentLevel  = activeQ;  }, [activeQ]);
+  useEffect(() => {
+    if (hlsRef.current) {
+      hlsRef.current.currentLevel = activeQ;
+      if (activeQ >= 0 && qualities[activeQ]?.label) {
+        setPlayingResolution(qualities[activeQ].label);
+      }
+    }
+  }, [activeQ, qualities]);
   
   useEffect(() => { 
     // Sync Hls.js embedded tracks
@@ -698,8 +1246,27 @@ export default function AniPlayer({
   }, [ctrlVis]);
   // Fetch and parse subtitles when activeSub changes
   useEffect(() => {
-    const currentSubTrack = subs.find(s => s.id === activeSub) || subs[activeSub] || subs[0];
-    if (activeSub === -1 || (!currentSubTrack?.file && !currentSubTrack?.content)) {
+    // Locate track by id first (most reliable), then by index as a fallback
+    const currentSubTrack = subs.find(s => s.id === activeSub) ??
+                            (activeSub >= 0 && activeSub < subs.length ? subs[activeSub] : null);
+
+    if (activeSub === -1 || !currentSubTrack) {
+      setCues([]);
+      return;
+    }
+
+    const targetLang = currentSubTrack.label || 'English';
+    const isTargetEnglish = targetLang.toLowerCase().includes('eng');
+
+    // On HardSub servers: English subtitles are physically burned into the video stream.
+    // Suppress external subtitle loading and clear overlay cues so no conflicting/wrong cues render.
+    if (isHardSubServer && isTargetEnglish) {
+      log('[Subtitle] HardSub server: English subtitles are burned into the video stream. Suppressing overlay cues.');
+      setCues([]);
+      return;
+    }
+
+    if (!currentSubTrack.file && !currentSubTrack.content) {
       setCues([]);
       return;
     }
@@ -788,41 +1355,82 @@ export default function AniPlayer({
       }
 
       if (isNative && targetUrl.startsWith('http') && !targetUrl.includes('localhost')) {
-        try {
-          const reqHeaders = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-          };
-          if (targetReferer) {
-            try {
-              const refOrigin = new URL(targetReferer).origin;
-              reqHeaders['Origin'] = refOrigin;
-            } catch {}
-            reqHeaders['Referer'] = targetReferer;
-          } else {
-            try {
-              const urlObj = new URL(targetUrl);
-              reqHeaders['Origin'] = urlObj.origin;
-              reqHeaders['Referer'] = urlObj.origin + '/';
-            } catch {}
-          }
-
-          const response = await CapacitorHttp.request({
-            url: targetUrl,
-            method: 'GET',
-            headers: reqHeaders,
-            responseType: 'text',
-          });
-
-          if (response.status === 200 && response.data) {
-            return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-          } else {
-            throw new Error(`HTTP status ${response.status}`);
-          }
-        } catch (e) {
-          console.warn('[AniPlayer] CapacitorHttp subtitle request failed:', e.message);
-          throw e; // propagate so retry chain can try next track
+        // Build referer candidate list with root origins + trailing slash (Cloudflare CDN requirement)
+        const refererCandidates = [];
+        if (targetReferer) {
+          try {
+            const origin = new URL(targetReferer).origin;
+            refererCandidates.push(`${origin}/`);
+          } catch {}
         }
+        if (embedUrl) {
+          try {
+            const origin = new URL(embedUrl).origin;
+            refererCandidates.push(`${origin}/`);
+          } catch {}
+        }
+        if (targetUrl.includes('kryntal.top') || targetUrl.includes('megaplay') || targetUrl.includes('megacloud')) {
+          refererCandidates.push('https://megaplay.buzz/');
+        }
+        if (targetUrl.includes('vidtube') || targetUrl.includes('vidplay')) {
+          refererCandidates.push('https://vidtube.site/');
+        }
+        if (targetUrl.includes('echovideo') || targetUrl.includes('roburnt') || targetUrl.includes('dpopdrop') || targetUrl.includes('savedly')) {
+          refererCandidates.push('https://play.echovideo.ru/');
+        }
+        if (targetUrl.includes('otakuhg') || targetUrl.includes('premilkyway') || targetUrl.includes('cdn-centaurus') || targetUrl.includes('streamhg')) {
+          refererCandidates.push('https://otakuhg.site/');
+        }
+        if (targetUrl.includes('otakuvid') || targetUrl.includes('dramiyos') || targetUrl.includes('acek-cdn') || targetUrl.includes('earnvids')) {
+          refererCandidates.push('https://otakuvid.online/');
+        }
+        if (targetUrl.includes('bibiemb') || targetUrl.includes('vibevibe')) {
+          refererCandidates.push('https://bibiemb.xyz/');
+        }
+        if (targetUrl.includes('vivibebe')) {
+          refererCandidates.push('https://vivibebe.site/');
+        }
+        if (targetUrl.includes('anineko')) {
+          refererCandidates.push('https://anineko.es/');
+        }
+        try {
+          const urlOrigin = new URL(targetUrl).origin;
+          refererCandidates.push(`${urlOrigin}/`);
+        } catch {}
+
+        const uniqueReferers = [...new Set(refererCandidates.filter(Boolean))];
+        let lastErr = null;
+
+        for (const ref of uniqueReferers) {
+          try {
+            const refOrigin = new URL(ref).origin;
+            const reqHeaders = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+              'Accept': '*/*',
+              'Origin': refOrigin,
+              'Referer': ref, // Must have trailing slash!
+            };
+
+            const response = await CapacitorHttp.request({
+              url: targetUrl,
+              method: 'GET',
+              headers: reqHeaders,
+              responseType: 'text',
+            });
+
+            if (response.status === 200 && response.data) {
+              const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+              if (text && (text.includes('WEBVTT') || text.includes('-->') || text.length > 20)) {
+                log(`[AniPlayer] Subtitle loaded via CapacitorHttp (${text.length} chars, referer: ${ref})`);
+                return text;
+              }
+            }
+          } catch (e) {
+            lastErr = e;
+            console.warn(`[AniPlayer] CapacitorHttp subtitle attempt with referer ${ref} failed:`, e.message);
+          }
+        }
+        if (lastErr) throw lastErr;
       }
 
       // Web fallback: try the original proxy URL (works in browser with CORS proxy)
@@ -856,33 +1464,47 @@ export default function AniPlayer({
         } catch {}
       }
 
-      // Parse WebVTT / SRT format
+      // Parse WebVTT / SRT format (robust against single/double line breaks, cue IDs, and cue settings)
       if (text.includes('WEBVTT') || text.includes('-->')) {
         const parsed = [];
-        const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
-        for (const block of blocks) {
-          const lines = block.trim().split('\n');
-          const tsIdx = lines.findIndex(l => l.includes('-->'));
-          if (tsIdx === -1) continue;
-          const tsParts = lines[tsIdx].split('-->');
-          if (tsParts.length < 2) continue;
+        const lines = text.replace(/\r\n/g, '\n').split('\n');
+        let i = 0;
+        const parseTime = (t) => {
+          if (!t) return NaN;
+          const cleanT = t.trim().split(/\s+/)[0].replace(',', '.');
+          const parts = cleanT.split(':');
+          let secs = 0;
+          if (parts.length === 3) secs = +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
+          else if (parts.length === 2) secs = +parts[0] * 60 + parseFloat(parts[1]);
+          return secs;
+        };
 
-          const parseTime = (t) => {
-            const parts = t.trim().replace(',', '.').split(':');
-            let secs = 0;
-            if (parts.length === 3) secs = +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
-            else if (parts.length === 2) secs = +parts[0] * 60 + parseFloat(parts[1]);
-            return secs;
-          };
-
-          const startTime = parseTime(tsParts[0]);
-          const endTime = parseTime(tsParts[1].trim().split(/\s+/)[0]);
-          const rawSubText = lines.slice(tsIdx + 1).join('\n').trim();
-          const cleanSubText = rawSubText.replace(/<[^>]+>/g, '').trim();
-
-          if (cleanSubText && isFinite(startTime) && isFinite(endTime)) {
-            parsed.push({ startTime, endTime, text: cleanSubText });
+        while (i < lines.length) {
+          const line = lines[i];
+          if (line.includes('-->')) {
+            const tsParts = line.split('-->');
+            if (tsParts.length >= 2) {
+              const startTime = parseTime(tsParts[0]);
+              const endTime = parseTime(tsParts[1]);
+              const subLines = [];
+              i++;
+              while (i < lines.length && lines[i].trim() !== '' && !lines[i].includes('-->')) {
+                // If next line is a single cue number right before a timestamp, break
+                if (i + 1 < lines.length && lines[i + 1].includes('-->') && /^\d+$/.test(lines[i].trim())) {
+                  break;
+                }
+                subLines.push(lines[i]);
+                i++;
+              }
+              const rawSubText = subLines.join('\n').trim();
+              const cleanSubText = rawSubText.replace(/<[^>]+>/g, '').trim();
+              if (cleanSubText && isFinite(startTime) && isFinite(endTime)) {
+                parsed.push({ startTime, endTime, text: cleanSubText });
+              }
+              continue;
+            }
           }
+          i++;
         }
         log(`Loaded ${parsed.length} subtitle cues (WebVTT/SRT format)`);
         return parsed;
@@ -892,47 +1514,45 @@ export default function AniPlayer({
       return [];
     };
 
-    // ── Main: try current track, then retry with fallbacks ──
+    // ── Main: try primary track, then retry ONLY with fallbacks for the SAME LANGUAGE ──
     (async () => {
-      // Try the active track first
+      // 1. Try primary track
       try {
         const text = await loadSubtitleFromTrack(currentSubTrack);
         const cueList = parseSubtitleText(text);
         if (cueList.length > 0) {
+          log(`[Subtitle] Primary track for "${targetLang}" loaded with ${cueList.length} cues`);
           setCues(cueList);
           return;
         }
-        log('[Subtitle] Primary track returned 0 cues, trying fallbacks...');
+        log(`[Subtitle] Primary track for "${targetLang}" returned 0 cues, trying same-language fallbacks...`);
       } catch (err) {
-        log(`[Subtitle] Primary track failed: ${err.message}, trying fallbacks...`);
+        log(`[Subtitle] Primary track for "${targetLang}" failed: ${err.message}, trying same-language fallbacks...`);
       }
 
-      // Retry chain: try every other available track before giving up
-      for (const fallbackTrack of subs) {
-        if (fallbackTrack.id === activeSub) continue; // skip the one that just failed
-        if (!fallbackTrack.file && !fallbackTrack.content) continue;
+      // 2. Retry chain: try ONLY candidates for the EXACT SAME LANGUAGE
+      const sameLangAlternatives = currentSubTrack.alternatives || [];
+      for (const altTrack of sameLangAlternatives) {
+        if (!altTrack.file && !altTrack.content) continue;
         try {
-          const text = await loadSubtitleFromTrack(fallbackTrack);
+          const text = await loadSubtitleFromTrack(altTrack);
           const cueList = parseSubtitleText(text);
           if (cueList.length > 0) {
-            log(`[Subtitle] Fallback track "${fallbackTrack.label}" succeeded with ${cueList.length} cues`);
+            log(`[Subtitle] Alternative track for "${targetLang}" succeeded with ${cueList.length} cues`);
             setCues(cueList);
             return;
           }
         } catch {
-          // continue to next fallback
+          // continue to next alternative for this language
         }
       }
 
-      // All tracks exhausted
-      log('[Subtitle] All subtitle tracks exhausted — no cues loaded');
+      // 3. All tracks for this language exhausted — gracefully clear cues.
+      // NEVER switch to another language (e.g. Arabic when English was chosen)!
+      log(`[Subtitle] All subtitle tracks for "${targetLang}" exhausted — no cues loaded`);
       setCues([]);
-      if (!isLocal) {
-        setSubToast('Subtitles unavailable');
-        setTimeout(() => setSubToast(null), 3500);
-      }
     })();
-  }, [activeSub, subs, referer, log]);
+  }, [activeSub, subs, referer, log, isHardSubServer]);
 
   /* ── Video events ─────────────────────────────────────────── */
   useEffect(() => {
@@ -946,6 +1566,29 @@ export default function AniPlayer({
       }
       const ct = v.currentTime;
       setCurTime(ct);
+      if (ct > 0) {
+        lastKnownTimeRef.current = ct;
+      }
+      if (v.duration > 0) {
+        lastKnownDurRef.current = v.duration;
+      }
+      if (e.type === 'pause') {
+        flushProgress(ct);
+      }
+
+      // Safety net: if video started playing from 0:00 but a resume target exists, seek immediately
+      if (!resumeSeekAppliedRef.current && v.duration > 0) {
+        const target = Math.max(targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : 0, initialSeekTime > 2 ? initialSeekTime : 0);
+        if (target > 2 && target < v.duration - 5 && Math.abs(ct - target) > 2) {
+          log(`[Resume] Enforcing seek on timeupdate safety net: jumping to ${target.toFixed(1)}s (was at ${ct.toFixed(1)}s)`);
+          try {
+            v.currentTime = target;
+            resumeSeekAppliedRef.current = true;
+          } catch (_) {}
+        } else if (target > 2 && Math.abs(ct - target) <= 2) {
+          resumeSeekAppliedRef.current = true;
+        }
+      }
 
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
       // Only log non-timeupdate events to avoid flooding re-renders
@@ -956,11 +1599,17 @@ export default function AniPlayer({
     const onMeta = () => {
       log(`Video loadedmetadata: duration=${v.duration.toFixed(1)}`);
       setDuration(v.duration);
+      if (v.duration > 0) {
+        lastKnownDurRef.current = v.duration;
+      }
       // Resume from stored seek position (Netflix-style "continue where you left off")
-      // Only seek if > 5s into episode and not within last 30s (episode considered done)
-      if (initialSeekTime > 5 && v.duration > 0 && initialSeekTime < v.duration - 30) {
-        log(`[Resume] Seeking to stored position: ${initialSeekTime.toFixed(1)}s`);
-        v.currentTime = initialSeekTime;
+      const target = Math.max(targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : 0, initialSeekTime > 2 ? initialSeekTime : 0);
+      if (target > 2 && v.duration > 0 && target < v.duration - 5 && !resumeSeekAppliedRef.current) {
+        log(`[Resume] Seeking to stored target position on loadedmetadata: ${target.toFixed(1)}s`);
+        try {
+          v.currentTime = target;
+          resumeSeekAppliedRef.current = true;
+        } catch (_) {}
       }
     };
     const onWait = () => {
@@ -981,6 +1630,14 @@ export default function AniPlayer({
         setHasStarted(true);
         schedHide(); // ← auto-hide HUD when video actually starts playing
       }
+      const target = Math.max(targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : 0, initialSeekTime > 2 ? initialSeekTime : 0);
+      if (target > 2 && !resumeSeekAppliedRef.current && v.duration > 0 && target < v.duration - 5) {
+        log(`[Resume] Enforcing seek on ${e.type}: ${target.toFixed(1)}s`);
+        try {
+          v.currentTime = target;
+          resumeSeekAppliedRef.current = true;
+        } catch (_) {}
+      }
     };
     // Also trigger auto-hide from timeupdate when playing starts (covers autoplay case)
     let _lastPlaying = false;
@@ -993,6 +1650,49 @@ export default function AniPlayer({
       }
     };
 
+    // ⚡ Silent Video Freeze Watchdog:
+    // Detects when audio is playing (currentTime advances) but the video frame presentation is frozen (0 new frames rendered).
+    let lastCheckTime = 0;
+    let lastRenderedFrames = -1;
+    let freezeStreak = 0;
+    let lastNudgeTime = 0;
+
+    const freezeWatchdogId = setInterval(() => {
+      if (!v || v.paused || v.ended || v.seeking || v.readyState < 3) {
+        freezeStreak = 0;
+        return;
+      }
+      const ct = v.currentTime;
+      const timeAdvanced = Math.abs(ct - lastCheckTime) >= 0.8;
+      
+      const quality = typeof v.getVideoPlaybackQuality === 'function' ? v.getVideoPlaybackQuality() : null;
+      const currentFrames = quality ? quality.totalVideoFrames : -1;
+
+      if (timeAdvanced) {
+        lastCheckTime = ct;
+        if (quality && currentFrames >= 0 && currentFrames === lastRenderedFrames) {
+          // Sound is playing (currentTime advanced by 0.8s+), BUT 0 new video frames were rendered!
+          freezeStreak++;
+          const now = Date.now();
+          if (freezeStreak >= 2 && now - lastNudgeTime > 4000) {
+            lastNudgeTime = now;
+            freezeStreak = 0;
+            log('[Watchdog] Silent video freeze detected (audio playing with 0 video frames). Nudging decoder pipeline...');
+            try {
+              // Micro-nudge forces the Android hardware decoder to flush its stalled buffer and re-sync
+              v.currentTime = ct + 0.05;
+              if (hlsRef.current) {
+                hlsRef.current.recoverMediaError();
+              }
+            } catch (_) {}
+          }
+        } else {
+          lastRenderedFrames = currentFrames;
+          freezeStreak = 0;
+        }
+      }
+    }, 1000);
+
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
     v.addEventListener('timeupdate',      sync);
@@ -1003,6 +1703,7 @@ export default function AniPlayer({
     v.addEventListener('canplay',         onPlay);
     v.addEventListener('ended',           onEnded);
     return () => {
+      clearInterval(freezeWatchdogId);
       v.removeEventListener('play',           sync);
       v.removeEventListener('pause',          sync);
       v.removeEventListener('timeupdate',     sync);
@@ -1013,15 +1714,67 @@ export default function AniPlayer({
       v.removeEventListener('canplay',        onPlay);
       v.removeEventListener('ended',          onEnded);
     };
-  }, [log, autoplay, onEpisodeChange, currentEpisode, totalEpisodes]);
+  }, [log, autoplay, onEpisodeChange, currentEpisode, totalEpisodes, initialSeekTime, flushProgress]);
+
+  // ── Engine B: Embedded Subtitle Track Fallback (MP4 Soft-Subs) ─────────
+  // If external VTT cues are not present, inspect HTML5 video.textTracks
+  // so any embedded tracks in the MP4 (as seen in MX Player) are rendered seamlessly.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    const handleCueChange = () => {
+      if (cues.length > 0 || shouldSuppressOverlay) {
+        setEmbeddedCueText('');
+        return;
+      }
+      let foundText = '';
+      if (v.textTracks && v.textTracks.length > 0) {
+        for (let i = 0; i < v.textTracks.length; i++) {
+          const track = v.textTracks[i];
+          if (track.mode === 'disabled') track.mode = 'hidden';
+          if (track.activeCues && track.activeCues.length > 0) {
+            foundText = Array.from(track.activeCues).map(c => c.text).join('\n');
+            if (foundText) break;
+          }
+        }
+      }
+      setEmbeddedCueText(foundText);
+    };
+
+    const setupEmbeddedTracks = () => {
+      if (v.textTracks) {
+        for (let i = 0; i < v.textTracks.length; i++) {
+          const t = v.textTracks[i];
+          t.mode = 'hidden';
+          t.oncuechange = handleCueChange;
+        }
+        v.textTracks.onaddtrack = (e) => {
+          if (e.track) {
+            e.track.mode = 'hidden';
+            e.track.oncuechange = handleCueChange;
+          }
+        };
+      }
+    };
+
+    v.addEventListener('loadedmetadata', setupEmbeddedTracks);
+    setupEmbeddedTracks();
+
+    return () => {
+      v.removeEventListener('loadedmetadata', setupEmbeddedTracks);
+      if (v.textTracks) {
+        for (let i = 0; i < v.textTracks.length; i++) {
+          v.textTracks[i].oncuechange = null;
+        }
+      }
+    };
+  }, [cues.length, shouldSuppressOverlay]);
 
   // ── Save seek position every 10s while playing (Netflix-style resume) ──
   // Fires onSeekProgress(currentTime, duration) at 10s intervals.
   // Throttled: only fires while video is actually playing, not paused/buffering.
-  // Egress impact: ZERO — this is a local Preferences write, not a Supabase read.
-  const onSeekProgressRef = useRef(onSeekProgress);
-  useEffect(() => { onSeekProgressRef.current = onSeekProgress; }, [onSeekProgress]);
-
+  // Fast & Bulletproof Watch Progress Tracking (4s interval + background/tab/close listeners)
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !onSeekProgressRef.current) return;
@@ -1030,13 +1783,33 @@ export default function AniPlayer({
       if (v.paused || v.ended || v.duration < 5) return;
       const ct = v.currentTime;
       const dur = v.duration;
-      // Don't save in first 5s (avoids saving resume point at 0) or last 30s (episode done)
-      if (ct < 5 || ct > dur - 30) return;
-      onSeekProgressRef.current(ct, dur);
-    }, 10000); // every 10 seconds
+      // Don't save in first 2s (avoids resetting to 0) or last 15s (episode considered completed)
+      if (ct < 2 || ct > dur - 15) return;
+      flushProgress(ct);
+    }, 4000); // every 4 seconds for tight synchronization
 
-    return () => clearInterval(interval);
-  }, [url]); // restart interval when URL changes (new episode)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushProgress();
+      }
+    };
+
+    const onPageHide = () => {
+      flushProgress();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+      flushProgress();
+    };
+  }, [url, flushProgress]);
 
   // ── Autoplay countdown when video ends ─────────────────────────
   useEffect(() => {
@@ -1124,6 +1897,7 @@ export default function AniPlayer({
   // so the next episode can immediately re-enter fullscreen without a portrait flash.
   useEffect(() => {
     return () => {
+      flushProgress();
       // Always reset screen brightness when player closes
       resetDeviceBrightness();
 
@@ -1180,6 +1954,7 @@ export default function AniPlayer({
 
   /* ── Playback actions ─────────────────────────────────────── */
   const togglePlay = useCallback(() => {
+    if (activeVideoAdRef.current) return;
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) { v.play(); schedHide(); }
@@ -1236,12 +2011,6 @@ export default function AniPlayer({
     v.playbackRate = speed;
   }, [speed]);
 
-  // Pause playback when loading/fetching next episode servers
-  useEffect(() => {
-    if (loading && videoRef.current) {
-      videoRef.current.pause();
-    }
-  }, [loading]);
 
   const applySpeed = useCallback((s) => {
     setSpeed(s);
@@ -1260,6 +2029,7 @@ export default function AniPlayer({
 
   /* ── Tap / double-tap ─────────────────────────────────────── */
   const handleTap = useCallback((cx, cy) => {
+    if (activeVideoAd) return;
     const el = wrapRef.current;
     if (!el) return;
     const { left, width } = el.getBoundingClientRect();
@@ -1283,10 +2053,11 @@ export default function AniPlayer({
         });
       }, 300);
     }
-  }, [skipSilent, togglePlay, schedHide]);
+  }, [skipSilent, togglePlay, schedHide, activeVideoAd]);
 
   /* ── Swipe gesture ────────────────────────────────────────── */
   const onGestureStart = useCallback((cx, cy) => {
+    if (activeVideoAd) return;
     const el = wrapRef.current;
     if (!el) return;
     const { left, width } = el.getBoundingClientRect();
@@ -1338,6 +2109,7 @@ export default function AniPlayer({
     if (!el) return;
 
     const handleTouchStart = (e) => {
+      if (activeVideoAd) return;
       // Ignore multi-touch (pinch-to-zoom etc)
       if (e.touches.length > 1) {
         gesture.current = null;
@@ -1350,6 +2122,7 @@ export default function AniPlayer({
     };
 
     const handleTouchMove = (e) => {
+      if (activeVideoAd) return;
       // Cancel gesture on multi-touch
       if (e.touches.length > 1) {
         gesture.current = null;
@@ -1401,8 +2174,10 @@ export default function AniPlayer({
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
-  const activeCue = Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= (c.startTime + subDelay) && curTime <= (c.endTime + subDelay)) : null;
-  const cueHtml = activeCue ? sanitizeSubtitleHtml(activeCue.text) : '';
+  const activeCue = !shouldSuppressOverlay && Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= (c.startTime + subDelay) && curTime <= (c.endTime + subDelay)) : null;
+  const cueHtml = !shouldSuppressOverlay
+    ? (activeCue ? sanitizeSubtitleHtml(activeCue.text) : (embeddedCueText ? sanitizeSubtitleHtml(embeddedCueText) : ''))
+    : '';
 
 
   /* ─── Render ──────────────────────────────────────────────── */
@@ -1413,7 +2188,7 @@ export default function AniPlayer({
       onMouseMove={() => { if (!isTouch()) showCtrl(); }}
       onMouseLeave={() => { if (!isTouch() && playing) setCtrlVis(false); }}
       onClick={(e) => {
-        if (isTouch()) return;
+        if (isTouch() || activeVideoAd) return;
         if (!isGestureTarget(e.target)) return;
         if (Date.now() - lastTouchTime.current < 500) return;
         handleTap(e.clientX, e.clientY);
@@ -1430,8 +2205,16 @@ export default function AniPlayer({
         poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
       />
 
+      {/* ── YouTube-Style In-Stream Video Ad Overlay ────────── */}
+      {activeVideoAd && (
+        <VideoAdOverlay
+          ad={activeVideoAd}
+          onComplete={handleVideoAdComplete}
+        />
+      )}
+
       {/* ── BLACK LOADING BG: Covers grey browser poster/play icon ── */}
-      {(!hasStarted || needsTap) && !hlsErr && (
+      {(!hasStarted || needsTap) && !hlsErr && !activeVideoAd && (
         <div 
           className="anip__loading-bg" 
           onClick={() => {
@@ -1443,7 +2226,7 @@ export default function AniPlayer({
       )}
 
       {/* ── Custom Subtitle Overlay ─────────────────────────── */}
-      {activeCue && cueHtml && (() => {
+      {(activeCue || embeddedCueText) && cueHtml && (() => {
         const subSz = subtitleSettings?.subtitleFontSize || 'medium';
         const fontSize = { small: 14, medium: 18, large: 22, xlarge: 28 }[subSz] || 18;
         const color = subtitleSettings?.subtitleColor || '#ffffff';
@@ -1491,24 +2274,32 @@ export default function AniPlayer({
           if (oldHls) { try { oldHls.destroy(); } catch {} hlsRef.current = null; }
           const newHls = new Hls({
             enableWorker: true,
+            startFragPrefetch: true,
+            lowLatencyMode: false,
+            progressive: false,
+            startPosition: targetResumeTimeRef.current > 0 ? targetResumeTimeRef.current : -1,
             startLevel: -1,
-            maxBufferLength: 15,
-            maxMaxBufferLength: 30,
-            maxBufferSize: 30 * 1000 * 1000,
-            backBufferLength: 15,
+            abrEwmaDefaultEstimate: 1200000,
+            abrBandWidthFactor: 0.85,
+            abrBandWidthUpFactor: 0.7,
+            maxBufferLength: 25,
+            maxMaxBufferLength: 50,
+            maxBufferSize: 50 * 1000 * 1000,
+            backBufferLength: 20,
             manifestLoadingTimeOut: 8000,
             manifestLoadingMaxRetry: 3,
-            manifestLoadingRetryDelay: 1000,
+            manifestLoadingRetryDelay: 500,
             levelLoadingTimeOut: 8000,
             levelLoadingMaxRetry: 3,
-            levelLoadingRetryDelay: 1000,
+            levelLoadingRetryDelay: 500,
             fragLoadingTimeOut: 12000,
             fragLoadingMaxRetry: 3,
-            fragLoadingRetryDelay: 1000,
+            fragLoadingRetryDelay: 500,
             highBufferWatchdogPeriod: 2,
             nudgeOffset: 0.1,
             nudgeMaxRetries: 10,
             autoStartLoad: true,
+            loader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
             pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
             fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
           });
@@ -1529,18 +2320,41 @@ export default function AniPlayer({
               </strong>
               {msg.body}
             </p>
-            <button className="anip__error__retry" onClick={doRetry}>
-              ↺ Retry
-            </button>
-            <button className="anip__error__secondary" onClick={onBack}>
-              ← Try Another Server
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 240, margin: '14px auto 0' }}>
+              <button className="anip__error__retry" onClick={doRetry}>
+                ↺ Retry Stream
+              </button>
+              {onStreamExpired && (
+                <button
+                  className="anip__error__retry"
+                  style={{
+                    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                    boxShadow: '0 4px 15px rgba(99, 102, 241, 0.35)',
+                    border: 'none',
+                  }}
+                  onClick={() => {
+                    setHlsErr(null);
+                    setWaiting(true);
+                    if (hlsRef.current) {
+                      try { hlsRef.current.destroy(); } catch {}
+                      hlsRef.current = null;
+                    }
+                    onStreamExpired();
+                  }}
+                >
+                  ⚡ Switch Server
+                </button>
+              )}
+              <button className="anip__error__secondary" onClick={() => { flushProgress(); onBack(); }}>
+                ← Exit Player
+              </button>
+            </div>
           </div>
         );
       })()}
 
       {/* ── buffering spinner / loading spinner ─────────────── */}
-      {(waiting || !hasStarted || needsTap || loading) && !hlsErr && (
+      {(waiting || !hasStarted || needsTap || loading) && !hlsErr && !activeVideoAd && (
         <div className="anip__spinner">
           <div className="anip__spinner-ring" />
         </div>
@@ -1610,7 +2424,10 @@ export default function AniPlayer({
 
 
       {/* ── Controls overlay — opacity animated, back button removed from here ── */}
-      <div className="anip__overlay">
+      <div
+        className="anip__overlay"
+        style={activeVideoAd ? { display: 'none', pointerEvents: 'none' } : undefined}
+      >
 
         {/* ── Top bar (no back button here anymore) ──────────────────── */}
         <div className="anip__top-bar"
@@ -1624,7 +2441,7 @@ export default function AniPlayer({
           {onBack ? (
             <button
               className="anip__btn anip__btn--back"
-              onClick={e => { e.stopPropagation(); onBack(); }}
+              onClick={e => { e.stopPropagation(); flushProgress(); onBack(); }}
               title="Exit Video"
               style={{
                 width: 36,
@@ -1847,12 +2664,14 @@ export default function AniPlayer({
                   title="Quality"
                 >
                   <Settings size={17} />
-                  <span className="anip__badge-visible">{activeQ===-1?'Auto':qualities[activeQ]?.label||'Auto'}</span>
+                  <span className="anip__badge-visible">
+                    {activeQ === -1 ? (playingResolution ? `Auto (${playingResolution})` : 'Auto') : (qualities[activeQ]?.label || 'Auto')}
+                  </span>
                 </button>
                 {showQ && (
                   <div className="anip__menu">
                     <p className="anip__menu-hd">Quality</p>
-                    {[{ id:-1, label:'Auto' }, ...[...qualities].reverse()].map(q => (
+                    {[{ id: -1, label: playingResolution ? `Auto (${playingResolution})` : 'Auto' }, ...[...qualities].reverse()].map(q => (
                       <button key={q.id}
                         className={`anip__menu-item ${activeQ===q.id ? 'anip__menu-item--on':''}`}
                         onClick={e => { e.stopPropagation(); setActiveQ(q.id); setActivePanel(null); schedHide(); }}

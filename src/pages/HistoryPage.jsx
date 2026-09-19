@@ -1,8 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
 import { Clock, CheckCircle2, Play, Trash2, Star, Filter } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getTitle, getCover } from '../api/anilist';
+import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
 
 const TABS = [
   { id: 'all', label: 'All', icon: Star },
@@ -12,15 +15,20 @@ const TABS = [
 
 export default function HistoryPage() {
   const navigate = useNavigate();
-  const { recentlyViewed, progress, watchlist, favorites, removeFromRecentlyViewed } = useApp();
+  const { recentlyViewed, progress, watchlist, favorites, removeFromRecentlyViewed, removeFromHistory } = useApp();
   const [tab, setTab] = useState('all');
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    const el = document.documentElement;
-    const onScroll = () => setScrolled(el.scrollTop > 10);
+    const getScrollY = () =>
+      Math.max(document.documentElement.scrollTop, document.body.scrollTop, window.scrollY || 0);
+    const onScroll = () => setScrolled(getScrollY() > 10);
+    window.addEventListener('scroll', onScroll, { passive: true });
     document.addEventListener('scroll', onScroll, { passive: true });
-    return () => document.removeEventListener('scroll', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      document.removeEventListener('scroll', onScroll);
+    };
   }, []);
 
   /* ── Build combined history list ─────────────────────────────────────── */
@@ -70,26 +78,40 @@ export default function HistoryPage() {
   const totalCount = watchingList.length + completedList.length;
 
   return (
-    <div className="page" style={{ paddingTop: 'calc(var(--sat) + 60px)', minHeight: '100vh', background: 'var(--bg-primary)' }}>
+    <div className="page" style={{ paddingTop: 'calc(var(--sat, 0px) + 128px)', minHeight: '100vh', background: 'var(--bg-primary)' }}>
 
-      {/* ── Floating Header ─────────────────────────────────────── */}
+      {/* ── Floating Header — portaled to document.body so it stays fixed ─── */}
+      {createPortal(
       <div style={{
-        position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)',
-        zIndex: 90, width: '100%', maxWidth: 480,
-        background: scrolled ? 'rgba(12,12,12,0.92)' : 'transparent',
-        backdropFilter: scrolled ? 'blur(40px) saturate(180%)' : 'none',
-        WebkitBackdropFilter: scrolled ? 'blur(40px) saturate(180%)' : 'none',
-        borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : '1px solid transparent',
-        transition: 'background-color 0.3s ease, border-color 0.3s ease, backdrop-filter 0.3s ease',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 9999,
+        maxWidth: 480,
+        marginLeft: 'auto',
+        marginRight: 'auto',
+        /* ── Glassmorphism ── */
+        background: scrolled
+          ? 'rgba(16,16,20,0.65)'
+          : 'rgba(16,16,20,0.45)',
+        backdropFilter: 'blur(48px) saturate(200%)',
+        WebkitBackdropFilter: 'blur(48px) saturate(200%)',
+        borderBottom: scrolled
+          ? '1px solid rgba(255,255,255,0.1)'
+          : '1px solid rgba(255,255,255,0.05)',
+        boxShadow: scrolled
+          ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.35)'
+          : 'inset 0 1px 0 rgba(255,255,255,0.03)',
+        transition: 'background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease',
       }}>
         {/* Title Row */}
         <div style={{
-          padding: '10px 18px 8px',
-          paddingTop: 'var(--sat)',
+          padding: '12px 18px 8px',
+          paddingTop: 'calc(var(--sat, 0px) + 12px)',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* Brand icon pill */}
             <div style={{
               width: 32, height: 32, borderRadius: 10,
               background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #818cf8))',
@@ -100,11 +122,11 @@ export default function HistoryPage() {
             </div>
             <span style={{
               fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em',
-              color: 'var(--text-primary)', fontFamily: 'var(--font-brand)',
+              color: '#fff', fontFamily: 'var(--font-brand)',
             }}>History</span>
           </div>
           <span style={{
-            fontSize: 12, color: 'var(--text-muted)', fontWeight: 600,
+            fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: 600,
             background: 'rgba(255,255,255,0.06)', borderRadius: 20, padding: '3px 10px',
           }}>
             {totalCount} anime
@@ -124,49 +146,98 @@ export default function HistoryPage() {
                 key={t.id}
                 onClick={() => setTab(t.id)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700,
-                  border: active ? 'none' : '1px solid rgba(255,255,255,0.1)',
-                  background: active
-                    ? 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #818cf8))'
-                    : 'rgba(255,255,255,0.05)',
-                  color: active ? '#fff' : 'var(--text-muted)',
+                  position: 'relative',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '7px 15px', borderRadius: 20, fontSize: 12, fontWeight: 700,
+                  border: 'none',
+                  background: 'transparent',
+                  color: active ? '#fff' : 'rgba(255,255,255,0.55)',
                   cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
                   touchAction: 'manipulation',
-                  transition: 'background-color 0.2s ease, color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease',
-                  boxShadow: active ? '0 4px 14px -2px var(--accent)' : 'none',
+                  outline: 'none',
+                  transition: 'color 0.2s ease',
                 }}
               >
-                <t.icon size={11} />
-                {t.label}
-                <span style={{
-                  background: active ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)',
-                  borderRadius: 10, padding: '1px 6px', fontSize: 10, fontWeight: 800,
-                }}>{count}</span>
+                {active && (
+                  <motion.div
+                    layoutId="activeHistoryTabPill"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      borderRadius: 20,
+                      background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #818cf8))',
+                      boxShadow: '0 4px 16px -2px var(--accent)',
+                      zIndex: 0,
+                    }}
+                    transition={{ type: 'spring', stiffness: 480, damping: 34 }}
+                  />
+                )}
+                {!active && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      borderRadius: 20,
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      zIndex: 0,
+                    }}
+                  />
+                )}
+                <span style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <t.icon size={12} />
+                  {t.label}
+                  <span style={{
+                    background: active ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)',
+                    borderRadius: 10, padding: '1px 6px', fontSize: 10, fontWeight: 800,
+                    transition: 'background 0.2s ease',
+                  }}>{count}</span>
+                </span>
               </button>
             );
           })}
         </div>
-      </div>
+      </div>,
+      document.body
+      )}
 
-      {/* ── Content ─────────────────────────────────────────────── */}
+      {/* ── Content with Smooth Animated Transition ─────────────────────── */}
       <div style={{ padding: '0 14px 100px' }}>
-        {displayed.length === 0 ? (
-          <EmptyState tab={tab} />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {displayed.map((item) => (
-              <HistoryCard
-                key={item.anime?.id}
-                item={item}
-                progress={progress}
-                onPlay={() => navigate(`/anime/${item.anime.id}?play=true&ep=${item.episode}`)}
-                onNavigate={() => navigate(`/anime/${item.anime.id}`)}
-                onRemove={item.type === 'watching' ? () => removeFromRecentlyViewed(item.anime.id) : null}
-              />
-            ))}
-          </div>
-        )}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={tab}
+            initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
+            transition={{ duration: 0.24, ease: [0.25, 1, 0.5, 1] }}
+          >
+            {displayed.length === 0 ? (
+              <EmptyState tab={tab} />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {displayed.map((item, idx) => (
+                  <motion.div
+                    key={item.anime?.id || idx}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.2, delay: Math.min(idx * 0.03, 0.18) }}
+                  >
+                    <HistoryCard
+                      item={item}
+                      progress={progress}
+                      onPlay={() => navigate(`/anime/${item.anime.id}?play=true&ep=${item.episode}&direct=true`, { state: { anime: item.anime, directPlay: true } })}
+                      onNavigate={() => navigate(`/anime/${item.anime.id}`, { state: { anime: item.anime } })}
+                      onRemove={() => {
+                        if (item.type === 'watching') removeFromRecentlyViewed(item.anime.id);
+                        else removeFromHistory(item.anime.id);
+                      }}
+                    />
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -177,23 +248,35 @@ function HistoryCard({ item, progress, onPlay, onNavigate, onRemove }) {
   const { anime, episode, type } = item;
   const title = getTitle(anime);
   const cover = getCover(anime);
-  const totalEps = anime?.episodes || 0;
+  const totalEps = getAiredEpisodeCount(anime) || anime?.episodes || 0;
   const prog = progress?.[anime?.id];
   const pct = (prog && totalEps) ? Math.min(100, (prog.episode / totalEps) * 100) : 0;
   const isCompleted = type === 'completed';
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleRemove = (e) => {
+    e.stopPropagation();
+    if (confirmDelete) {
+      onRemove();
+      setConfirmDelete(false);
+    } else {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 3000);
+    }
+  };
 
   return (
     <div
       onClick={onNavigate}
       style={{
         background: 'var(--bg-card)',
-        border: '1px solid rgba(255,255,255,0.06)',
+        border: confirmDelete ? '1px solid rgba(239,68,68,0.35)' : '1px solid rgba(255,255,255,0.06)',
         borderRadius: 16,
         display: 'flex', gap: 12,
         padding: 10, cursor: 'pointer',
         position: 'relative', overflow: 'hidden',
-        transition: 'transform 0.15s, box-shadow 0.15s',
-        boxShadow: '0 2px 16px rgba(0,0,0,0.2)',
+        transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.2s',
+        boxShadow: confirmDelete ? '0 2px 16px rgba(239,68,68,0.12)' : '0 2px 16px rgba(0,0,0,0.2)',
       }}
       onTouchStart={e => e.currentTarget.style.transform = 'scale(0.985)'}
       onTouchEnd={e => e.currentTarget.style.transform = 'scale(1)'}
@@ -230,6 +313,7 @@ function HistoryCard({ item, progress, onPlay, onNavigate, onRemove }) {
         <div style={{
           fontSize: 14, fontWeight: 700, color: 'var(--text-primary)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          paddingRight: 36,
         }}>{title}</div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
@@ -266,22 +350,29 @@ function HistoryCard({ item, progress, onPlay, onNavigate, onRemove }) {
         )}
       </div>
 
-      {/* Remove button */}
+      {/* Remove button — tap once to arm, tap again to confirm delete */}
       {onRemove && (
         <button
-          onClick={e => { e.stopPropagation(); onRemove(); }}
-          aria-label="Remove"
+          onClick={handleRemove}
+          aria-label={confirmDelete ? 'Confirm remove' : 'Remove'}
           style={{
             position: 'absolute', top: 10, right: 10,
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: 'rgba(255,255,255,0.2)', padding: 4,
-            display: 'flex', alignItems: 'center',
-            transition: 'color 0.2s',
+            background: confirmDelete ? 'rgba(239,68,68,0.15)' : 'none',
+            border: confirmDelete ? '1px solid rgba(239,68,68,0.3)' : 'none',
+            borderRadius: confirmDelete ? 8 : 0,
+            cursor: 'pointer',
+            color: confirmDelete ? '#ef4444' : 'rgba(255,255,255,0.25)',
+            padding: confirmDelete ? '4px 8px' : 4,
+            display: 'flex', alignItems: 'center', gap: 4,
+            fontSize: 10, fontWeight: 700,
+            transition: 'all 0.2s cubic-bezier(0.16,1,0.3,1)',
+            WebkitTapHighlightColor: 'transparent',
           }}
-          onTouchStart={e => e.currentTarget.style.color = '#ef4444'}
-          onTouchEnd={e => e.currentTarget.style.color = 'rgba(255,255,255,0.2)'}
         >
-          <Trash2 size={14} />
+          {confirmDelete
+            ? <><Trash2 size={12} /><span>Confirm</span></>
+            : <Trash2 size={14} />
+          }
         </button>
       )}
     </div>

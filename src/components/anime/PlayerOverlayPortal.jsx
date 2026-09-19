@@ -1,8 +1,13 @@
+import { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Play, AlertCircle, Loader } from 'lucide-react';
+import { ArrowLeft, Play, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import AniPlayer from '../AniPlayer';
 import IframePlayer from '../IframePlayer';
+import LoadingWheel from '../ui/LoadingWheel';
 import { getTitle } from '../../api/anilist';
+import { getServerSortPriority } from '../../api/stream';
+
+const EP_PAGE_SIZE = 100; // Number of episodes per page in the list
 
 export default function PlayerOverlayPortal({
   anime,
@@ -43,6 +48,22 @@ export default function PlayerOverlayPortal({
 }) {
   const title = getTitle(anime);
 
+  // Windowed episode list: show EP_PAGE_SIZE episodes at a time, centered around current
+  const epPage = useMemo(() => {
+    if (!allEps || allEps.length <= EP_PAGE_SIZE) return 0;
+    const curIdx = allEps.indexOf(epParam);
+    if (curIdx === -1) return 0;
+    return Math.max(0, Math.floor((curIdx) / EP_PAGE_SIZE));
+  }, [epParam, allEps]);
+  const [visiblePage, setVisiblePage] = useState(epPage);
+  const totalPages = Math.ceil((allEps?.length || 0) / EP_PAGE_SIZE);
+  const visibleEps = useMemo(() => {
+    if (!allEps) return [];
+    if (allEps.length <= EP_PAGE_SIZE) return allEps;
+    const start = visiblePage * EP_PAGE_SIZE;
+    return allEps.slice(start, start + EP_PAGE_SIZE);
+  }, [allEps, visiblePage]);
+
   return createPortal(
     <div
       style={{
@@ -70,22 +91,30 @@ export default function PlayerOverlayPortal({
         }}
       >
         {loadStream && servers.length === 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
-            <Loader size={30} className="spin" color="var(--accent)" />
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Searching servers...</p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
+            <LoadingWheel size={44} text="Searching servers..." />
           </div>
-        ) : extracting ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
-            <Loader size={30} className="spin" color="var(--accent)" />
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Resolving stream sources...</p>
+        ) : !activeUrl && extracting ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
+            <LoadingWheel size={44} text="Resolving stream sources..." />
           </div>
         ) : streamErr && !activeUrl ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20, overflowY: 'auto' }}>
-            <AlertCircle size={32} color="#e50914" />
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 260 }}>{streamErr}</p>
-            <button className="btn btn-primary" onClick={onRetryFetch} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6 }}>
-              ↺ Retry
-            </button>
+            <AlertCircle size={32} color={streamErr.includes('not aired') ? '#eab308' : '#e50914'} />
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 280, lineHeight: 1.5 }}>{streamErr}</p>
+            {!streamErr.includes('not aired') ? (
+              <button className="btn btn-primary" onClick={onRetryFetch} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6 }}>
+                ↺ Retry
+              </button>
+            ) : (
+              <button
+                className="btn btn-secondary"
+                onClick={() => onEpisodeChange(Math.max(1, Number(epParam) - 1))}
+                style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6, background: 'rgba(255,255,255,0.08)', border: '1px solid var(--border)' }}
+              >
+                Watch Episode {Math.max(1, Number(epParam) - 1)}
+              </button>
+            )}
           </div>
         ) : (
           // ── ALWAYS keep AniPlayer mounted once we have a URL, even during server switching.
@@ -96,6 +125,8 @@ export default function PlayerOverlayPortal({
               <AniPlayer
                 url={activeUrl}
                 title={`${title} - Episode ${epParam}`}
+                serverName={activeName}
+                isHardSub={!!activeServer?.isHardSub || (activeName || '').toLowerCase().includes('hardsub') || (activeName || '').toLowerCase().includes('hard')}
                 referer={activeServer?.referer}
                 embedUrl={activeServer?.embedUrl}
                 subtitles={activeServer?.subtitles || []}
@@ -111,7 +142,7 @@ export default function PlayerOverlayPortal({
                 onEpisodeChange={onEpisodeChange}
                 autoplay={settings?.autoplay !== false}
                 subtitleSettings={settings || null}
-                loading={loadStream}
+                loading={loadStream || extracting}
                 startInFs={epTransitionFs}
                 keepFsOnEpChange={keepFsRef}
                 initialSeekTime={initialSeekTime}
@@ -143,9 +174,8 @@ export default function PlayerOverlayPortal({
             />
           ) : (
             // No URL yet — initial load spinner (before first server is found)
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12 }}>
-              <Loader size={30} className="spin" color="var(--accent)" />
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Finding stream...</p>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
+              <LoadingWheel size={44} text="Finding stream..." />
             </div>
           )
         )}
@@ -211,7 +241,7 @@ export default function PlayerOverlayPortal({
                 />
                 <button
                   disabled={subServers.length === 0}
-                  onClick={() => onAudioTrackChange('sub')}
+                  onClick={() => subServers.length > 0 && onAudioTrackChange('sub')}
                   style={{
                     flex: 1,
                     padding: '5px 0',
@@ -219,18 +249,20 @@ export default function PlayerOverlayPortal({
                     background: 'transparent',
                     position: 'relative',
                     zIndex: 1,
-                    color: subServers.length === 0 ? 'rgba(255,255,255,0.15)' : (audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)'),
+                    color: subServers.length === 0 ? 'rgba(255,255,255,0.25)' : (audioTrack === 'sub' ? '#fff' : 'var(--text-secondary)'),
                     fontSize: 10,
                     fontWeight: 700,
                     borderRadius: 20,
                     transition: 'color 0.25s ease',
+                    opacity: subServers.length === 0 ? 0.35 : 1,
+                    cursor: subServers.length === 0 ? 'not-allowed' : 'pointer',
                   }}
                 >
                   Subtitled (SUB)
                 </button>
                 <button
                   disabled={dubServers.length === 0}
-                  onClick={() => onAudioTrackChange('dub')}
+                  onClick={() => dubServers.length > 0 && onAudioTrackChange('dub')}
                   style={{
                     flex: 1,
                     padding: '5px 0',
@@ -238,20 +270,25 @@ export default function PlayerOverlayPortal({
                     background: 'transparent',
                     position: 'relative',
                     zIndex: 1,
-                    color: dubServers.length === 0 ? 'rgba(255,255,255,0.15)' : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
+                    color: dubServers.length === 0 ? 'rgba(255,255,255,0.25)' : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
                     fontSize: 10,
                     fontWeight: 700,
                     borderRadius: 20,
                     transition: 'color 0.25s ease',
+                    opacity: dubServers.length === 0 ? 0.35 : 1,
+                    cursor: dubServers.length === 0 ? 'not-allowed' : 'pointer',
+                    pointerEvents: dubServers.length === 0 ? 'none' : 'auto',
                   }}
                 >
-                  Dubbed (DUB)
+                  {dubServers.length === 0 ? 'DUB (No Dub)' : 'Dubbed (DUB)'}
                 </button>
               </div>
 
               {/* Active Track Server List */}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 60, overflowY: 'auto' }}>
-                {(audioTrack === 'sub' ? subServers : dubServers).map((s, idx) => {
+                {[...(audioTrack === 'sub' ? subServers : dubServers)]
+                  .sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name))
+                  .map((s, idx) => {
                   const active = (activeName && activeName === s.name) || (activeServer?.name === s.name);
                   return (
                     <button
@@ -275,13 +312,36 @@ export default function PlayerOverlayPortal({
             </div>
           )}
 
-          {/* Episodes Scrollable List */}
+          {/* Episodes Scrollable List — windowed to 100 eps/page to avoid painting 1000+ nodes */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', minHeight: 0 }}>
-            <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
-              Episodes ({totalEps})
-            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <h3 style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, margin: 0 }}>
+                Episodes ({totalEps})
+              </h3>
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    disabled={visiblePage === 0}
+                    onClick={() => setVisiblePage(p => Math.max(0, p - 1))}
+                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 8, padding: '3px 8px', color: visiblePage === 0 ? 'rgba(255,255,255,0.2)' : '#fff', cursor: visiblePage === 0 ? 'default' : 'pointer' }}
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, minWidth: 60, textAlign: 'center' }}>
+                    {visiblePage * EP_PAGE_SIZE + 1}–{Math.min((visiblePage + 1) * EP_PAGE_SIZE, totalEps)}
+                  </span>
+                  <button
+                    disabled={visiblePage >= totalPages - 1}
+                    onClick={() => setVisiblePage(p => Math.min(totalPages - 1, p + 1))}
+                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 8, padding: '3px 8px', color: visiblePage >= totalPages - 1 ? 'rgba(255,255,255,0.2)' : '#fff', cursor: visiblePage >= totalPages - 1 ? 'default' : 'pointer' }}
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {allEps.map(n => {
+              {visibleEps.map(n => {
                 const isWatched = prog?.episode > n;
                 const isCurrent = epParam === n;
                 return (
@@ -324,7 +384,7 @@ export default function PlayerOverlayPortal({
                         <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Watched</div>
                       )}
                     </div>
-                    {(sessionDownloadedEps.has(`${n}_sub`) || sessionDownloadedEps.has(`${n}_dub`)) && (
+                    {sessionDownloadedEps.has(`${n}_${audioTrack}`) && (
                       <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 700 }}>✓ Downloaded</span>
                     )}
                   </div>

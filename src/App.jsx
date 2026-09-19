@@ -1,28 +1,60 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams, useLocation, useParams } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
 import { StatusBar } from '@capacitor/status-bar';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
-import WelcomeScreen from './components/WelcomeScreen';
-import AuthModal from './components/AuthModal';
 import { supabase } from './api/supabase';
 import { dispatchBackButton } from './utils/backButton';
-import Home from './pages/Home';
-import Browse from './pages/Browse';
-import Schedule from './pages/Schedule';
-import AnimePage from './pages/AnimePage';
-import MyList from './pages/MyList';
-import DownloadPage from './pages/DownloadPage';
-import Profile from './pages/Profile';
-import FavoritesPage from './pages/FavoritesPage';
-import WatchedPage from './pages/WatchedPage';
-import HistoryPage from './pages/HistoryPage';
-import Notifications from './pages/Notifications';
+import GlobalErrorBoundary from './components/GlobalErrorBoundary';
+import WelcomeScreen from './components/WelcomeScreen';
+import NewPasswordModal from './components/NewPasswordModal';
 import Navbar from './components/Navbar';
 import { requestInitialPermissions } from './api/permissions';
-import Landing from './pages/Landing';
+import { setDynamicDomains, setDynamicMappings } from './api/scrapers';
+import adEngine from './services/adEngine';
+
+// Eagerly loaded for instantaneous 0ms cold-start
+import Home from './pages/Home';
+
+// Route code-splitting: loaded on demand to reduce initial JS payload
+const Browse = lazy(() => import('./pages/Browse'));
+const Schedule = lazy(() => import('./pages/Schedule'));
+const AnimePage = lazy(() => import('./pages/AnimePage'));
+const MyList = lazy(() => import('./pages/MyList'));
+const DownloadPage = lazy(() => import('./pages/DownloadPage'));
+const Profile = lazy(() => import('./pages/Profile'));
+const FavoritesPage = lazy(() => import('./pages/FavoritesPage'));
+const WatchedPage = lazy(() => import('./pages/WatchedPage'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const AuthPage = lazy(() => import('./pages/AuthPage'));
+const Landing = lazy(() => import('./pages/Landing'));
+
+function PageLoader() {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: '100%',
+      minHeight: '50vh',
+      width: '100%',
+    }}>
+      <div style={{
+        width: 28,
+        height: 28,
+        border: '2.5px solid rgba(255, 255, 255, 0.08)',
+        borderTopColor: 'var(--accent, #6366f1)',
+        borderRadius: '50%',
+        animation: 'anip-spin 0.75s linear infinite',
+        willChange: 'transform',
+      }} />
+      <style>{`@keyframes anip-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
 
 // registerPlugin must run after all imports are resolved
 const APKUpdater = registerPlugin('APKUpdater');
@@ -30,15 +62,14 @@ const APKUpdater = registerPlugin('APKUpdater');
 function WatchRedirect() {
   const { id, ep } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    // Replace redirect route with detail page, then push play parameters
-    navigate(`/anime/${id}`, { replace: true });
-    const timer = setTimeout(() => {
-      navigate(`/anime/${id}?play=true&ep=${ep}`);
-    }, 20);
-    return () => clearTimeout(timer);
-  }, [id, ep, navigate]);
+    navigate(`/anime/${id}?play=true&ep=${ep}&direct=true`, {
+      replace: true,
+      state: { ...location.state, directPlay: true }
+    });
+  }, [id, ep, navigate, location.state]);
 
   return null;
 }
@@ -46,7 +77,7 @@ function WatchRedirect() {
 
 // Inner component that has access to navigate (must be inside BrowserRouter)
 function AppInner({ showWelcome, onEnter }) {
-  const { user } = useApp();
+  const { user, showToast } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const isNative = Capacitor.isNativePlatform();
@@ -54,45 +85,108 @@ function AppInner({ showWelcome, onEnter }) {
   const playParam = searchParams.get('play') === 'true';
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  const [showFirstTimeAuth, setShowFirstTimeAuth] = useState(false);
+  const [showNewPasswordModal, setShowNewPasswordModal] = useState(false);
+  const hasShownAuthRef = useRef(false);
 
-  // ── Deep Link Handler: Supabase email confirmation via aniplay:// ─
+  // ── Deep Link Handler: Supabase email confirmation & password recovery via aniplay:// ─
   useEffect(() => {
-    if (!isNative) return;
     let subscription = null;
 
     const handleDeepLink = async ({ url }) => {
-      if (!url || !url.startsWith('aniplay://')) return;
+      if (!url) return;
+      console.log('[DeepLink] Received URL:', url);
       try {
-        // Supabase sends tokens as hash fragment: #access_token=...&type=signup
-        // Or as query params: ?code=...  depending on PKCE vs implicit flow
-        const urlObj = new URL(url.replace('aniplay://', 'https://aniplay.app/'));
+        // Supabase sends tokens as hash fragment: #access_token=...&type=recovery
+        // Or as query params: ?code=... depending on PKCE vs implicit flow
+        const cleanUrl = url.startsWith('aniplay://')
+          ? url.replace('aniplay://', 'https://aniplay.app/')
+          : url;
+        const urlObj = new URL(cleanUrl);
+        const hashParams = new URLSearchParams(urlObj.hash.slice(1));
         const code = urlObj.searchParams.get('code');
-        const access_token = urlObj.searchParams.get('access_token') ||
-          new URLSearchParams(urlObj.hash.slice(1)).get('access_token');
-        const refresh_token = urlObj.searchParams.get('refresh_token') ||
-          new URLSearchParams(urlObj.hash.slice(1)).get('refresh_token');
+        const access_token = urlObj.searchParams.get('access_token') || hashParams.get('access_token');
+        const refresh_token = urlObj.searchParams.get('refresh_token') || hashParams.get('refresh_token');
+        const type = urlObj.searchParams.get('type') || hashParams.get('type');
+        const errorDesc = urlObj.searchParams.get('error_description') || hashParams.get('error_description');
+
+        // Edge Case: Supabase returned an error in the redirect URL
+        if (errorDesc) {
+          console.warn('[DeepLink] Supabase redirect reported error:', errorDesc);
+          showToast('This auth link has expired or is invalid. Please request a new one.');
+          return;
+        }
 
         if (code) {
-          // PKCE flow
+          // PKCE flow — exchange code for session first
           await supabase.auth.exchangeCodeForSession(code);
         } else if (access_token && refresh_token) {
-          // Implicit flow
+          // Implicit flow — set session directly
           await supabase.auth.setSession({ access_token, refresh_token });
+        }
+
+        const isRecovery = type === 'recovery' || url.includes('type=recovery') || url.includes('reset-password');
+        if (isRecovery) {
+          showToast('Link verified. Please enter your new password.');
+          setTimeout(() => setShowNewPasswordModal(true), 150);
+        } else if (code || (access_token && refresh_token)) {
+          // Delay briefly so onAuthStateChange has time to register PASSWORD_RECOVERY if applicable
+          setTimeout(() => {
+            setShowNewPasswordModal(curr => {
+              if (!curr) {
+                showToast('Email confirmed! Welcome to AniPlay 🎉');
+              }
+              return curr;
+            });
+          }, 350);
+        }
+
+        // Clean up URL parameters if in browser mode to avoid keeping tokens in browser history
+        if (!isNative && typeof window !== 'undefined' && window.history?.replaceState) {
+          try {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          } catch (_) {}
         }
       } catch (err) {
         console.error('[DeepLink] Auth token exchange failed:', err);
+        const msg = String(err?.message || '').toLowerCase();
+        if (msg.includes('expired') || msg.includes('token') || msg.includes('verifier') || msg.includes('code')) {
+          showToast('This auth link has expired. Please request a new one.');
+        } else {
+          showToast('Authentication error. Please log in with your credentials.');
+        }
       }
     };
 
-    const setupListener = async () => {
-      subscription = await CapApp.addListener('appUrlOpen', handleDeepLink);
-    };
+    if (isNative) {
+      CapApp.addListener('appUrlOpen', handleDeepLink).then(sub => {
+        subscription = sub;
+      });
 
-    setupListener();
+      // Handle cold start when app is opened directly by clicking email link
+      CapApp.getLaunchUrl().then(launchUrl => {
+        if (launchUrl?.url) {
+          handleDeepLink({ url: launchUrl.url });
+        }
+      }).catch(() => {});
+    } else {
+      // Web / Browser mode check for auth callbacks in URL hash or search params
+      const currentUrl = window.location.href;
+      if (currentUrl.includes('access_token=') || currentUrl.includes('code=') || currentUrl.includes('type=recovery')) {
+        handleDeepLink({ url: currentUrl });
+      }
+    }
+
+    // Also listen to Supabase auth state change for PASSWORD_RECOVERY
+    // This fires after exchangeCodeForSession() / setSession() resolves.
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setTimeout(() => setShowNewPasswordModal(true), 120);
+      }
+    });
 
     return () => {
       subscription?.remove();
+      authSub?.unsubscribe();
     };
   }, [isNative]);
 
@@ -102,17 +196,21 @@ function AppInner({ showWelcome, onEnter }) {
     requestInitialPermissions().catch(() => {});
   }, [isNative]);
 
+
+  // First-time onboarding: navigate to auth page after 1.5s if not logged in
   useEffect(() => {
-    if (!showWelcome && !user) {
+    if (!showWelcome && !user && !hasShownAuthRef.current) {
       const onboarded = localStorage.getItem('aniplay_onboarded');
       if (!onboarded) {
+        hasShownAuthRef.current = true;
         const timer = setTimeout(() => {
-          setShowFirstTimeAuth(true);
+          navigate('/auth', { state: { mode: 'login' } });
+          localStorage.setItem('aniplay_onboarded', 'true');
         }, 1500);
         return () => clearTimeout(timer);
       }
     }
-  }, [showWelcome, user]);
+  }, [showWelcome, user, navigate]);
 
   // Dismiss welcome onboarding automatically if user is logged in
   useEffect(() => {
@@ -190,6 +288,9 @@ function AppInner({ showWelcome, onEnter }) {
   else if (path.startsWith('/profile')) currentTab = 'profile';
 
   const [visitedTabs, setVisitedTabs] = useState(() => new Set([currentTab]));
+  const scrollPositions = useRef({});
+  const prevTabRef = useRef(currentTab);
+  const wasMainTabRef = useRef(isMainTab);
 
   useEffect(() => {
     if (isMainTab) {
@@ -199,59 +300,94 @@ function AppInner({ showWelcome, onEnter }) {
         next.add(currentTab);
         return next;
       });
+
+      const prevTab = prevTabRef.current;
+      if (prevTab !== currentTab || !wasMainTabRef.current) {
+        if (prevTab !== currentTab && wasMainTabRef.current) {
+          scrollPositions.current[prevTab] = window.scrollY || document.documentElement.scrollTop || 0;
+        }
+        prevTabRef.current = currentTab;
+        const targetY = scrollPositions.current[currentTab] || 0;
+        window.scrollTo({ top: targetY, behavior: 'instant' });
+      }
+      wasMainTabRef.current = true;
+    } else {
+      if (wasMainTabRef.current) {
+        scrollPositions.current[currentTab] = window.scrollY || document.documentElement.scrollTop || 0;
+      }
+      wasMainTabRef.current = false;
     }
   }, [isMainTab, currentTab]);
 
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>
       {showWelcome ? (
-        <WelcomeScreen onEnter={onEnter} onSignIn={() => setShowFirstTimeAuth(true)} />
+        <WelcomeScreen onEnter={onEnter} onSignIn={() => navigate('/auth', { state: { mode: 'login' } })} />
       ) : (
         <>
-          {/* Main Tab Stage — Lazy Persistent Mounting (Instant Launch + 120 FPS Kept-Alive Tabs) */}
+          {/* Main Tab Stage — Persistent Mounting (Instant Launch + 120 FPS Kept-Alive Tabs) */}
           <div className="tab-stage" style={{ display: isMainTab ? 'block' : 'none', flex: 1, position: 'relative' }}>
             <div className={`tab-panel ${currentTab === 'home' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
               {visitedTabs.has('home') && <Home />}
             </div>
             <div className={`tab-panel ${currentTab === 'schedule' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('schedule') && <Schedule />}
+              {visitedTabs.has('schedule') && (
+                <Suspense fallback={<PageLoader />}>
+                  <Schedule />
+                </Suspense>
+              )}
             </div>
             <div className={`tab-panel ${currentTab === 'mylist' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('mylist') && <MyList />}
+              {visitedTabs.has('mylist') && (
+                <Suspense fallback={<PageLoader />}>
+                  <MyList />
+                </Suspense>
+              )}
             </div>
             <div className={`tab-panel ${currentTab === 'download' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('download') && <DownloadPage />}
+              {visitedTabs.has('download') && (
+                <Suspense fallback={<PageLoader />}>
+                  <DownloadPage />
+                </Suspense>
+              )}
             </div>
             <div className={`tab-panel ${currentTab === 'profile' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('profile') && <Profile />}
+              {visitedTabs.has('profile') && (
+                <Suspense fallback={<PageLoader />}>
+                  <Profile />
+                </Suspense>
+              )}
             </div>
           </div>
 
           {/* Sub-routes (Anime detail, Search, Notifications, History, etc.) */}
           {!isMainTab && (
             <div style={{ position: 'relative', flex: 1 }}>
-              <Routes>
-                <Route path="/browse" element={<Browse />} />
-                <Route path="/anime/:id" element={<AnimePage />} />
-                <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
-                <Route path="/favorites" element={<FavoritesPage />} />
-                <Route path="/watched" element={<WatchedPage />} />
-                <Route path="/history" element={<HistoryPage />} />
-                <Route path="/notifications" element={<Notifications />} />
-                <Route path="/landing" element={<Landing />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
+              <Suspense fallback={<PageLoader />}>
+                <Routes>
+                  <Route path="/browse" element={<Browse />} />
+                  <Route path="/anime/:id" element={<AnimePage />} />
+                  <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
+                  <Route path="/favorites" element={<FavoritesPage />} />
+                  <Route path="/watched" element={<WatchedPage />} />
+                  <Route path="/history" element={<HistoryPage />} />
+                  <Route path="/notifications" element={<Notifications />} />
+                  <Route path="/auth" element={<AuthPage />} />
+                  <Route path="/landing" element={<Landing />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </Suspense>
             </div>
           )}
           {isMainTab ? <Navbar /> : (!playParam && <div className="app-bottom-bezel" aria-hidden="true" />)}
         </>
       )}
-      <AuthModal isOpen={showFirstTimeAuth} onClose={() => { setShowFirstTimeAuth(false); localStorage.setItem('aniplay_onboarded', 'true'); }} />
+      {showNewPasswordModal && (
+        <NewPasswordModal isOpen={showNewPasswordModal} onClose={() => setShowNewPasswordModal(false)} />
+      )}
     </div>
   );
 }
-
-import { setDynamicDomains, setDynamicMappings } from './api/scrapers';
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
@@ -263,6 +399,26 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState(null); // null | 0-100 | 'ready'
   const [currentVersion, setCurrentVersion] = useState('1.0.0');
   const [cfModal, setCfModal] = useState({ visible: false, domain: '' });
+
+  // ── Boot Shell Dismissal ─────────────────────────────────────
+  // Runs once on first mount. Adds the CSS `.boot-out` class which triggers
+  // the opacity transition defined in index.html, then removes the element
+  // from the DOM after the transition so it takes zero memory/paint resources.
+  useEffect(() => {
+    const bootShell = document.getElementById('boot-shell');
+    if (!bootShell) return;
+    // rAF ensures React has flushed its first paint before we start fading
+    const raf = requestAnimationFrame(() => {
+      bootShell.classList.add('boot-out');
+      const onEnd = () => {
+        if (bootShell.parentNode) bootShell.parentNode.removeChild(bootShell);
+      };
+      bootShell.addEventListener('transitionend', onEnd, { once: true });
+      // Fallback: remove after 600ms even if transitionend doesn't fire
+      setTimeout(onEnd, 600);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   useEffect(() => {
     const handleCfEvent = (e) => {
@@ -392,10 +548,23 @@ export default function App() {
 
       // 1. Load dynamic domains and mappings
       if (data.domains) {
+        if (data.domains.neko && data.domains.neko.includes('anineko.to')) {
+          data.domains.neko = 'https://anineko.es';
+        }
         setDynamicDomains(data.domains);
       }
       if (data.mappings) {
         setDynamicMappings(data.mappings);
+      }
+
+      // 1b. Initialize Scraper-Safe Ad Engine
+      if (data.ads) {
+        adEngine.init(data.ads);
+      }
+
+      // 1c. Cache latest APK release URL for in-app share feature
+      if (data.apkUrl) {
+        localStorage.setItem('aniplay_latest_release_url', data.apkUrl);
       }
 
       // 2. Check maintenance message
@@ -431,62 +600,22 @@ export default function App() {
   };
 
 
-  // ── In-app Native APK update via APKUpdater ──────────────
-  const handleUpdateNow = async () => {
-    const isNativeApp = Capacitor.isNativePlatform();
-    if (!isNativeApp) {
-      // Fallback for web browser — open APK download link
-      window.open(updateInfo.apkUrl, '_blank');
-      return;
-    }
-
-    try {
-      // Check install permission first (on Android 8+)
-      const permInfo = await APKUpdater.checkInstallPermission();
-      if (permInfo && !permInfo.granted) {
-        showToast('Please enable "Install unknown apps" permission to update AniPlay');
-        await APKUpdater.requestInstallPermission();
-        return; // Pause here so user can toggle and click update again
-      }
-
-      setUpdateProgress(0);
-
-      // Listen for download progress events
-      const progressListener = await APKUpdater.addListener('downloadProgress', ({ progress }) => {
-        setUpdateProgress(Math.round(progress));
-      });
-
-      const completeListener = await APKUpdater.addListener('downloadComplete', () => {
-        setUpdateProgress('ready');
-      });
-
-      const errorListener = await APKUpdater.addListener('downloadError', ({ error }) => {
-        console.error('[APKUpdater] Download failed:', error);
-        setUpdateProgress(null);
-      });
-
-      // Start the native APK download and install
-      await APKUpdater.downloadAndInstall({ url: updateInfo.apkUrl });
-
-      // Clean up listeners
-      setTimeout(() => {
-        progressListener.remove();
-        completeListener.remove();
-        errorListener.remove();
-      }, 6000);
-    } catch (err) {
-      console.error('[APKUpdater] Failed to download/install update:', err);
-      setUpdateProgress(null);
-      // Fallback: open system browser to download APK
-      if (updateInfo.apkUrl) window.open(updateInfo.apkUrl, '_system');
-    }
+  // ── In-app Update: open APK in system browser (same as CloudStream/Aniyomi) ──
+  // The system browser (Chrome/etc.) handles the APK download + install natively.
+  // This avoids REQUEST_INSTALL_PACKAGES and the Play Protect "dropper" classification.
+  const handleUpdateNow = () => {
+    if (!updateInfo?.apkUrl) return;
+    // '_system' tells Capacitor WebView to open in the device's default browser (Chrome)
+    // The browser handles download progress, file saving, and install prompt natively
+    window.open(updateInfo.apkUrl, '_system');
   };
 
   return (
-    <AppProvider>
-      <BrowserRouter>
-        <AppInner showWelcome={showWelcome} onEnter={handleEnter} />
-      </BrowserRouter>
+    <GlobalErrorBoundary>
+      <AppProvider>
+        <BrowserRouter>
+          <AppInner showWelcome={showWelcome} onEnter={handleEnter} />
+        </BrowserRouter>
 
       {/* ── Maintenance Mode Lock Screen ─────────────────────────── */}
       {maintenanceMsg && (
@@ -573,31 +702,8 @@ export default function App() {
             )}
 
 
-            {/* Download progress bar */}
-            {updateProgress !== null && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{
-                  background: 'rgba(255,255,255,0.08)',
-                  borderRadius: 8, height: 8, overflow: 'hidden', marginBottom: 6
-                }}>
-                  <div style={{
-                    height: '100%',
-                    width: (updateProgress === 'installing' || updateProgress === 'ready') ? '100%' : `${updateProgress}%`,
-                    background: 'linear-gradient(90deg, #6366f1, #a78bfa)',
-                    borderRadius: 8,
-                    transition: 'width 0.3s ease',
-                  }} />
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {updateProgress === 'installing' && '✅ Installing… app will restart'}
-                  {updateProgress === 'ready' && '🎉 Download complete! Ready to install.'}
-                  {typeof updateProgress === 'number' && `Downloading ${updateProgress}%`}
-                </div>
-              </div>
-            )}
-
             <div style={{ display: 'flex', gap: 10 }}>
-              {!updateInfo.forceUpdate && updateProgress === null && (
+              {!updateInfo.forceUpdate && (
                 <button
                   onClick={() => setUpdateInfo(null)}
                   style={{
@@ -613,24 +719,18 @@ export default function App() {
               )}
               <button
                 onClick={handleUpdateNow}
-                disabled={typeof updateProgress === 'number' || updateProgress === 'installing'}
                 style={{
                   flex: 1, padding: '12px 0', borderRadius: 10,
                   border: 'none',
-                  background: (typeof updateProgress === 'number' || updateProgress === 'installing')
-                    ? 'rgba(99,102,241,0.4)'
-                    : 'linear-gradient(135deg, #6366f1, #a78bfa)',
+                  background: 'linear-gradient(135deg, #6366f1, #a78bfa)',
                   color: '#fff',
                   fontSize: 13, fontWeight: 700,
-                  cursor: (typeof updateProgress === 'number' || updateProgress === 'installing') ? 'not-allowed' : 'pointer',
+                  cursor: 'pointer',
                   touchAction: 'manipulation',
                   transition: 'background-color 0.2s ease, opacity 0.2s ease, transform 0.15s ease',
                 }}
               >
-                {updateProgress === 'installing' && '⏳ Installing…'}
-                {updateProgress === 'ready' && '⚡ Install & Restart'}
-                {typeof updateProgress === 'number' && '⏳ Downloading…'}
-                {updateProgress === null && '🚀 Update Now'}
+                🚀 Update Now
               </button>
             </div>
           </div>
@@ -732,6 +832,7 @@ export default function App() {
         </div>
       )}
     </AppProvider>
+    </GlobalErrorBoundary>
   );
 }
 

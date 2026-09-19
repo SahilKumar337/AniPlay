@@ -5,16 +5,16 @@ import {
   Save, Check, X, AlertTriangle, Cloud, CloudLightning,
   Play, SkipForward, Server, Moon, Palette, LayoutGrid,
   Type, Sliders, Captions, Download, Upload,
-  Settings, ChevronDown, Camera, Globe, Bell, RefreshCw,
+  Settings, ChevronDown, Camera, Globe, Bell, RefreshCw, Sparkles,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App as CapApp } from "@capacitor/app";
 import { registerBackButtonHandler } from "../utils/backButton";
-import AuthModal from "../components/AuthModal";
 import { cloudSignOut, supabase, fetchUserProfile, saveAvatarToProfile } from "../api/supabase";
 import { getTitle } from "../api/anilist";
+import LoadingWheel from "../components/ui/LoadingWheel";
 
 const APKUpdater = registerPlugin("APKUpdater");
 
@@ -70,8 +70,8 @@ const GLOBAL_STYLES = `
   @keyframes fadeInUp  { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes dropIn    { from { transform: translateY(-8px) scale(0.95); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
   @keyframes fadeInOverlay {
-    0% { opacity: 0; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); }
-    100% { opacity: 1; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+    0% { opacity: 0; }
+    100% { opacity: 1; }
   }
   @keyframes spinSlow {
     0% { transform: rotate(0deg); }
@@ -674,12 +674,13 @@ function Modal({ title, children, onClose }) {
 export default function Profile() {
   const { watchlist, favorites, progress, recentlyViewed, user, userProfile, syncWithCloud, showToast, flushSync } = useApp();
   const navigate = useNavigate();
+  const location = useLocation();
   const [showSettings, setShowSettings] = useState(false);
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showSignOut, setShowSignOut] = useState(false);
   const [showCloudLogOut, setShowCloudLogOut] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [appVersion, setAppVersion] = useState("1.0.0");
   const [devTaps, setDevTaps] = useState(0);
@@ -691,6 +692,10 @@ export default function Profile() {
     const cleanup = registerBackButtonHandler(() => {
       if (showEditProfile) {
         setShowEditProfile(false);
+        return true;
+      }
+      if (showReleaseNotes) {
+        setShowReleaseNotes(false);
         return true;
       }
       if (showAbout) {
@@ -709,10 +714,6 @@ export default function Profile() {
         setShowCloudLogOut(false);
         return true;
       }
-      if (showAuthModal) {
-        setShowAuthModal(false);
-        return true;
-      }
       if (showSettings) {
         setShowSettings(false);
         return true;
@@ -720,7 +721,7 @@ export default function Profile() {
       return false;
     });
     return cleanup;
-  }, [showSettings, showEditProfile, showAbout, showPrivacy, showSignOut, showCloudLogOut, showAuthModal]);
+  }, [showSettings, showEditProfile, showAbout, showPrivacy, showSignOut, showCloudLogOut]);
 
   const handleManualSync = async () => {
     if (syncing) return;
@@ -793,18 +794,30 @@ export default function Profile() {
     try {
       setIsLoggingOut(true);
       setShowCloudLogOut(false);
-      await flushSync();
-      // Dynamically import Preferences (same pattern used elsewhere in this file)
+
+      // Best-effort flush — never block logout if network is unreachable or slow
+      try {
+        await Promise.race([
+          flushSync(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
+        ]);
+      } catch (flushErr) {
+        console.warn('[Profile] Logout flush skipped or timed out:', flushErr?.message);
+      }
+
       const { Preferences } = await import('@capacitor/preferences');
-      await Preferences.remove({ key: 'aniplay_cloud_credentials' }).catch(console.error);
+      await Preferences.remove({ key: 'aniplay_cloud_credentials' }).catch(() => {});
       await cloudSignOut();
-      localStorage.removeItem('aniplay_last_sync_at'); // clear sync timestamp on logout
+      localStorage.removeItem('aniplay_last_sync_at');
+
+      showToast('Logged out successfully');
       setTimeout(() => {
         window.location.href = "/";
-      }, 700);
+      }, 500);
     } catch (e) {
-      setIsLoggingOut(false);
-      alert(e.message || "Failed to log out");
+      console.warn('[Profile] Error during cloud logout, forcing local logout:', e?.message);
+      await cloudSignOut().catch(() => {});
+      window.location.href = "/";
     }
   };
 
@@ -845,6 +858,7 @@ export default function Profile() {
   if (showSettings) return <SettingsPanel onBack={() => setShowSettings(false)} />;
 
   const MENU = [
+    { icon: Sparkles, label: "What's New (v1.5.6)", action: () => setShowReleaseNotes(true), color: "#f59e0b" },
     { icon: Settings, label: "Settings", action: () => setShowSettings(true), color: "var(--accent)" },
     { icon: Bell, label: "Notifications", action: () => navigate('/notifications') },
     { icon: Info, label: "About AniPlay", action: () => setShowAbout(true) },
@@ -910,21 +924,24 @@ export default function Profile() {
     <div className="page fade-in-up">
       <style>{GLOBAL_STYLES}</style>
 
-      {/* ── Floating Profile Header (fixed, never scrolls) ── */}
+      {/* ── Floating Profile Header — portaled to body, visible ONLY on /profile ── */}
+      {location.pathname === '/profile' && createPortal(
       <div style={{
         position: 'fixed',
         top: 0,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: '100%',
+        left: 0,
+        right: 0,
+        zIndex: 9999,
         maxWidth: 480,
-        zIndex: 50,
-        background: 'rgba(12, 12, 14, 0.94)',
-        backdropFilter: 'blur(40px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
-        borderBottom: '1px solid rgba(255,255,255,0.07)',
-        // Explicit individual padding — NO shorthand conflict:
-        paddingTop:    'calc(var(--sat) + 10px)',
+        marginLeft: 'auto',
+        marginRight: 'auto',
+        /* ── Glassmorphism ── */
+        background: 'rgba(16,16,20,0.55)',
+        backdropFilter: 'blur(48px) saturate(200%)',
+        WebkitBackdropFilter: 'blur(48px) saturate(200%)',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04), 0 8px 32px rgba(0,0,0,0.3)',
+        paddingTop:    'calc(var(--sat, 0px) + 14px)',
         paddingBottom: 12,
         paddingLeft:   16,
         paddingRight:  16,
@@ -947,7 +964,7 @@ export default function Profile() {
             <div style={{ fontSize: 17, fontWeight: 900, letterSpacing: '-0.025em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {displayName}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: user ? '#10b981' : '#6b7280', flexShrink: 0 }} />
               {user ? 'Cloud Synced Member' : 'Local Guest Mode'}
             </div>
@@ -967,18 +984,20 @@ export default function Profile() {
             onTouchStart={e => e.currentTarget.style.background = 'rgba(255,255,255,0.13)'}
             onTouchEnd={e => e.currentTarget.style.background = 'rgba(255,255,255,0.07)'}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'rgba(255,255,255,0.45)' }}>
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
           </button>
         </div>
-      </div>
+      </div>,
+      document.body
+      )}
 
       {/* ── Scrollable content — paddingTop accounts for fixed header height ── */}
       {/*   Header: var(--sat) + 10px top + 46px avatar + 12px bottom = ~68px + sat  */}
       <div style={{
-        paddingTop:    'calc(var(--sat) + 76px)',
+        paddingTop:    'calc(var(--sat, 0px) + 80px)',
         paddingLeft:   16,
         paddingRight:  16,
         paddingBottom: 12,
@@ -1003,7 +1022,7 @@ export default function Profile() {
             <p style={{ margin: "0 0 12px 0", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
               Keep your watchlist and progress safe across devices.
             </p>
-            <button onClick={() => setShowAuthModal(true)} style={{
+            <button onClick={() => navigate('/auth', { state: { mode: 'login' } })} style={{
               background: "linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #818cf8))",
               color: "#fff", border: "none", borderRadius: 10, padding: "10px 0",
               fontSize: 13, fontWeight: 800, cursor: "pointer", width: "100%",
@@ -1135,25 +1154,105 @@ export default function Profile() {
       {isLoggingOut && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 999999,
-          background: "rgba(10, 10, 15, 0.85)",
+          background: "rgba(10, 10, 15, 0.88)",
           backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
           gap: 16, animation: "fadeInOverlay 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards"
         }}>
-          <div style={{
-            width: 60, height: 60, borderRadius: "50%",
-            border: "3px solid rgba(56, 189, 248, 0.18)",
-            borderTopColor: "#38bdf8",
-            animation: "spinSlow 0.8s linear infinite",
-            boxShadow: "0 0 28px rgba(56, 189, 248, 0.35)"
-          }} />
-          <div style={{ fontSize: 18, fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>
-            Logging Out Safely...
-          </div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>
+          <LoadingWheel size={56} text="Logging Out Safely..." />
+          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500, marginTop: -8 }}>
             Syncing local progress & ending session
           </div>
         </div>
+      )}
+
+      {showReleaseNotes && (
+        <Modal title="What's New in v1.5.6" onClose={() => setShowReleaseNotes(false)}>
+          <div style={{ maxHeight: "65vh", overflowY: "auto", paddingRight: 4, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ textAlign: "center", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--accent)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                Grand Release · Ultra-Stability Update
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                Version 1.5.6 · The Most Stable AniPlay Ever
+              </div>
+            </div>
+
+            {[
+              {
+                icon: "🛡️",
+                title: "Anti-Random-Anime Shield",
+                desc: "Strict 60%+ significant keyword coverage eliminates wrong anime or random titles when streaming or downloading DUB."
+              },
+              {
+                icon: "🧊",
+                title: "Silent Video Freeze Watchdog",
+                desc: "Auto-detects GPU hardware decoder stalls where picture froze while sound continued, instantly recovering playback without interruption."
+              },
+              {
+                icon: "📺",
+                title: "Adaptive Low-Network Engine",
+                desc: "Intelligent YouTube & Netflix inspired stream loader automatically falls back to lower resolutions on slow networks for instant startup."
+              },
+              {
+                icon: "⚡",
+                title: "Mega-Series 1000+ Ep Acceleration",
+                desc: "Direct provider ID mapping and cached episode manifests enable sub-second episode jumping for giant anime like One Piece."
+              },
+              {
+                icon: "🎧",
+                title: "Unified DUB Availability Parity",
+                desc: "Dynamic 3-state DUB discovery ensures download drawers and player controls reflect genuine DUB availability with auto-fallback."
+              },
+              {
+                icon: "📅",
+                title: "Airing Episode Synchronizer",
+                desc: "Strict global airing validation prevents unreleased future episodes or unreleased sequel seasons from triggering scraper errors."
+              },
+              {
+                icon: "✨",
+                title: "120Hz Fluid Animations & Persistence",
+                desc: "Seamless fullscreen orientation persistence when switching episodes and ultra-smooth glassmorphic transitions."
+              }
+            ].map((item, idx) => (
+              <div key={idx} style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.06)",
+                borderRadius: 12,
+                padding: "10px 12px",
+                display: "flex",
+                gap: 10,
+                alignItems: "flex-start"
+              }}>
+                <span style={{ fontSize: 18, flexShrink: 0, lineHeight: 1.2 }}>{item.icon}</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>{item.title}</span>
+                  <span style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>{item.desc}</span>
+                </div>
+              </div>
+            ))}
+
+            <button
+              onClick={() => setShowReleaseNotes(false)}
+              className="btn-press-anim"
+              style={{
+                background: "linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #818cf8))",
+                color: "#fff",
+                border: "none",
+                borderRadius: 12,
+                padding: "11px 0",
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: "pointer",
+                marginTop: 4,
+                width: "100%",
+                boxShadow: "0 4px 18px -3px var(--accent)"
+              }}
+            >
+              Got it!
+            </button>
+          </div>
+        </Modal>
       )}
 
       {showAbout && (
@@ -1328,7 +1427,6 @@ export default function Profile() {
         </Modal>
       )}
 
-      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </div>
   );
 }

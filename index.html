@@ -6,15 +6,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="description" content="AniPlay - Watch Anime Online, Streaming for Free. Browse thousands of anime with filters, schedule, and more." />
     <title>AniPlay - Watch Anime Online Free</title>
+    <!-- ── Clickadu Integration: Video Pre-Roll (VAST) & Ads ── -->
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#6C63FF" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Inter Variable: 300-900 weight, sharper than static fonts on Android WebView -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..900;1,14..32,300..900&display=swap" rel="stylesheet" />
-  <!-- ── Theme fast-path: apply accent/dark mode BEFORE React renders to prevent color flash ── -->
+    <!-- Inter Variable: 300-900 weight, non-blocking preload -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..900;1,14..32,300..900&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..900;1,14..32,300..900&display=swap" media="print" onload="this.media='all'" />
+    <noscript>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..900;1,14..32,300..900&display=swap" />
+    </noscript>
+    <!-- ── DNS Prefetch: resolve scraper domains before user clicks anything ── -->
+    <link rel="dns-prefetch" href="https://anineko.es" />
+    <link rel="dns-prefetch" href="https://aniwaves.ru" />
+    <link rel="dns-prefetch" href="https://anikoto.cz" />
+    <link rel="dns-prefetch" href="https://animetsu.net" />
+    <link rel="dns-prefetch" href="https://graphql.anilist.co" />
+    <link rel="dns-prefetch" href="https://s4.anilist.co" />
+    <link rel="dns-prefetch" href="https://img.anili.st" />
+
+    <link rel="preconnect" href="https://s4.anilist.co" crossorigin />
+
+  <!-- ── Fast-path: apply accent/dark mode and pre-warm hero banner for 0ms load ── -->
   <script>
     (function() {
       try {
@@ -28,12 +44,112 @@
         if (dark === 'false') {
           document.body && document.body.classList.add('theme-light');
         }
+
+        // Pre-warm hero banner image into browser cache before React mounts
+        var raw = localStorage.getItem('aniplay_cache_trending');
+        var bannerUrl = '';
+        if (raw) {
+          var parsed = JSON.parse(raw);
+          var first = parsed?.data?.[0];
+          bannerUrl = first?.bannerImage || first?.coverImage?.extraLarge;
+        }
+        if (!bannerUrl) {
+          bannerUrl = 'https://s4.anilist.co/file/anilistcdn/media/anime/banner/187260-HMkLPy3ZvzW1.jpg';
+        }
+        if (bannerUrl) {
+          var img = new Image();
+          img.fetchPriority = 'high';
+          img.decoding = 'async';
+          img.src = bannerUrl;
+          img.decode && img.decode().catch(function(){});
+        }
       } catch(e) {}
     })();
   </script>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="background:#04040a;">
+    <style>
+      /* ── Boot Shell — GPU-only animations (transform + opacity only) ── */
+      #boot-shell {
+        position: fixed;
+        inset: 0;
+        background: #04040a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 9999;
+        pointer-events: none;
+        /* Promote to its own compositor layer immediately */
+        will-change: opacity;
+        transition: opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      /* Graceful React-ready fade-out — App.jsx adds this class */
+      #boot-shell.boot-out {
+        opacity: 0;
+      }
+      /* Icon wrapper — scale-in entrance, then gentle idle breathe */
+      #boot-icon {
+        position: relative;
+        width: 60px;
+        height: 60px;
+        border-radius: 18px;
+        background: linear-gradient(145deg, #7c6fff, #a78bfa);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        /* Entrance: scale from 0.6 + fade, then settle */
+        animation: bootEnter 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards,
+                   bootIdle  2.8s  cubic-bezier(0.45, 0, 0.55, 1) 0.6s infinite alternate;
+        will-change: transform, opacity;
+      }
+      /* Glow halo — separate element so icon pixel-paint is never touched */
+      #boot-icon::before {
+        content: '';
+        position: absolute;
+        inset: -10px;
+        border-radius: 28px;
+        background: radial-gradient(ellipse at center, rgba(108,99,255,0.55) 0%, transparent 70%);
+        animation: bootGlow 2.8s cubic-bezier(0.45, 0, 0.55, 1) 0.6s infinite alternate;
+        will-change: opacity;
+      }
+      /* App name fade-in below icon */
+      #boot-label {
+        margin-top: 18px;
+        font-family: -apple-system, 'Inter', sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: rgba(240, 240, 255, 0.5);
+        animation: bootLabelIn 0.5s ease-out 0.35s both;
+        will-change: opacity, transform;
+      }
+      @keyframes bootEnter {
+        0%   { opacity: 0; transform: scale(0.65); }
+        100% { opacity: 1; transform: scale(1);    }
+      }
+      /* Gentle scale breathe — max 2px visual movement, no jitter */
+      @keyframes bootIdle {
+        0%   { transform: scale(1.00); }
+        100% { transform: scale(1.03); }
+      }
+      @keyframes bootGlow {
+        0%   { opacity: 0.55; }
+        100% { opacity: 1;    }
+      }
+      @keyframes bootLabelIn {
+        0%   { opacity: 0; transform: translateY(6px); }
+        100% { opacity: 1; transform: translateY(0);   }
+      }
+    </style>
+    <div id="root">
+      <div id="boot-shell">
+        <div id="boot-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" stroke="none" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+        </div>
+        <div id="boot-label">AniPlay</div>
+      </div>
+    </div>
     <script>
       window.addEventListener('error', function(e) {
         var errBox = document.getElementById('anilab-fatal-error');
@@ -78,23 +194,6 @@
         }
         e.preventDefault();
       });
-
-      // ── Disable pinch-to-zoom ──────────────────────────────────────────
-      document.addEventListener('touchmove', function(e) {
-        if (e.scale !== undefined && e.scale !== 1) {
-          e.preventDefault();
-        }
-      }, { passive: false });
-
-      // ── Disable double-tap to zoom ─────────────────────────────────────
-      var lastTouchEnd = 0;
-      document.addEventListener('touchend', function(e) {
-        var now = (new Date()).getTime();
-        if (now - lastTouchEnd <= 300) {
-          e.preventDefault();
-        }
-        lastTouchEnd = now;
-      }, false);
     </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>

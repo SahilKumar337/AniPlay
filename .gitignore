@@ -62,6 +62,8 @@ android/.gradle/
 capacitor-cordova-android-plugins/
 local.properties
 *.apk
+*.zip
+AniPlay-Cinematic/
 
 # Backups directory
 backups/

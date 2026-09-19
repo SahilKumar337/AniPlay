@@ -1,9 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { getTitle, getCover, getColor } from '../api/anilist';
 import { Play } from 'lucide-react';
-import { useState, memo } from 'react';
-import { motion } from 'motion/react';
-import { useApp } from '../context/AppContext';
+import { useState, useEffect, memo } from 'react';
 
 // Global memory cache of loaded image URLs
 export const imageCache = new Set();
@@ -29,6 +27,7 @@ function AnimeCard({
   showTitle  = false,   // show title label below card
   className  = '',
   index = 0,
+  compact = false,
 }) {
   const navigate = useNavigate();
   const title  = getTitle(anime);
@@ -38,9 +37,16 @@ function AnimeCard({
   const isCached = cover ? imageCache.has(cover) : false;
   const [imgError, setImgError]   = useState(false);
   const [imgLoaded, setImgLoaded] = useState(isCached);
-  const { settings } = useApp();
 
-  const compact   = settings?.compactCards;
+  useEffect(() => {
+    if (cover && imageCache.has(cover)) {
+      setImgLoaded(true);
+    } else {
+      setImgLoaded(false);
+    }
+    setImgError(false);
+  }, [cover]);
+
   const cardWidth  = width  ?? (compact ? 90  : 120);
   const cardHeight = height ?? (compact ? 125 : 165);
 
@@ -48,7 +54,7 @@ function AnimeCard({
     e?.stopPropagation?.();
     const targetId = anime?.id || anime?.mediaId || anime?.animeId;
     if (targetId) {
-      navigate(`/anime/${targetId}`, { viewTransition: true });
+      navigate(`/anime/${targetId}`, { state: { anime }, viewTransition: true });
     }
   };
 
@@ -68,7 +74,8 @@ function AnimeCard({
       className={`anime-card-wrap ${className}`}
       style={{
         width: wrapWidth,
-        animationDelay: `${index * 35}ms`,
+        /* Cap delay: beyond 3 cards (90ms) the stagger fights the scroll compositor */
+      animationDelay: index < 3 ? `${index * 30}ms` : '0ms',
         position: hasRank ? 'relative' : undefined,
       }}
     >
@@ -77,7 +84,7 @@ function AnimeCard({
         <span className={`rank-number ${isDoubleDigit ? 'rank-double-digit' : ''}`}>{rank}</span>
       )}
 
-      <motion.div
+      <div
         className="anime-card"
         style={{
           width: cardWidth,
@@ -85,8 +92,6 @@ function AnimeCard({
           marginLeft: rankOffset,
         }}
         onClick={handleClick}
-        whileTap={{ scale: 0.94 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
         id={`anime-card-${anime.id}`}
         role="button"
         tabIndex={0}
@@ -97,7 +102,7 @@ function AnimeCard({
         {!imgLoaded && !imgError && (
           <div
             className="skeleton"
-            style={{ position: 'absolute', inset: 0, zIndex: 1, borderRadius: 'inherit' }}
+            style={{ position: 'absolute', inset: 0, zIndex: 0, borderRadius: 'inherit' }}
           />
         )}
 
@@ -106,16 +111,26 @@ function AnimeCard({
           <img
             src={cover}
             alt={title}
-            loading="lazy"
             decoding="async"
+            loading={index < 4 ? 'eager' : 'lazy'}
+            fetchpriority={index < 2 ? 'high' : 'auto'}
             onLoad={handleLoad}
-            onError={() => setImgError(true)}
+            onError={(e) => {
+              const fallback = anime?.coverImage?.large || anime?.coverImage?.medium || anime?.bannerImage;
+              if (fallback && fallback !== cover && e.currentTarget.src !== fallback) {
+                e.currentTarget.src = fallback;
+              } else {
+                setImgError(true);
+              }
+            }}
             style={{
+              position: 'relative',
+              zIndex: 1,
               width: '100%',
               height: '100%',
               objectFit: 'cover',
-              opacity: imgLoaded ? 1 : 0,
-              transition: 'opacity 0.22s cubic-bezier(0.25, 1, 0.5, 1)',
+              opacity: imgLoaded ? 1 : 0.85,
+              transition: 'opacity 0.2s cubic-bezier(0.25, 1, 0.5, 1)',
             }}
           />
         ) : (
@@ -173,7 +188,7 @@ function AnimeCard({
             {title}
           </span>
         </div>
-      </motion.div>
+      </div>
 
       {/* Title label below card */}
       {showTitle && (

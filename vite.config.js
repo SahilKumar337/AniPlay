@@ -11,8 +11,16 @@ export default defineConfig({
             dropConsole: true,
           },
         },
+        manualChunks(id) {
+          if (id.includes('node_modules/hls.js')) return 'player-engine';
+          if (id.includes('node_modules/gsap') || id.includes('node_modules/lenis') || id.includes('node_modules/three')) return 'landing-animation';
+          if (id.includes('node_modules/@supabase')) return 'supabase';
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) return 'vendor-react';
+          if (id.includes('node_modules/motion')) return 'motion';
+        },
       },
     },
+    chunkSizeWarningLimit: 600,
   },
   server: {
     port: 3000,

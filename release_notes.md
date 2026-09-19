@@ -1,3 +1,46 @@
+# AniPlay v1.5.6 Grand Release: The Ultra-Stability & Precision Update 🚀
+
+We are proud to present **AniPlay v1.5.6** — our most stable, thoroughly tested, and dependable release to date! This grand release addresses every critical streaming bottleneck, video decoding edge case, scraper precision vulnerability, and download UI discrepancy to deliver a truly flawless anime viewing experience.
+
+---
+
+## 🛡️ 1. MATHEMATICAL ANTI-RANDOM-ANIME SHIELD
+* **Strict Keyword Coverage Verification**: Completely redesigned title matching engine (`src/utils/slugMatcher.js`) with significant token extraction that strips out generic words (`season`, `part`, `the`, `anime`, etc.).
+* **60%+ Significant Content Token Rule**: An anime title candidate must match at least 60% of significant content words (and 100% for single-word queries) to be accepted.
+* **Elevated Scraper Thresholds**: Enforced strict `0.70+` similarity thresholds across AniKoto, AniWaves, AniNeko, and Animetsu.
+* **Zero Cross-Anime Contamination**: Prevents random or loosely matching anime from ever playing when an English Dub is requested or missing.
+* **Purged Corrupted Caches**: Automatic eviction of legacy search caches prevents stale false-positive entries from lingering on user devices.
+
+## 🧊 2. SILENT VIDEO FREEZE WATCHDOG
+* **Automated GPU Decoder Recovery**: Mobile Chromium and Android GPU drivers occasionally drop video frame presentation during high-bitrate scenes while audio continues playing. AniPlay now monitors `totalVideoFrames` in real time.
+* **Zero-Interruption Auto-Nudge**: If audio advances for >= 1.5 seconds while 0 new video frames are presented, the watchdog executes a micro-nudge (`+0.05s`) and triggers `hls.recoverMediaError()` to instantly restore video presentation without stopping audio.
+* **Expanded Buffer Depth**: Removed aggressive low-latency modes in favor of a robust 35s–70s buffer window, completely eliminating frame drops and decoder pipeline stalls.
+
+## 📺 3. YOUTUBE / NETFLIX ADAPTIVE STREAMING ARCHITECTURE
+* **Low-Bandwidth Instant Startup**: Automatically measures network conditions and loads the lowest stable resolution first on weak or fluctuating mobile data, ensuring zero-wait playback starts.
+* **Dynamic Resolution Step-Up**: Seamlessly transitions to 1080p/720p as buffer health stabilizes.
+* **Neko & HD Server Availability**: Redundant fallback pipelines ensure backup servers are immediately ready if the primary provider experiences CDN throttling.
+
+## 📅 4. AIRING EPISODE SYNCHRONIZER
+* **Global Airing Mismatch Protection**: Real-time validation ensures that upcoming unreleased episodes (e.g. Episode 24 before world broadcast) are never prematurely displayed as available or playable.
+* **Unreleased Anime Protection**: Anime with future premiere dates (e.g. 2027 sequels) now properly show "Not Yet Released" status with scheduled premiere info, cleanly disabling misleading `► Play` buttons and preventing scraper errors.
+
+## ⚡ 5. MEGA-SERIES 1000+ EPISODE ACCELERATION
+* **Direct Internal ID Mapping**: Popular giant series like *ONE PIECE* are now pre-indexed with internal provider IDs, skipping slow search queries entirely.
+* **Persistent Episode List Caching**: Cached episode manifests allow jumping instantly between distant episodes (e.g. from Ep 1 to Ep 1100+) in sub-second response times.
+
+## 🎧 6. UNIFIED DUB AVAILABILITY & DOWNLOAD PARITY
+* **3-State Real-Time DUB Tracker**: Solved the UI discrepancy where "Download Episodes" showed `DUB (None)` while individual episode sheets had DUB servers available.
+* **Accurate Pre-Warm Discovery**: DUB availability is dynamically discovered in the background before user selection.
+* **Auto-Fallback to SUB**: If an anime has no English Dub released anywhere, both download drawers and the video player consistently display `DUB (None)`, disable the toggle, and automatically select SUB with zero user frustration.
+
+## 💎 7. BUTTER-SMOOTH 120HZ GLASSMORPHISM UI
+* **GPU-Accelerated Micro-Animations**: Refined spring physics and touch responses across all modals, drawers, and sheets.
+* **Fullscreen Orientation Persistence**: Smooth fullscreen transitions without annoying portrait flashes when switching episodes.
+* **In-App Release Details**: Users can now view comprehensive release highlights directly from the Profile settings.
+
+---
+
 # AniPlay v1.5.5 Major Release: The Complete Overhaul Update 🚀
 
 We are thrilled to unveil **AniPlay v1.5.5** — our biggest and most transformative update yet! This release completely redesigns the app from the ground up with stunning visual aesthetics, buttery-smooth animations, a full-featured community discussion system, smart notifications, and next-generation playback features.

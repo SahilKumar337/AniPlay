@@ -16,13 +16,24 @@
       "aniwaves.ru",
       "animepahe.pw",
       "anineko.to",
+      "anineko.es",
       "anikoto.cz",
       "megaplay.buzz",
       "vidtube.site",
       "vidwish.live",
       "raw.githubusercontent.com",
       "github.com",
-      "objects.githubusercontent.com"
+      "objects.githubusercontent.com",
+      "*.nexabloom.top",
+      "*.streamzone1.site",
+      "*.streamzone2.site",
+      "*.streamzone3.site",
+      "*.cdn-centaurus.com",
+      "*.acek-cdn.com",
+      "*.dramiyos.site",
+      "*.playmogo.site",
+      "graphql.anilist.co",
+      "anilist.co"
     ]
   },
   "plugins": {

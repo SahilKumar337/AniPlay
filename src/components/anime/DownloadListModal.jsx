@@ -1,7 +1,9 @@
-import { memo } from 'react';
+import { memo, useEffect } from 'react';
 import AppDrawer from '../ui/AppDrawer';
-import { Download, Check, Loader } from 'lucide-react';
+import { Download, Check, RotateCcw } from 'lucide-react';
+import LoadingWheel from '../ui/LoadingWheel';
 import { motion } from 'motion/react';
+import NativeAdCard from '../ads/NativeAdCard';
 
 function DownloadListModal({
   open,
@@ -12,8 +14,16 @@ function DownloadListModal({
   onAudioTrackChange,
   downloadedSet = new Set(),
   downloadProgress = {},
+  failedSet = new Set(),
   onDownloadEpisode,
+  hasDub = true,
 }) {
+  useEffect(() => {
+    if (!hasDub && downloadAudioTrack === 'dub') {
+      onAudioTrackChange?.('sub');
+    }
+  }, [hasDub, downloadAudioTrack, onAudioTrackChange]);
+
   return (
     <AppDrawer
       open={open}
@@ -38,30 +48,35 @@ function DownloadListModal({
             SUB
           </button>
           <button
-            onClick={() => onAudioTrackChange?.('dub')}
+            disabled={!hasDub}
+            onClick={() => hasDub && onAudioTrackChange?.('dub')}
             style={{
               padding: '4px 10px',
               borderRadius: 8,
               fontSize: 11,
               fontWeight: 700,
               border: 'none',
-              background: downloadAudioTrack === 'dub' ? 'var(--accent)' : 'transparent',
-              color: downloadAudioTrack === 'dub' ? '#fff' : 'var(--text-tertiary)',
-              cursor: 'pointer',
+              background: downloadAudioTrack === 'dub' && hasDub ? 'var(--accent)' : 'transparent',
+              color: !hasDub ? 'rgba(255,255,255,0.25)' : (downloadAudioTrack === 'dub' ? '#fff' : 'var(--text-tertiary)'),
+              opacity: !hasDub ? 0.35 : 1,
+              cursor: !hasDub ? 'not-allowed' : 'pointer',
+              pointerEvents: !hasDub ? 'none' : 'auto',
             }}
           >
-            DUB
+            {hasDub ? 'DUB' : 'DUB (None)'}
           </button>
         </div>
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 'max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 32px)' }}>
+        <NativeAdCard placement="download_drawer" />
         {allEps.map((epNum) => {
           const key = `${epNum}_${downloadAudioTrack}`;
           const taskKey = anime?.id ? `${anime.id}_${epNum}_${downloadAudioTrack}` : null;
-          const isDownloaded = downloadedSet.has(key) || downloadedSet.has(String(epNum)) || (taskKey && downloadedSet.has(taskKey));
-          const progress = downloadProgress[key] ?? (taskKey ? downloadProgress[taskKey] : undefined);
-          const isDownloading = progress !== undefined && progress < 100;
+          const isDownloaded = downloadedSet.has(key) || (taskKey && downloadedSet.has(taskKey));
+          const isFailed = !isDownloaded && (failedSet.has(key) || (taskKey && failedSet.has(taskKey)));
+          const progress = (isFailed || isDownloaded) ? undefined : (downloadProgress[key] ?? (taskKey ? downloadProgress[taskKey] : undefined));
+          const isDownloading = !isDownloaded && !isFailed && progress !== undefined && progress < 100;
 
           return (
             <div
@@ -83,6 +98,11 @@ function DownloadListModal({
                 {isDownloaded && (
                   <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
                     Downloaded
+                  </span>
+                )}
+                {isFailed && (
+                  <span style={{ fontSize: 11, color: '#ef4444', fontWeight: 600 }}>
+                    Failed
                   </span>
                 )}
               </div>
@@ -107,8 +127,31 @@ function DownloadListModal({
                   <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700 }}>
                     {progress}%
                   </span>
-                  <Loader size={16} className="spin" color="var(--accent)" />
+                  <LoadingWheel size={16} />
                 </div>
+              ) : isFailed ? (
+                <motion.button
+                  onClick={() => onDownloadEpisode(epNum)}
+                  whileTap={{ scale: 0.90 }}
+                  title="Retry download with fresh stream link"
+                  style={{
+                    height: 32,
+                    padding: '0 10px',
+                    borderRadius: 8,
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#f87171',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  <RotateCcw size={13} />
+                  <span>Retry</span>
+                </motion.button>
               ) : (
                 <motion.button
                   onClick={() => onDownloadEpisode(epNum)}

@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download as DownloadIcon, Trash2, CheckCircle2, Film, AlertCircle, X, Play } from "lucide-react";
+import { Download as DownloadIcon, Trash2, CheckCircle2, Film, AlertCircle, X, Play, RotateCcw } from "lucide-react";
 import { ScreenOrientation } from "@capacitor/screen-orientation";
 import { registerPlugin, Capacitor } from "@capacitor/core";
 import { downloadManager } from "../utils/DownloadManager";
 import { registerBackButtonHandler } from "../utils/backButton";
 import AniPlayer from "../components/AniPlayer";
+import LoadingWheel from "../components/ui/LoadingWheel";
 
 const EmbedScraper = registerPlugin("EmbedScraper");
 
@@ -159,10 +160,8 @@ function LocalPlayerOverlay({ item, onClose }) {
         </div>
       )}
       {!error && !playerData && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-          <div style={{ width: 48, height: 48, borderRadius: "50%", border: "3px solid rgba(255,255,255,0.1)", borderTopColor: "var(--accent)", animation: "spin 0.8s linear infinite" }} />
-          <p style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>Opening video…</p>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <LoadingWheel size={48} text="Opening video..." />
         </div>
       )}
       {!error && playerData && (
@@ -218,12 +217,26 @@ export default function DownloadPage() {
     return () => unsubscribe();
   }, []);
 
-  const handleDelete = async (animeId, episode, track) => {
+  const handleDelete = async (animeId, episode, track, animeTitle, status) => {
     try {
-      setDownloads(prev => prev.filter(d => !(String(d.animeId) === String(animeId) && String(d.episode) === String(episode) && (d.track || "sub") === (track || "sub"))));
-      await downloadManager.cancelDownload(animeId, episode, track || "sub");
+      // Optimistically remove from UI
+      setDownloads(prev => prev.filter(d => !(
+        String(d.animeId) === String(animeId) &&
+        String(d.episode) === String(episode) &&
+        (d.track || "sub") === (track || "sub")
+      )));
+      // cancelDownload handles both active + completed (it removes files + metadata)
+      await downloadManager.cancelDownload(animeId, episode, track || "sub", animeTitle || "");
       fetchDownloads();
-    } catch (e) { console.error("[DownloadPage] Failed to cancel download:", e); }
+    } catch (e) { console.error("[DownloadPage] Failed to delete download:", e); }
+  };
+
+  const handleRetry = (item) => {
+    // Remove the failed entry so the user gets a clean state when they re-download
+    downloadManager.cancelDownload(item.animeId, item.episode, item.track || 'sub', item.animeTitle || '').catch(() => {});
+    if (item.animeId) {
+      navigate(`/anime/${item.animeId}`);
+    }
   };
 
   const activeCount = downloads.filter(d => d.status !== "completed" && d.status !== "error").length;
@@ -314,7 +327,7 @@ export default function DownloadPage() {
 
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <h3 style={{ fontSize: 13, fontWeight: 800, margin: "0 0 2px", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
-                      {item.animeTitle && item.animeTitle !== "Anime" ? item.animeTitle : `Anime #${item.animeId}`}
+                      {item.animeTitle && item.animeTitle !== "Anime" ? item.animeTitle : "Untitled Anime"}
                     </h3>
                     <p style={{ fontSize: 12, color: "var(--text-tertiary)", margin: "0 0 6px" }}>
                       Episode {item.episode}
@@ -348,7 +361,21 @@ export default function DownloadPage() {
                         <Play size={15} fill="#fff" />
                       </button>
                     )}
-                    <button onClick={() => handleDelete(item.animeId, item.episode, item.track)} aria-label="Delete download"
+                    {isError && (
+                      <button onClick={() => handleRetry(item)} aria-label="Retry download"
+                        style={{
+                          background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)",
+                          borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center",
+                          justifyContent: "center", color: "#f87171", cursor: "pointer", transition: "transform 0.15s, background 0.2s"
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.08)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+                        title="Retry download on anime page"
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                    )}
+                    <button onClick={() => handleDelete(item.animeId, item.episode, item.track, item.animeTitle, item.status)} aria-label="Delete download"
                       style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-tertiary)", cursor: "pointer", transition: "background 0.2s, color 0.2s" }}
                       onMouseEnter={e => { e.currentTarget.style.background = "rgba(229,9,20,0.12)"; e.currentTarget.style.color = "#e50914"; }}
                       onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.color = "var(--text-tertiary)"; }}

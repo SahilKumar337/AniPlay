@@ -117,7 +117,6 @@ body.theme-light {
 }
 
 html {
-  scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior-y: none;
   overscroll-behavior: none;
@@ -137,7 +136,6 @@ body {
   user-select: none;
   overscroll-behavior-y: none;
   overscroll-behavior: none;
-  transition: background-color 0.4s cubic-bezier(0.16, 1, 0.3, 1), color 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 img {
@@ -159,23 +157,12 @@ button {
   outline: none;
   /* Eliminate 300ms tap delay on all buttons */
   touch-action: manipulation;
-  /* Immediate GPU layer for all buttons at startup */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   APP-WIDE GPU ACCELERATION — Pre-promotes every animated/interactive
-   element to its own GPU compositing layer immediately at page load.
-
-   WHY: Without this, Android WebView creates GPU layers LAZILY on first
-   interaction — causing a 1-frame stutter every time a new element
-   animates for the first time or after being evicted from GPU memory.
-
-   This is what Crunchyroll/YouTube/Netflix do. Every tappable element
-   is pre-promoted so there is ZERO GPU promotion cost on any interaction.
+   APP-WIDE COMPOSITOR OPTIMIZATION
+   Touch-action manipulation eliminates 300ms tap delay natively.
+   Paint containment prevents offscreen/adjacent layout and repaint passes.
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── All tappable/interactive elements — 0ms tap latency ─────────── */
@@ -194,7 +181,7 @@ button,
   -webkit-tap-highlight-color: transparent;
 }
 
-/* ── Anime cards & lists — containment for 120 FPS scrolling ─── */
+/* ── Anime cards & lists — layout & style containment for 120 FPS scrolling ─── */
 .anime-card {
   contain: layout style;
 }
@@ -202,7 +189,7 @@ button,
 .comment-card,
 .episode-card,
 .day-tab {
-  contain: layout style;
+  contain: layout style paint;
 }
 
 /* ── Scroll containers — momentum scrolling ──────────────────── */
@@ -227,6 +214,66 @@ button,
   will-change: transform, opacity;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   VAUL MODERN 120 FPS BOTTOM SHEET / DRAWER SYSTEM
+   ══════════════════════════════════════════════════════════════ */
+.vaul-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 10000;
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vaul-drawer-content {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border-top-left-radius: 28px;
+  border-top-right-radius: 28px;
+  border: 1px solid var(--border-strong);
+  border-bottom: none;
+  box-shadow: var(--shadow-sheet);
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  outline: none;
+  transform: translateZ(0);
+  /* will-change added via JS class .vaul-open only while drawer is animating */
+  padding-bottom: max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 32px);
+  contain: paint layout;
+}
+
+.vaul-drawer-handle {
+  width: 38px;
+  height: 4.5px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  margin: 12px auto 8px;
+  flex-shrink: 0;
+}
+
+.vaul-drawer-header {
+  padding: 8px 20px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.vaul-drawer-body {
+  padding: 16px 20px calc(28px + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
 }
 
 /* ── All elements using CSS transition on transform/opacity ───── */
@@ -337,7 +384,7 @@ body,
 @keyframes playerEnter {
   0% {
     opacity: 0;
-    transform: scale(0.96) translateY(16px);
+    transform: scale(0.97) translateY(10px);
   }
 
   100% {
@@ -349,7 +396,7 @@ body,
 @keyframes tabContentSlide {
   0% {
     opacity: 0;
-    transform: translateY(8px) scale(0.99);
+    transform: translateY(4px) scale(0.995);
   }
 
   100% {
@@ -359,8 +406,8 @@ body,
 }
 
 @keyframes sectionFadeUp {
-  0%   { transform: translateY(8px); }
-  100% { transform: translateY(0);   }
+  0%   { opacity: 0.8; transform: translateY(4px); }
+  100% { opacity: 1;   transform: translateY(0);   }
 }
 
 /* ---------- Page ---------- */
@@ -369,29 +416,32 @@ body,
   min-height: 100vh;
   position: relative;
   /* opacity-ONLY animation — never add transform here or all fixed children lose viewport pin */
-  animation: pageEnter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: pageEnter 0.22s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  will-change: opacity;
 }
 
 /* ── Page Transition Wrapper — smooth fade on every tab switch ──────── */
 .page-transition-wrapper {
-  animation: pageEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: pageEnter 0.24s cubic-bezier(0.2, 0.9, 0.3, 1) both;
   will-change: opacity;
 }
 
 /* Scrollable page content wrapper */
 .page-content {
-  animation: pageContentEnter 0.36s cubic-bezier(0.16, 1, 0.3, 1) both;
-  animation-delay: 0.04s;
+  animation: pageContentEnter 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  animation-delay: 0.02s;
+  will-change: opacity;
 }
 
 /* Staggered section entrance */
 .section-enter {
-  animation: sectionFadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: sectionFadeUp 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  /* No permanent will-change — too many layers on mobile GPU */
 }
 
 .player-overlay-anim {
-  animation: playerEnter 0.38s cubic-bezier(0.2, 0.9, 0.3, 1);
-  will-change: transform, opacity, filter;
+  animation: playerEnter 0.3s cubic-bezier(0.2, 0.9, 0.3, 1);
+  will-change: transform, opacity;
   transform: translateZ(0);
   backface-visibility: hidden;
 }
@@ -406,7 +456,7 @@ body,
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.3px;
-  transition: all var(--spring);
+  transition: transform var(--spring), opacity var(--spring), box-shadow var(--spring);
   white-space: nowrap;
   position: relative;
   overflow: hidden;
@@ -473,11 +523,9 @@ body,
      16px left/right so first and last card have proper breathing room.
      8px bottom for shadow space. */
   padding: 4px 16px 8px;
-  scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
-  /* NOTE: Do NOT set touch-action:pan-x here — it blocks vertical page scrolling
-     when the user's finger starts on a scroll row (most of the home page).
-     The browser handles horizontal/vertical scroll direction natively. */
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
 }
 
 .h-scroll::-webkit-scrollbar {
@@ -485,7 +533,6 @@ body,
 }
 
 .h-scroll>* {
-  scroll-snap-align: start;
   flex-shrink: 0;
 }
 
@@ -496,13 +543,16 @@ body,
   overflow: hidden;
   background: var(--bg-card);
   cursor: pointer;
-  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: transform;
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 0.15s ease;
   touch-action: manipulation;
   /* Subtle inner rim light */
   box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset, var(--shadow-card);
-  transform: translateZ(0);
+  user-select: none;
+}
+
+.anime-card:active {
+  transform: scale(0.94);
 }
 
 .anime-card img {
@@ -517,9 +567,6 @@ body,
   flex-direction: column;
   flex-shrink: 0;
   cursor: pointer;
-  contain: content;
-  content-visibility: auto;
-  contain-intrinsic-size: 120px 165px;
 }
 
 .anime-card .card-overlay {
@@ -600,8 +647,8 @@ body.has-native-bottom-nav .navbar-bottom-bezel {
   bottom: 0;
   left: 0;
   right: 0;
-  height: calc(88px + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px));
-  background: linear-gradient(to top, rgba(4, 4, 10, 0.98) 0%, rgba(4, 4, 10, 0.85) 45%, rgba(4, 4, 10, 0.35) 80%, transparent 100%);
+  height: calc(92px + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px));
+  background: linear-gradient(to top, rgba(4, 4, 10, 0.98) 0%, rgba(4, 4, 10, 0.90) 50%, rgba(4, 4, 10, 0.35) 80%, transparent 100%);
   z-index: 98;
   pointer-events: none;
   transform: translateZ(0);
@@ -648,23 +695,23 @@ body.keyboard-open .navbar-bottom-bezel {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  max-width: 420px;
-  height: 58px;
-  padding: 3px 4px;
+  max-width: 412px;
+  height: 62px;
+  padding: 4px;
   border-radius: 9999px;
 
   /* Frosted deep liquid glass styling with lightweight GPU fillrate */
-  background: linear-gradient(135deg, rgba(24, 24, 34, 0.92) 0%, rgba(10, 10, 16, 0.96) 100%);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  background: rgba(14, 14, 22, 0.92);
+  backdrop-filter: blur(28px) saturate(190%) brightness(0.95);
+  -webkit-backdrop-filter: blur(28px) saturate(190%) brightness(0.95);
 
   /* Specular highlight rim & multi-depth borders */
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.13);
 
-  /* Deep elevated drop shadow — optimized single layer for maximum GPU fillrate */
+  /* Deep elevated drop shadow */
   box-shadow:
-    inset 0 1px 1px 0 rgba(255, 255, 255, 0.22),
-    0 12px 32px -4px rgba(0, 0, 0, 0.85),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.20),
+    0 16px 36px -4px rgba(0, 0, 0, 0.85),
     0 0 0 0.5px rgba(255, 255, 255, 0.06);
 
   isolation: isolate;
@@ -678,10 +725,10 @@ body.keyboard-open .navbar-bottom-bezel {
   content: '';
   position: absolute;
   top: 0;
-  left: 10%;
-  right: 10%;
+  left: 12%;
+  right: 12%;
   height: 1px;
-  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.5) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.45) 50%, transparent 100%);
   pointer-events: none;
   z-index: 3;
 }
@@ -689,48 +736,58 @@ body.keyboard-open .navbar-bottom-bezel {
 /* ── Sliding Liquid Glass Pill Indicator (Hardware-Accelerated Track) ── */
 .navbar-indicator-track {
   position: absolute;
-  top: 3px;
-  bottom: 3px;
+  top: 5px;
+  bottom: 5px;
   left: 4px;
   width: calc((100% - 8px) / 5);
+  padding: 0 2px;
   pointer-events: none;
   z-index: 1;
-  transition: transform 0.34s cubic-bezier(0.2, 0.9, 0.28, 1);
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
 }
 
 .navbar-indicator-pill {
+  position: relative;
   width: 100%;
   height: 100%;
   border-radius: 9999px;
-  background: var(--accent);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.35) 0%, rgba(99, 102, 241, 0.20) 100%);
+  border: 1px solid rgba(167, 139, 250, 0.38);
   box-shadow:
-    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
-    0 4px 16px color-mix(in srgb, var(--accent) 50%, transparent);
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 18px -2px rgba(124, 58, 237, 0.45);
+  overflow: hidden;
 }
 
-/* ── Tab Panel Smooth Transition ────────────────────────────────────── */
+.navbar-indicator-pill::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 15%;
+  right: 15%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.7) 50%, transparent 100%);
+}
+
+/* ── Tab Panel Persistence (Zero document height collapse on tab switches) ── */
+.tab-stage {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+}
+
 .tab-panel {
   width: 100%;
+  min-height: 100%;
 }
 
 .tab-panel-active {
   display: block !important;
-  animation: tabSmoothFade 0.24s cubic-bezier(0.2, 0.9, 0.28, 1);
 }
 
 .tab-panel-hidden {
   display: none !important;
-}
-
-@keyframes tabSmoothFade {
-  from {
-    opacity: 0.85;
-  }
-  to {
-    opacity: 1;
-  }
 }
 
 /* ── Nav item button ────────────────────────────────────────────────── */
@@ -741,7 +798,7 @@ body.keyboard-open .navbar-bottom-bezel {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   flex: 1;
   height: 100%;
   background: transparent !important;
@@ -752,13 +809,15 @@ body.keyboard-open .navbar-bottom-bezel {
   padding: 0;
   border-radius: 9999px;
   -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
   transform: translateZ(0);
   -webkit-transform: translateZ(0);
 }
 
 .nav-item:active .nav-icon-wrap {
-  transform: scale(0.88);
-  transition: transform 0.09s cubic-bezier(0.2, 0, 0, 1);
+  transform: scale(0.90);
+  transition: transform 0.08s ease;
 }
 
 /* ── Icon wrapper ─────────────────────────────────────────────────── */
@@ -769,45 +828,44 @@ body.keyboard-open .navbar-bottom-bezel {
   justify-content: center;
   width: 28px;
   height: 22px;
-  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.28s cubic-bezier(0.34, 1.4, 0.64, 1);
   transform: translateZ(0);
 }
 
 .nav-item.active .nav-icon-wrap {
-  transform: scale(1.12) translateY(-0.5px);
+  transform: scale(1.08) translateY(-1px);
 }
 
 /* ── Icon SVG ─────────────────────────────────────────────────────── */
 .nav-item svg {
-  width: 20px;
-  height: 20px;
-  color: rgba(255, 255, 255, 0.46);
-  transition: color 0.28s cubic-bezier(0.4, 0, 0.2, 1), transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 21px;
+  height: 21px;
+  color: rgba(255, 255, 255, 0.48);
+  transition: color 0.25s ease, filter 0.25s ease;
 }
 
 .nav-item.active svg {
   color: #ffffff;
-  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.45));
+  filter: drop-shadow(0 2px 10px rgba(139, 92, 246, 0.7));
 }
 
 /* ── Label text ───────────────────────────────────────────────────── */
 .nav-label {
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 500;
   font-family: var(--font-main, sans-serif);
-  letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.46);
+  letter-spacing: 0.015em;
+  color: rgba(255, 255, 255, 0.48);
   line-height: 1;
   white-space: nowrap;
   margin-top: 1px;
-  transition: color 0.28s cubic-bezier(0.4, 0, 0.2, 1), font-weight 0.22s ease, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: color 0.25s ease, font-weight 0.2s ease, text-shadow 0.25s ease;
 }
 
 .nav-item.active .nav-label {
   color: #ffffff;
   font-weight: 600;
-  transform: translateY(-0.5px);
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 8px rgba(139, 92, 246, 0.6), 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
 /* ── Notification badge ───────────────────────────────────────────── */
@@ -892,32 +950,34 @@ body.theme-light .nav-item.active .nav-label {
 /* ---------- Home Sections ---------- */
 .home-section {
   margin-bottom: 28px;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 240px;
   animation: sectionFadeUp 0.48s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Sequential section stagger — caps at 6 sections to keep last one quick */
+/* Sequential section stagger — tighter delays for cohesive entrance */
 .home-section:nth-child(1) {
-  animation-delay: 0.02s;
+  animation-delay: 0s;
 }
 
 .home-section:nth-child(2) {
-  animation-delay: 0.07s;
+  animation-delay: 0.03s;
 }
 
 .home-section:nth-child(3) {
-  animation-delay: 0.12s;
+  animation-delay: 0.06s;
 }
 
 .home-section:nth-child(4) {
-  animation-delay: 0.17s;
+  animation-delay: 0.09s;
 }
 
 .home-section:nth-child(5) {
-  animation-delay: 0.22s;
+  animation-delay: 0.10s;
 }
 
 .home-section:nth-child(n+6) {
-  animation-delay: 0.27s;
+  animation-delay: 0.12s;
 }
 
 /* Card size presets */
@@ -966,7 +1026,7 @@ body.theme-light .nav-item.active .nav-label {
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background-color var(--transition), border-color var(--transition), color var(--transition), transform 0.1s ease;
   min-width: 52px;
   flex-shrink: 0;
   border: 0.5px solid transparent;
@@ -1037,7 +1097,7 @@ body.theme-light .nav-item.active .nav-label {
   padding: 10px;
   margin-bottom: 8px;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background-color var(--transition), border-color var(--transition);
   border: 0.5px solid var(--border);
 }
 
@@ -1354,7 +1414,7 @@ body.theme-light .nav-item.active .nav-label {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background-color var(--transition), border-color var(--transition), color var(--transition);
   letter-spacing: -0.1px;
 }
 
@@ -1600,7 +1660,7 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   letter-spacing: -0.1px;
   border: 0.5px solid rgba(255, 255, 255, 0.1);
   opacity: 0;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
   white-space: nowrap;
   z-index: 200;
@@ -1622,7 +1682,7 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-bottom: 0.5px solid var(--border);
-  transition: all 0.25s ease;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
   padding-top: var(--sat);
 }
 
@@ -1699,18 +1759,60 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   }
 }
 
-/* Loader spin */
+/* Loader spin — GPU accelerated */
 .spin {
-  animation: spin 1s linear infinite;
+  animation: spin 0.9s linear infinite;
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 @keyframes spin {
   from {
-    transform: rotate(0deg);
+    transform: rotate(0deg) translateZ(0);
   }
 
   to {
+    transform: rotate(360deg) translateZ(0);
+  }
+}
+
+/* ─── Premium Glowing Anime Loading Wheel ─── */
+@keyframes loadingWheelRotate {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes loadingWheelDash {
+  0% {
+    stroke-dasharray: 1, 150;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 85, 150;
+    stroke-dashoffset: -32;
+  }
+  100% {
+    stroke-dasharray: 85, 150;
+    stroke-dashoffset: -124;
+  }
+}
+
+.loading-wheel-dash {
+  animation: loadingWheelDash 1.4s ease-in-out infinite;
+}
+
+@keyframes loadingWheelPulse {
+  0% {
+    transform: scale(0.65);
+    opacity: 0.35;
+  }
+  100% {
+    transform: scale(1.2);
+    opacity: 0.9;
   }
 }
 
@@ -2295,3 +2397,382 @@ body.compact-cards .mylist-card select {
   width: 100%;
   will-change: transform;
 }
+
+/* ── Auth Modal Animations ─────────────────────────────────────────────── */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  15%       { transform: translateX(-6px); }
+  30%       { transform: translateX(5px); }
+  45%       { transform: translateX(-4px); }
+  60%       { transform: translateX(3px); }
+  75%       { transform: translateX(-2px); }
+}
+
+@keyframes appleFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes applePop {
+  from { opacity: 0; transform: scale(0.92) translateY(14px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Spinning loader for auth buttons */
+.spin {
+  animation: spinFull 0.8s linear infinite;
+}
+@keyframes spinFull {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Missing auth keyframes referenced by AuthModal.jsx ──────────────── */
+@keyframes authShake {
+  0%, 100% { transform: translateX(0); }
+  15%       { transform: translateX(-5px); }
+  30%       { transform: translateX(4px); }
+  45%       { transform: translateX(-3px); }
+  60%       { transform: translateX(2px); }
+  75%       { transform: translateX(-1px); }
+}
+
+@keyframes authFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes authCardIn {
+  from { opacity: 0; transform: scale(0.94) translateY(12px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Auth ambient glow orbs — subtle floating movement */
+@keyframes authOrb1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(12px, -8px) scale(1.05); }
+  66%      { transform: translate(-8px, 6px) scale(0.97); }
+}
+
+@keyframes authOrb2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40%      { transform: translate(-10px, 10px) scale(1.03); }
+  70%      { transform: translate(8px, -6px) scale(0.96); }
+}
+
+@keyframes authOrb3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(6px, 8px) scale(1.04); }
+}
+
+/* Sub-route GPU compositor accelerated page transition (120 FPS zero-JS overhead) */
+.subroute-enter {
+  width: 100%;
+  min-height: 100%;
+  animation: subrouteEnter 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes subrouteEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   AUTH PAGE — Full-screen Crunchyroll-style sign-in/sign-up
+   ════════════════════════════════════════════════════════════ */
+@keyframes authPageEnter {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes authPageExit {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(16px); }
+}
+
+.auth-page {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: #04040a;
+  display: flex;
+  flex-direction: column;
+  padding-top: max(var(--sat, 52px), env(safe-area-inset-top, 0px));
+  padding-bottom: max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 32px);
+  animation: authPageEnter 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  overflow: hidden;
+}
+
+.auth-page.exiting {
+  animation: authPageExit 0.22s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* Top bar — logo left, X right */
+.auth-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px 0;
+  flex-shrink: 0;
+}
+
+.auth-topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.auth-topbar-logo-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--accent), hsl(310, 100%, 58%));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(108, 99, 255, 0.4);
+}
+
+.auth-topbar-title {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  color: #fff;
+  font-family: var(--font-brand);
+}
+
+.auth-close-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.18s ease, transform 0.12s ease;
+}
+
+.auth-close-btn:active {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(0.92);
+}
+
+/* Scrollable body */
+.auth-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 36px 28px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Big centered heading */
+.auth-heading {
+  font-size: clamp(28px, 8vw, 36px);
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: -0.04em;
+  font-family: var(--font-brand);
+  margin: 0 0 36px;
+  text-align: center;
+}
+
+/* Error pill */
+.auth-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  color: #f87171;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  margin-bottom: 20px;
+  animation: shake 0.3s ease;
+}
+
+/* Crunchyroll-style underline field group */
+.auth-field {
+  margin-bottom: 28px;
+  position: relative;
+}
+
+.auth-field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 8px;
+  letter-spacing: 0.01em;
+}
+
+.auth-field-label.focused {
+  color: var(--accent);
+}
+
+.auth-underline-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0;
+  padding: 10px 36px 10px 0;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 500;
+  outline: none;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease;
+  caret-color: var(--accent);
+}
+
+.auth-underline-input:focus {
+  border-bottom-color: var(--accent);
+}
+
+.auth-underline-input::placeholder {
+  color: transparent;
+}
+
+.auth-eye-btn {
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+
+.auth-eye-btn:active {
+  color: var(--accent);
+}
+
+/* Forgot password link */
+.auth-forgot {
+  text-align: right;
+  margin-top: -18px;
+  margin-bottom: 32px;
+}
+
+.auth-forgot-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  touch-action: manipulation;
+}
+
+/* Primary CTA button — outlined pill like Crunchyroll */
+.auth-submit-btn {
+  width: 100%;
+  padding: 15px 0;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  margin-bottom: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  touch-action: manipulation;
+  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.auth-submit-btn:active {
+  transform: scale(0.97);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.auth-submit-btn.loading {
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+/* Bottom links */
+.auth-footer-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.auth-footer-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 6px 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  touch-action: manipulation;
+}
+
+.auth-footer-divider {
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+/* Check email confirmation screen */
+.auth-check-email {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex: 1;
+  gap: 16px;
+  padding: 20px 0;
+}
+
+.auth-check-email-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(99, 102, 241, 0.15));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 28px rgba(168, 85, 247, 0.25);
+  margin-bottom: 8px;
+}
+

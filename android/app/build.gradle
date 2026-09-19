@@ -7,8 +7,8 @@ android {
         applicationId "com.aniplay.aniplay"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 55
-        versionName "1.5.5"
+        versionCode 56
+        versionName "1.5.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -22,17 +22,18 @@ android {
             storePassword 'anilab123'
             keyAlias 'anilabkey'
             keyPassword 'anilab123'
+            v1SigningEnabled true
+            v2SigningEnabled true
         }
     }
     buildTypes {
         release {
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.release
         }
         debug {
-            applicationIdSuffix ".beta"
-            versionNameSuffix "-beta"
             signingConfig signingConfigs.release
         }
     }

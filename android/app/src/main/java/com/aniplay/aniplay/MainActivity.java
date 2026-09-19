@@ -15,6 +15,7 @@ import android.graphics.Canvas;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.graphics.Insets;
+import androidx.core.view.WindowCompat;
 import com.getcapacitor.BridgeWebChromeClient;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.Plugin;
@@ -33,7 +34,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(EmbedScraperPlugin.class);
         registerPlugin(APKUpdaterPlugin.class);
         registerPlugin(OfflineDownloader.class);
-        registerPlugin(BrightnessPlugin.class);   // enables JS swipe-to-brightness control
+        registerPlugin(BrightnessPlugin.class);
 
         // Initialize the native Android 12+ SplashScreen splash view
         androidx.core.splashscreen.SplashScreen.installSplashScreen(this);
@@ -42,10 +43,14 @@ public class MainActivity extends BridgeActivity {
         setTheme(R.style.AppTheme_NoActionBar);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
+        // ── EDGE-TO-EDGE: tell the window to draw behind ALL system bars ──
+        // This is the modern API (WindowCompat) — replaces the deprecated FLAG_FULLSCREEN
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+
         // Keep the splash screen until the web content is ready
         super.onCreate(savedInstanceState);
 
-        // Ensure notification permission is requested on Android 13+ for background download progress
+        // Ensure notification permission is requested on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
@@ -55,10 +60,15 @@ public class MainActivity extends BridgeActivity {
         // Customize the WebChromeClient and enforce hardware GPU rendering
         if (getBridge() != null && getBridge().getWebView() != null) {
             WebView webView = getBridge().getWebView();
-            webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null);
+            // Window is hardware-accelerated; LAYER_TYPE_NONE allows direct compositing & hardware video decoding
+            webView.setLayerType(android.view.View.LAYER_TYPE_NONE, null);
             WebSettings ws = webView.getSettings();
             ws.setDomStorageEnabled(true);
             ws.setDatabaseEnabled(true);
+            ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+            ws.setJavaScriptCanOpenWindowsAutomatically(true);
+            // Pre-rasterize offscreen tiles on background thread for 120 FPS scrolling
+            ws.setOffscreenPreRaster(true);
 
             webView.setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
                 @Override
@@ -74,25 +84,37 @@ public class MainActivity extends BridgeActivity {
                 }
             });
 
-            // Adjust WebView bounds based on whether immersive mode is active
+            // Inject CSS variables for all insets so React layout can account for system bars
             ViewCompat.setOnApplyWindowInsetsListener(getBridge().getWebView(), (v, insets) -> {
-                Insets navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars());
-                Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
-                boolean isKeyboardVisible = imeInsets.bottom > 0;
+                Insets statusInsets  = insets.getInsets(WindowInsetsCompat.Type.statusBars());
+                Insets cutoutInsets  = insets.getInsets(WindowInsetsCompat.Type.displayCutout());
+                Insets navInsets     = insets.getInsets(WindowInsetsCompat.Type.navigationBars());
 
+                // WebView always fills edge-to-edge — no margins
                 android.view.ViewGroup.MarginLayoutParams lp = (android.view.ViewGroup.MarginLayoutParams) v.getLayoutParams();
                 if (lp != null) {
-                    lp.topMargin    = 0; // Full edge-to-edge on top
-                    lp.bottomMargin = 0; // Full edge-to-edge on bottom — CSS --android-safe-bottom pads content
+                    lp.topMargin    = 0;
+                    lp.bottomMargin = 0;
                     v.setLayoutParams(lp);
                 }
-                // Inject the navigation bar height as a CSS variable so in-app content can pad itself
-                int navBarHeightPx = isImmersiveMode ? 0 : navInsets.bottom;
+
                 float density = getResources().getDisplayMetrics().density;
-                int navBarHeightDp = (int) (navBarHeightPx / density);
-                final String js = "document.documentElement.style.setProperty('--android-safe-bottom', '" + navBarHeightDp + "px')";
+                // Use the LARGER of status bar and display cutout (camera punch-hole).
+                // When the status bar is hidden, statusInsets.top = 0 but cutoutInsets.top
+                // still reports the camera module height, so --sat always has the correct
+                // safe area value regardless of status bar visibility.
+                int safeTopPx   = Math.max(statusInsets.top, cutoutInsets.top);
+                int statusBarDp = Math.max(0, (int) (safeTopPx / density));
+                int navBarDp    = isImmersiveMode ? 0 : (int) (navInsets.bottom / density);
+
+                // Inject both variables into CSS so the web layer can pad content correctly
+                final String js =
+                    "document.documentElement.style.setProperty('--sat', '" + statusBarDp + "px');" +
+                    "document.documentElement.style.setProperty('--android-safe-bottom', '" + navBarDp + "px');";
+
                 if (getBridge() != null && getBridge().getWebView() != null) {
-                    getBridge().getWebView().post(() -> getBridge().getWebView().evaluateJavascript(js, null));
+                    getBridge().getWebView().post(() ->
+                        getBridge().getWebView().evaluateJavascript(js, null));
                 }
                 return insets;
             });
@@ -103,25 +125,23 @@ public class MainActivity extends BridgeActivity {
 
         Window window = getWindow();
 
-        // Disable contrast enforcement for status and navigation bars (removes forced gray scrim on Android Q+)
+        // Disable contrast enforcement (removes forced gray scrim on Android Q+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.setNavigationBarContrastEnforced(false);
             window.setStatusBarContrastEnforced(false);
         }
 
-        // Set window background to solid black
-        window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK));
-
-        // Draw edge-to-edge behind system bars — both bars are transparent so WebView content bleeds through
+        // Both bars fully transparent — WebView content shows through
+        window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.parseColor("#04040a")));
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        // Solid black theme matching app background
-        window.setNavigationBarColor(android.graphics.Color.parseColor("#060609"));
 
-        applyFullscreen();
+        applySystemBarAppearance();
 
-        // Request storage permissions on first launch so offline playback works
+        // Request storage permissions on first launch
         getWindow().getDecorView().postDelayed(() -> {
             requestStoragePermissionsIfNeeded();
         }, 600);
@@ -135,13 +155,10 @@ public class MainActivity extends BridgeActivity {
     private void requestStoragePermissionsIfNeeded() {
         List<String> perms = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+: granular media permissions
+            // Android 13+: granular media permissions (video only, not photos)
             if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO)
                     != PackageManager.PERMISSION_GRANTED)
                 perms.add(Manifest.permission.READ_MEDIA_VIDEO);
-            if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES)
-                    != PackageManager.PERMISSION_GRANTED)
-                perms.add(Manifest.permission.READ_MEDIA_IMAGES);
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             // Android 6-12
             if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -165,10 +182,21 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /** Apply edge-to-edge immersive appearance without hiding the bars.
+     *  Status bar icons are white (light-on-dark). Navigation bar transparent.
+     *  When isImmersiveMode=true (video player), we hide ALL bars for cinema mode.
+     */
     public void applyFullscreen() {
+        applySystemBarAppearance();
+    }
+
+    private void applySystemBarAppearance() {
         Window window = getWindow();
+
         if (isImmersiveMode) {
+            // ── Cinema mode: hide status + nav bars completely ──
             window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+            window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 window.setDecorFitsSystemWindows(false);
                 android.view.WindowInsetsController ctrl = window.getInsetsController();
@@ -181,7 +209,7 @@ public class MainActivity extends BridgeActivity {
                         android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                     );
                 }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            } else {
                 window.getDecorView().setSystemUiVisibility(
                     android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
                     | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
@@ -192,23 +220,33 @@ public class MainActivity extends BridgeActivity {
                 );
             }
         } else {
-            window.setNavigationBarColor(android.graphics.Color.parseColor("#060609"));
+            // ── Normal mode: HIDE status bar (transient — reappears briefly on swipe-from-top) ──
+            // Navigation bar stays visible so user can use Android back/home gestures.
+            window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
+            window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                window.setDecorFitsSystemWindows(false);
+                WindowCompat.setDecorFitsSystemWindows(window, false);
                 android.view.WindowInsetsController ctrl = window.getInsetsController();
                 if (ctrl != null) {
-                    // Hide only status bars (immersive top), show navigation bars (visible bottom)
+                    // HIDE the status bar — it briefly shows on swipe from top, then auto-hides
                     ctrl.hide(android.view.WindowInsets.Type.statusBars());
+                    // Keep navigation bar visible for gestures
                     ctrl.show(android.view.WindowInsets.Type.navigationBars());
-                    // Light text/icons on dark system bars (0 means dark background appearance)
-                    ctrl.setSystemBarsAppearance(0, android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
-                    ctrl.setSystemBarsAppearance(0, android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+                    ctrl.setSystemBarsBehavior(
+                        android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    );
+                    // White nav bar icons on dark background
+                    ctrl.setSystemBarsAppearance(0,
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS |
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
                 }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                // Pre-Android 11: fullscreen flag + immersive sticky for status bar
                 window.getDecorView().setSystemUiVisibility(
-                    android.view.View.SYSTEM_UI_FLAG_FULLSCREEN // Hide status bar
+                    android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
                     | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                 );
             }
         }

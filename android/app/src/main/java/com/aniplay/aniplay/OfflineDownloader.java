@@ -114,9 +114,9 @@ public class OfflineDownloader extends Plugin {
             })
             .followRedirects(true)
             .followSslRedirects(true)
-            .connectTimeout(10, TimeUnit.SECONDS)   // fail fast on bad connections
-            .readTimeout(20, TimeUnit.SECONDS)       // stalled read → fail & retry quickly
-            .callTimeout(25, TimeUnit.SECONDS)       // HARD 25s limit per entire HTTP call — prevents trickle-stall hangs
+            .connectTimeout(12, TimeUnit.SECONDS)   // fail fast on bad connections (12s)
+            .readTimeout(18, TimeUnit.SECONDS)       // 18s read timeout prevents hanging
+            .callTimeout(30, TimeUnit.SECONDS)       // 30s hard limit per call prevents stalling
             // 256-connection pool for maximum throughput parallel downloading
             .connectionPool(new ConnectionPool(256, 5, TimeUnit.MINUTES))
             // Enable HTTP/2 for multiplexed CDN speed and HTTP/1.1 fallback
@@ -124,13 +124,25 @@ public class OfflineDownloader extends Plugin {
             .dns(new Dns() {
                 @Override
                 public List<InetAddress> lookup(String hostname) throws UnknownHostException {
-                    if (hostname.contains("vivibebe") || hostname.contains("anizara") || hostname.contains("anineko") || hostname.contains("ibyteimg")) {
+                    String low = hostname.toLowerCase();
+                    if (low.contains("vivibebe") || low.contains("anizara") || low.contains("anineko")
+                        || low.contains("ibyteimg") || low.contains("norami") || low.contains("imgnex")
+                        || low.contains("akirax") || low.contains("shiora") || low.contains("mikora")
+                        || low.contains("megap") || low.contains("tiktok")) {
                         List<InetAddress> ips = resolveDnsOverHttps(hostname);
                         if (ips != null && !ips.isEmpty()) {
                             return ips;
                         }
                     }
-                    return Dns.SYSTEM.lookup(hostname);
+                    try {
+                        return Dns.SYSTEM.lookup(hostname);
+                    } catch (Exception eSystem) {
+                        List<InetAddress> ips = resolveDnsOverHttps(hostname);
+                        if (ips != null && !ips.isEmpty()) {
+                            return ips;
+                        }
+                        throw new UnknownHostException("DNS lookup failed for " + hostname + ": " + eSystem.getMessage());
+                    }
                 }
             });
         configureUnsafeSsl(builder);
@@ -186,6 +198,67 @@ public class OfflineDownloader extends Plugin {
         executor.submit(task);
 
         call.resolve(new JSObject().put("status", "started"));
+    }
+
+    @PluginMethod
+    public void deleteEpisode(PluginCall call) {
+        String animeTitle = call.getString("animeTitle");
+        String episode = call.getString("episode");
+        String track = call.getString("track", "sub");
+        String animeId = call.getString("animeId");
+
+        String taskId = (animeId != null && episode != null) ? (animeId + "_" + episode + "_" + track) : null;
+        if (taskId != null) {
+            JavaDLTask task = javaDLs.remove(taskId);
+            if (task != null) {
+                task.cancel();
+            }
+            JSDownloadState jsTask = jsDLs.remove(taskId);
+            if (jsTask != null && jsTask.tempDir != null) {
+                rmrf(jsTask.tempDir);
+            }
+            DownloadForegroundService.stopDownload(getContext(), taskId, false, "Download Deleted");
+            emit(taskId, 0, "deleted", null);
+        }
+
+        if (animeTitle != null && episode != null) {
+            String safeTitle = animeTitle.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String baseName = safeTitle + " - Ep " + episode + " (" + track.toUpperCase() + ")";
+            String mp4Name = baseName + ".mp4";
+            String vttName = baseName + ".vtt";
+
+            // 1. Delete from internal sandbox
+            try {
+                File internalSubDir = new File(getContext().getFilesDir(), "subtitles");
+                File internalSubFile = new File(internalSubDir, vttName);
+                if (internalSubFile.exists()) internalSubFile.delete();
+
+                File internalVideoDir = new File(getContext().getFilesDir(), "videos");
+                File internalVideoFile = new File(internalVideoDir, mp4Name);
+                if (internalVideoFile.exists()) internalVideoFile.delete();
+            } catch (Exception ignored) {}
+
+            // 2. Delete from MediaStore (Android 10+)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    android.content.ContentResolver cr = getContext().getContentResolver();
+                    Uri downloadsUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                    cr.delete(downloadsUri, MediaStore.MediaColumns.DISPLAY_NAME + "=? OR " + MediaStore.MediaColumns.DISPLAY_NAME + "=?",
+                        new String[]{ mp4Name, vttName });
+                }
+            } catch (Exception ignored) {}
+
+            // 3. Delete from public Download/AniPlay folder directly (file path)
+            try {
+                File pubDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), getDownloadFolder());
+                File pubMp4 = new File(pubDir, mp4Name);
+                if (pubMp4.exists()) pubMp4.delete();
+                File pubVtt = new File(pubDir, vttName);
+                if (pubVtt.exists()) pubVtt.delete();
+            } catch (Exception ignored) {}
+        }
+
+        call.resolve(new JSObject().put("success", true));
     }
 
     // Path A: JS-driven segment download — init
@@ -308,9 +381,6 @@ public class OfflineDownloader extends Plugin {
                 List<String> perms = new ArrayList<>();
                 if (getContext().checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
                     perms.add(Manifest.permission.READ_MEDIA_VIDEO);
-                }
-                if (getContext().checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
-                    perms.add(Manifest.permission.READ_MEDIA_IMAGES);
                 }
                 if (!perms.isEmpty() && getActivity() != null) {
                     getActivity().requestPermissions(perms.toArray(new String[0]), 201);
@@ -464,58 +534,146 @@ public class OfflineDownloader extends Plugin {
         }
 
         // ── Subtitle lookup (VTT / SRT) ──────────────────────────────────────
-        // Tier 0: if filePath was found, check if subtitle exists right next to it
-        if (filePath != null) {
-            String noExt = filePath.lastIndexOf('.') > 0 ? filePath.substring(0, filePath.lastIndexOf('.')) : filePath;
-            String[] exts = { ".vtt", ".srt", ".vtt.txt", ".txt", ".ass" };
-            for (String ext : exts) {
-                java.io.File matchSub = new java.io.File(noExt + ext);
-                if (matchSub.exists()) {
-                    subPath = matchSub.getAbsolutePath();
+        String subContent = null;
+
+        // Tier 0: Check app's internal private sandbox FIRST (0ms, 100% permission immune)
+        try {
+            File internalSubDir = new File(getContext().getFilesDir(), "subtitles");
+            String[] testNames = { vttName, basePart + ".vtt", basePart + ".srt", basePart + ".txt" };
+            for (String tn : testNames) {
+                File subF = new File(internalSubDir, tn);
+                if (subF.exists() && subF.length() > 5) {
+                    subPath = subF.getAbsolutePath();
+                    byte[] b = new byte[(int) subF.length()];
+                    try (FileInputStream fis = new FileInputStream(subF)) {
+                        fis.read(b);
+                    }
+                    subContent = new String(b, java.nio.charset.StandardCharsets.UTF_8);
+                    Log.d(TAG, "getLocalVideoUri: TIER 0 internal sandbox hit: " + subPath + " (" + subContent.length() + " chars)");
                     break;
                 }
             }
+        } catch (Exception e) {
+            Log.w(TAG, "TIER 0 internal sandbox lookup failed: " + e.getMessage());
         }
 
-        // Tier 1: direct path (check both .vtt and legacy .vtt.txt in folder and base)
-        if (subPath == null) {
-            java.io.File directSub = new java.io.File(downloadsBase, folder + "/" + vttName);
-            if (!directSub.exists()) directSub = new java.io.File(downloadsBase, folder + "/" + vttName + ".txt");
-            if (!directSub.exists()) directSub = new java.io.File(downloadsBase, vttName);
-            if (!directSub.exists()) directSub = new java.io.File(downloadsBase, vttName + ".txt");
-            if (directSub.exists()) subPath = directSub.getAbsolutePath();
-        }
-
-        // Tier 2: MediaStore.Downloads
-        if (subPath == null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            String[] subProj = { android.provider.MediaStore.Downloads._ID,
-                                 android.provider.MediaStore.MediaColumns.DATA };
-            try (android.database.Cursor c = cr.query(
-                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    subProj,
-                    android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " = ?",
-                    new String[]{ vttName }, null)) {
-                if (c != null && c.moveToFirst()) {
-                    int dataIdx = c.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA);
-                    if (dataIdx >= 0) subPath = c.getString(dataIdx);
+        // Tier 1: Check if subtitle exists right next to video file in filesystem
+        if (subContent == null && filePath != null) {
+            String noExt = filePath.lastIndexOf('.') > 0 ? filePath.substring(0, filePath.lastIndexOf('.')) : filePath;
+            String[] exts = { ".vtt", ".srt", ".vtt.txt", ".txt", ".ass" };
+            for (String ext : exts) {
+                File matchSub = new File(noExt + ext);
+                if (matchSub.exists()) {
+                    subPath = matchSub.getAbsolutePath();
+                    try {
+                        if (matchSub.canRead()) {
+                            byte[] b = new byte[(int) matchSub.length()];
+                            try (FileInputStream fis = new FileInputStream(matchSub)) { fis.read(b); }
+                            subContent = new String(b, java.nio.charset.StandardCharsets.UTF_8);
+                            Log.d(TAG, "getLocalVideoUri: direct file read hit: " + subPath);
+                            break;
+                        }
+                    } catch (Exception ignored) {}
                 }
-            } catch (Exception e) {
-                Log.w(TAG, "getLocalVideoUri: subtitle lookup failed: " + e.getMessage());
             }
         }
 
-        // Tier 3: Folder scan fallback matching video base name
-        if (subPath == null) {
-            java.io.File dir = new java.io.File(downloadsBase, folder);
+        // Tier 2: Direct path in downloads folder
+        if (subContent == null && subPath == null) {
+            File directSub = new File(downloadsBase, folder + "/" + vttName);
+            if (!directSub.exists()) directSub = new File(downloadsBase, folder + "/" + vttName + ".txt");
+            if (!directSub.exists()) directSub = new File(downloadsBase, vttName);
+            if (!directSub.exists()) directSub = new File(downloadsBase, vttName + ".txt");
+            if (directSub.exists()) {
+                subPath = directSub.getAbsolutePath();
+                try {
+                    if (directSub.canRead()) {
+                        byte[] b = new byte[(int) directSub.length()];
+                        try (FileInputStream fis = new FileInputStream(directSub)) { fis.read(b); }
+                        subContent = new String(b, java.nio.charset.StandardCharsets.UTF_8);
+                        Log.d(TAG, "getLocalVideoUri: direct downloadsBase read hit: " + subPath);
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        // Tier 3: MediaStore.Downloads query by exact name & read stream IMMEDIATELY
+        if (subContent == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            String[] nameCandidates = { vttName, basePart + ".vtt", vttName + ".txt", basePart + ".srt" };
+            for (String candidate : nameCandidates) {
+                try (android.database.Cursor c = cr.query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        new String[]{ MediaStore.Downloads._ID, MediaStore.MediaColumns.DATA },
+                        MediaStore.MediaColumns.DISPLAY_NAME + " = ?",
+                        new String[]{ candidate }, null)) {
+                    if (c != null && c.moveToFirst()) {
+                        long id = c.getLong(0);
+                        int dataIdx = c.getColumnIndex(MediaStore.MediaColumns.DATA);
+                        if (dataIdx >= 0) subPath = c.getString(dataIdx);
+                        Uri contentUri = android.content.ContentUris.withAppendedId(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, id);
+                        try (InputStream is = cr.openInputStream(contentUri)) {
+                            if (is != null) {
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                byte[] buf = new byte[8192];
+                                int n;
+                                while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+                                subContent = baos.toString("UTF-8");
+                                Log.d(TAG, "getLocalVideoUri: TIER 3 MediaStore hit: " + candidate + " (" + subContent.length() + " chars)");
+                                break;
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "getLocalVideoUri: TIER 3 MediaStore query failed for " + candidate + ": " + e.getMessage());
+                }
+            }
+        }
+
+        // Tier 4: Query MediaStore by DATA path if subPath was found earlier but couldn't be read directly
+        if (subContent == null && subPath != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try (android.database.Cursor c = cr.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    new String[]{ MediaStore.Downloads._ID },
+                    MediaStore.MediaColumns.DATA + " = ?",
+                    new String[]{ subPath }, null)) {
+                if (c != null && c.moveToFirst()) {
+                    long id = c.getLong(0);
+                    Uri contentUri = android.content.ContentUris.withAppendedId(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, id);
+                    try (InputStream is = cr.openInputStream(contentUri)) {
+                        if (is != null) {
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+                            subContent = baos.toString("UTF-8");
+                            Log.d(TAG, "getLocalVideoUri: TIER 4 MediaStore by DATA hit: " + subPath);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // Tier 5: Folder scan fallback matching video base name
+        if (subContent == null && subPath == null) {
+            File dir = new File(downloadsBase, folder);
             if (dir.exists() && dir.isDirectory()) {
-                java.io.File[] files = dir.listFiles();
+                File[] files = dir.listFiles();
                 if (files != null) {
-                    for (java.io.File f : files) {
+                    for (File f : files) {
                         String fn = f.getName();
                         if ((fn.endsWith(".vtt") || fn.endsWith(".srt") || fn.endsWith(".vtt.txt"))
-                            && (fn.startsWith(basePart) || (filePath != null && fn.startsWith(new java.io.File(filePath).getName().replace(".mp4", ""))))) {
+                            && (fn.startsWith(basePart) || (filePath != null && fn.startsWith(new File(filePath).getName().replace(".mp4", ""))))) {
                             subPath = f.getAbsolutePath();
                             Log.d(TAG, "getLocalVideoUri: folder scan subtitle hit: " + subPath);
+                            try {
+                                if (f.canRead()) {
+                                    byte[] b = new byte[(int) f.length()];
+                                    try (FileInputStream fis = new FileInputStream(f)) { fis.read(b); }
+                                    subContent = new String(b, java.nio.charset.StandardCharsets.UTF_8);
+                                }
+                            } catch (Exception ignored) {}
                             break;
                         }
                     }
@@ -523,57 +681,23 @@ public class OfflineDownloader extends Plugin {
             }
         }
 
-        Log.d(TAG, "getLocalVideoUri result → video=" + filePath + " sub=" + subPath);
+        Log.d(TAG, "getLocalVideoUri result → video=" + filePath + " sub=" + subPath + " hasContent=" + (subContent != null));
         JSObject ret = new JSObject();
-        if (filePath != null && !filePath.isEmpty()) ret.put("filePath",     filePath);
-        if (subPath  != null && !subPath.isEmpty()) {
-            ret.put("subtitlePath", subPath);
+        if (filePath != null && !filePath.isEmpty()) ret.put("filePath", filePath);
+        if (subPath  != null && !subPath.isEmpty())  ret.put("subtitlePath", subPath);
+        if (subContent != null && subContent.length() > 5) {
+            ret.put("subtitleContent", subContent);
+            // Cache in internal storage so all future plays are instant Tier 0 hits
             try {
-                java.io.File subFile = new java.io.File(subPath);
-                if (subFile.exists() && subFile.canRead()) {
-                    byte[] b = new byte[(int) subFile.length()];
-                    try (java.io.FileInputStream fis = new java.io.FileInputStream(subFile)) {
-                        fis.read(b);
-                    }
-                    String subContent = new String(b, java.nio.charset.StandardCharsets.UTF_8);
-                    if (subContent.length() > 5) {
-                        ret.put("subtitleContent", subContent);
-                        Log.d(TAG, "Loaded subtitleContent directly (" + subContent.length() + " chars)");
+                File internalSubDir = new File(getContext().getFilesDir(), "subtitles");
+                if (!internalSubDir.exists()) internalSubDir.mkdirs();
+                File internalSubFile = new File(internalSubDir, vttName);
+                if (!internalSubFile.exists()) {
+                    try (FileOutputStream fos = new FileOutputStream(internalSubFile)) {
+                        fos.write(subContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     }
                 }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed reading subtitleContent via direct file: " + e.getMessage());
-            }
-
-            // Fallback via MediaStore ContentResolver if direct file read returned nothing
-            if (!ret.has("subtitleContent") && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                try (android.database.Cursor c = cr.query(
-                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        new String[]{ android.provider.MediaStore.Downloads._ID },
-                        android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
-                        new String[]{ "%" + basePart + "%.vtt" }, null)) {
-                    if (c != null && c.moveToFirst()) {
-                        long id = c.getLong(0);
-                        android.net.Uri contentUri = android.content.ContentUris.withAppendedId(
-                                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, id);
-                        try (java.io.InputStream is = cr.openInputStream(contentUri)) {
-                            if (is != null) {
-                                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                                byte[] buf = new byte[8192];
-                                int n;
-                                while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
-                                String subContent = baos.toString("UTF-8");
-                                if (subContent.length() > 5) {
-                                    ret.put("subtitleContent", subContent);
-                                    Log.d(TAG, "Loaded subtitleContent via ContentResolver (" + subContent.length() + " chars)");
-                                }
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed reading subtitleContent via ContentResolver: " + e.getMessage());
-                }
-            }
+            } catch (Exception ignored) {}
         }
         call.resolve(ret);
     }
@@ -878,19 +1002,38 @@ public class OfflineDownloader extends Plugin {
             File outMp4 = new File(tempDir, "output.mp4");
             
             // Remux the single combined.ts file to output.mp4, writing correct headers and codecs
+            // Pass 1: Stream copy with audio bitstream filter
             com.arthenica.ffmpegkit.FFmpegSession sess = FFmpegKit.executeWithArguments(new String[]{
                 "-hide_banner", "-loglevel", "error",
+                "-fflags", "+genpts+discardcorrupt",
+                "-err_detect", "ignore_err",
                 "-i", combinedTs.getAbsolutePath(),
                 "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart",
                 "-y", outMp4.getAbsolutePath()
             });
 
-            if (!ReturnCode.isSuccess(sess.getReturnCode())) {
+            // Pass 2: Stream copy without bitstream filter (in case audio is already ASC or non-ADTS)
+            if (!ReturnCode.isSuccess(sess.getReturnCode()) || !outMp4.exists() || outMp4.length() < 50_000) {
                 outMp4.delete();
                 sess = FFmpegKit.executeWithArguments(new String[]{
                     "-hide_banner", "-loglevel", "error",
+                    "-fflags", "+genpts+discardcorrupt",
+                    "-err_detect", "ignore_err",
                     "-i", combinedTs.getAbsolutePath(),
                     "-c", "copy", "-movflags", "+faststart",
+                    "-y", outMp4.getAbsolutePath()
+                });
+            }
+
+            // Pass 3: Stream copy video + transcode audio to standard AAC (guarantees 100% valid MP4)
+            if (!ReturnCode.isSuccess(sess.getReturnCode()) || !outMp4.exists() || outMp4.length() < 50_000) {
+                outMp4.delete();
+                sess = FFmpegKit.executeWithArguments(new String[]{
+                    "-hide_banner", "-loglevel", "error",
+                    "-fflags", "+genpts+discardcorrupt",
+                    "-err_detect", "ignore_err",
+                    "-i", combinedTs.getAbsolutePath(),
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                     "-y", outMp4.getAbsolutePath()
                 });
             }
@@ -936,6 +1079,8 @@ public class OfflineDownloader extends Plugin {
     private String[] buildMuxArgs(String concatPath, String outPath, boolean isFmp4, boolean withBsf) {
         List<String> a = new ArrayList<>(Arrays.asList(
             "-hide_banner", "-loglevel", "error",
+            "-fflags", "+genpts+discardcorrupt",
+            "-err_detect", "ignore_err",
             "-f", "concat", "-safe", "0",
             "-i", concatPath,
             "-c", "copy"
@@ -953,6 +1098,7 @@ public class OfflineDownloader extends Plugin {
             cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
             cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
             cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/" + folder);
+            cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
             Uri uri = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             if (uri == null) throw new Exception("MediaStore insert null");
             try (InputStream in  = new BufferedInputStream(new FileInputStream(src));
@@ -962,6 +1108,11 @@ public class OfflineDownloader extends Plugin {
                 while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
                 out.flush();
             }
+            try {
+                ContentValues complete = new ContentValues();
+                complete.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                getContext().getContentResolver().update(uri, complete, null, null);
+            } catch (Exception ignored) {}
         } else {
             File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folder);
             dir.mkdirs();
@@ -1152,6 +1303,14 @@ public class OfflineDownloader extends Plugin {
             if (relUrl == null || relUrl.trim().isEmpty()) return relUrl;
             String trimmed = relUrl.trim();
             if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+                if (!trimmed.contains("?") && baseUrl != null && baseUrl.contains("?")) {
+                    try {
+                        URL base = new URL(baseUrl);
+                        if (base.getQuery() != null && !base.getQuery().isEmpty()) {
+                            return trimmed + "?" + base.getQuery();
+                        }
+                    } catch (Exception ignored) {}
+                }
                 return trimmed;
             }
             try {
@@ -1176,29 +1335,49 @@ public class OfflineDownloader extends Plugin {
         }
 
         private FetchResult fetchLinesWithUrl(String urlStr) throws Exception {
-            Request req = buildRequest(urlStr);
-            try (Response resp = http.newCall(req).execute()) {
-                if (!resp.isSuccessful() || resp.body() == null) {
-                    throw new IOException("HTTP " + resp.code() + " for " + urlStr);
+            Exception lastEx = null;
+            for (int a = 0; a < 4; a++) {
+                if (isCancelled.get()) throw new IOException("Task cancelled");
+                if (a > 0) {
+                    try { Thread.sleep(600L * a); } catch (InterruptedException ignored) {}
                 }
-                String finalUrl = resp.request().url().toString();
-                byte[] body = resp.body().bytes();
-                String text = new String(body, java.nio.charset.StandardCharsets.UTF_8).replace("\uFEFF", "");
-                List<String> ls = new ArrayList<>(Arrays.asList(text.split("\\r?\\n")));
-                if (!ls.isEmpty()) {
-                    String first = ls.get(0).trim();
-                    if (!first.startsWith("#EXTM3U") && !first.startsWith("#EXT")) {
-                        String preview = first.length() > 80 ? first.substring(0, 80) : first;
-                        throw new IOException("Non-M3U8 response: " + preview);
+                Request req = (a == 0) ? buildRequest(urlStr) : buildAdaptiveRequest(urlStr, a);
+                try (Response resp = http.newCall(req).execute()) {
+                    if (!resp.isSuccessful() || resp.body() == null) {
+                        lastEx = new IOException("HTTP " + resp.code() + " for " + urlStr);
+                        continue;
                     }
+                    String finalUrl = resp.request().url().toString();
+                    byte[] body = resp.body().bytes();
+                    String text = new String(body, java.nio.charset.StandardCharsets.UTF_8).replace("\uFEFF", "");
+                    List<String> ls = new ArrayList<>(Arrays.asList(text.split("\\r?\\n")));
+                    if (!ls.isEmpty()) {
+                        String first = ls.get(0).trim();
+                        if (!first.startsWith("#EXTM3U") && !first.startsWith("#EXT")) {
+                            String preview = first.length() > 80 ? first.substring(0, 80) : first;
+                            lastEx = new IOException("Non-M3U8 response: " + preview);
+                            continue;
+                        }
+                    }
+                    Log.d(TAG, "fetchLines " + urlStr + " (final: " + finalUrl + ") → " + ls.size() + " lines");
+                    return new FetchResult(finalUrl, ls);
+                } catch (Exception e) {
+                    lastEx = e;
                 }
-                Log.d(TAG, "fetchLines " + urlStr + " (final: " + finalUrl + ") → " + ls.size() + " lines");
-                return new FetchResult(finalUrl, ls);
             }
+            throw lastEx != null ? lastEx : new IOException("Failed to fetch playlist: " + urlStr);
         }
 
         private void downloadHLS(String fileName) throws Exception {
             String targetUrl = srvUrl;
+            if (targetUrl != null) {
+                String low = targetUrl.toLowerCase();
+                if (low.contains(".mp4") || low.contains(".mkv") || low.contains(".webm") || low.contains("videoplayback") || low.contains("format=mp4")) {
+                    Log.d(TAG, "Direct MP4/MKV stream detected in downloadHLS, routing to downloadMP4Direct: " + targetUrl);
+                    downloadMP4Direct(fileName);
+                    return;
+                }
+            }
             Log.d(TAG, "=== downloadHLS START ===");
             Log.d(TAG, "srvUrl: " + srvUrl);
             Log.d(TAG, "referer: " + referer);
@@ -1213,7 +1392,21 @@ public class OfflineDownloader extends Plugin {
                 Log.d(TAG, "Using JS pre-fetched playlist (" + lines.size() + " lines)");
             } else {
                 Log.d(TAG, "Fetching playlist via OkHttp: " + targetUrl);
-                FetchResult res = fetchLinesWithUrl(targetUrl);
+                FetchResult res;
+                try {
+                    res = fetchLinesWithUrl(targetUrl);
+                } catch (Exception eFetch) {
+                    if (eFetch.getMessage() != null && eFetch.getMessage().contains("Non-M3U8 response")) {
+                        Log.w(TAG, "Non-M3U8 response encountered, trying downloadMP4Direct as fallback: " + eFetch.getMessage());
+                        try {
+                            downloadMP4Direct(fileName);
+                            return;
+                        } catch (Exception eDirect) {
+                            Log.e(TAG, "MP4 direct fallback also failed: " + eDirect.getMessage());
+                        }
+                    }
+                    throw eFetch;
+                }
                 targetUrl = res.finalUrl;
                 lines = res.lines;
             }
@@ -1263,7 +1456,15 @@ public class OfflineDownloader extends Plugin {
                         if (uri != null) {
                             uri = uri.replaceAll("^\"|\"$", "");
                             uri = resolveUrl(targetUrl, uri);
-                            try { curKey = fetchBytes(uri); } catch (Exception ignored) {}
+                            for (int k = 0; k < 5; k++) {
+                                try {
+                                    curKey = fetchBytes(uri);
+                                    if (curKey != null && curKey.length == 16) break;
+                                } catch (Exception eKey) {
+                                    if (k == 4) Log.e(TAG, "Failed to fetch AES-128 key: " + eKey.getMessage());
+                                    try { Thread.sleep(500L * (k + 1)); } catch (InterruptedException ignored) {}
+                                }
+                            }
                         }
                         String ivStr = extractAttr(t, "IV");
                         curIV = (ivStr != null && ivStr.startsWith("0x")) ? hex2bytes(ivStr.substring(2)) : null;
@@ -1312,18 +1513,33 @@ public class OfflineDownloader extends Plugin {
             // Init segment (fMP4)
             if (isFmp4 && initUrl != null) {
                 if (isCancelled.get()) return;
-                byte[] initData = fetchBytes(initUrl);
-                try (FileOutputStream fos = new FileOutputStream(new File(tempDir, "init.mp4"))) { fos.write(initData); }
+                byte[] initData = null;
+                for (int ki = 0; ki < 5; ki++) {
+                    try {
+                        initData = fetchBytes(initUrl);
+                        if (initData != null && initData.length > 0) break;
+                    } catch (Exception eInit) {
+                        if (ki == 4) throw eInit;
+                        try { Thread.sleep(500L * (ki + 1)); } catch (InterruptedException ignored) {}
+                    }
+                }
+                if (initData != null) {
+                    try (FileOutputStream fos = new FileOutputStream(new File(tempDir, "init.mp4"))) { fos.write(initData); }
+                }
             }
 
-            // Download segments in parallel (16 threads for ultra-fast throughput)
+            // Download segments in parallel.
+            // Use 3 to 4 threads max — prevents CDN rate-limiting, 429 errors, and connection drops on mobile networks.
             int total = segUrls.size();
             AtomicInteger done = new AtomicInteger(0);
             AtomicBoolean failed = new AtomicBoolean(false);
             AtomicReference<Exception> failEx = new AtomicReference<>();
             final boolean enc = isEnc; final byte[] fKey = curKey; final List<byte[]> fIVs = segIVs;
 
-            ExecutorService pool = Executors.newFixedThreadPool(16); // 16 parallel segment downloads for maximum throughput
+            // Fixed 3 threads — prevents CDN 429 rate-limiting on mobile networks
+            // Adaptive thread scaling (3-5) caused burst requests that triggered rate-limits
+            int threadCount = 3;
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
             currentPool = pool;
             List<Future<?>> futures = new ArrayList<>();
             for (int i = 0; i < total; i++) {
@@ -1334,10 +1550,11 @@ public class OfflineDownloader extends Plugin {
                 futures.add(pool.submit(() -> {
                     if (failed.get() || isCancelled.get()) return;
                     for (int r = 0; r < 5; r++) {
-                        if (isCancelled.get()) return;
+                        if (isCancelled.get() || failed.get()) return;
                         try {
                             if (r > 0) {
-                                try { Thread.sleep(r * 200L); } catch (InterruptedException ignored) {}
+                                long backoff = Math.min(2500L, 250L * (1L << Math.min(r - 1, 3)));
+                                try { Thread.sleep(backoff); } catch (InterruptedException ignored) {}
                             }
                             if (isCancelled.get()) return;
                             Request req = (r == 0) ? buildRequest(segUrl) : buildAdaptiveRequest(segUrl, r);
@@ -1347,6 +1564,10 @@ public class OfflineDownloader extends Plugin {
                                 activeCalls.remove(call);
                                 if (isCancelled.get()) return;
                                 int code = resp.code();
+                                if (code == 429) {
+                                    try { Thread.sleep(1200L * (r + 1)); } catch (InterruptedException ignored) {}
+                                    throw new IOException("HTTP 429 Too Many Requests");
+                                }
                                 if (!resp.isSuccessful() || resp.body() == null) {
                                     String bodySnippet = "";
                                     try {
@@ -1365,9 +1586,21 @@ public class OfflineDownloader extends Plugin {
                                 if (enc && fKey != null && iv != null) {
                                     byte[] encryptedData = resp.body().bytes();
                                     byte[] decryptedData = aesDecrypt(encryptedData, fKey, iv);
+                                    int startOffset = 0;
+                                    if (decryptedData.length >= 16 
+                                        && decryptedData[0] == (byte) 0x89 && decryptedData[1] == (byte) 0x50
+                                        && decryptedData[2] == (byte) 0x4e && decryptedData[3] == (byte) 0x47) {
+                                        for (int p = 0; p < decryptedData.length - 8; p++) {
+                                            if (decryptedData[p] == 0x49 && decryptedData[p+1] == 0x45
+                                                && decryptedData[p+2] == 0x4E && decryptedData[p+3] == 0x44) {
+                                                startOffset = p + 8;
+                                                break;
+                                            }
+                                        }
+                                    }
                                     try (FileOutputStream fos = new FileOutputStream(segFile);
                                          BufferedOutputStream bos = new BufferedOutputStream(fos, 524288)) {
-                                        bos.write(decryptedData);
+                                        bos.write(decryptedData, startOffset, decryptedData.length - startOffset);
                                         bos.flush();
                                     }
                                 } else {
@@ -1393,7 +1626,9 @@ public class OfflineDownloader extends Plugin {
                                                 if (b == (target[matchIndex] & 0xFF)) {
                                                     matchIndex++;
                                                     if (matchIndex == 4) {
-                                                        bis.skip(4);
+                                                        for (int sk = 0; sk < 4; sk++) {
+                                                            if (bis.read() == -1) break;
+                                                        }
                                                         break;
                                                     }
                                                 } else {
@@ -1428,24 +1663,72 @@ public class OfflineDownloader extends Plugin {
                             return;
                         } catch (Exception e) {
                             if (isCancelled.get()) return;
-                            Log.w(TAG, "Segment " + idx + " download failed (attempt " + (r + 1) + "/4): " + e.getMessage());
-                            if (r >= 3) { failed.set(true); failEx.set(e); }
-                            else { try { Thread.sleep(Math.min(600, (r + 1) * 200)); } catch (Exception ignored) {} }
+                            if (r == 4) {
+                                Log.e(TAG, "Segment " + idx + " failed after 5 retries: " + e.getMessage());
+                                failEx.set(e);
+                                // CRITICAL FIX: Mark failed=true so partial-download detection works
+                                // Without this, failed.get() is always false → corrupt 50%-bridged MP4s
+                                failed.set(true);
+                                // Immediately shutdown pool to cancel all pending tasks
+                                // Without this, the pool waits 25min for other tasks that will also fail
+                                pool.shutdownNow();
+                                return;
+                            }
                         }
                     }
                 }));
             }
             pool.shutdown();
-            try { pool.awaitTermination(15, TimeUnit.MINUTES); } catch (InterruptedException ie) { failed.set(true); }
+            // 10-minute hard timeout (was 25min — caused downloads to appear "stuck" when segments fail)
+            // With failed=true triggering shutdownNow(), most failures exit much sooner
+            try { pool.awaitTermination(10, TimeUnit.MINUTES); } catch (InterruptedException ie) { failed.set(true); }
 
             if (isCancelled.get()) {
                 OfflineDownloader.rmrf(tempDir);
                 return;
             }
 
-            if (failed.get()) {
+            int completedCount = done.get();
+            int missingSegments = total - completedCount;
+
+            // Require ≥90% of segments to succeed — below that, the video would be too corrupted to play
+            // Previously was 50% which caused silent corrupt MP4 outputs with massive visual artifacts
+            int minRequired = (int)(total * 0.90);
+            if (completedCount == 0 || completedCount < minRequired) {
                 OfflineDownloader.rmrf(tempDir);
-                throw new Exception("Segment download failed: " + (failEx.get() != null ? failEx.get().getMessage() : "unknown"));
+                throw new Exception("Segment download failed: " + completedCount + "/" + total + " succeeded (need " + minRequired + ")"
+                        + (failEx.get() != null ? " — " + failEx.get().getMessage() : ""));
+            }
+
+            // Small-gap bridging: only bridge if ≤5% of segments are missing (e.g. brief network hiccup)
+            // For larger failures, we already aborted above — don't produce corrupt video
+            if (missingSegments > 0 && missingSegments <= Math.max(1, total / 20)) {
+                Log.w(TAG, "Bridging " + missingSegments + " missing segment(s) out of " + total + " (<= 5%, safe to bridge)");
+                String ext = isFmp4 ? "m4s" : "ts";
+                File lastValidFile = null;
+                for (int i = 0; i < total; i++) {
+                    File f = new File(tempDir, String.format(java.util.Locale.US, "seg_%06d.%s", i, ext));
+                    if (f.exists() && f.length() > 0) {
+                        lastValidFile = f;
+                        break;
+                    }
+                }
+                if (lastValidFile != null) {
+                    for (int i = 0; i < total; i++) {
+                        File f = new File(tempDir, String.format(java.util.Locale.US, "seg_%06d.%s", i, ext));
+                        if (!f.exists() || f.length() == 0) {
+                            try {
+                                copyFile(lastValidFile, f);
+                            } catch (Exception eBridge) {
+                                Log.e(TAG, "Failed to bridge segment " + i + ": " + eBridge.getMessage());
+                            }
+                        } else {
+                            lastValidFile = f;
+                        }
+                    }
+                }
+            } else if (missingSegments > 0) {
+                Log.w(TAG, "Skipping bridging: " + missingSegments + "/" + total + " missing (>5%) — video would be corrupt. Completed=" + completedCount);
             }
 
             plugin.emit(taskId, 92, "processing", null);
@@ -1490,18 +1773,32 @@ public class OfflineDownloader extends Plugin {
                     cv.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
                     cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
                     cv.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/" + folder);
+                    cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
                     Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                     if (uri == null) throw new Exception("MediaStore insert null");
-                    try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
-                        if (os == null) throw new Exception("MediaStore stream null");
-                        pipe(is, os, length);
+                    try {
+                        try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
+                            if (os == null) throw new Exception("MediaStore stream null");
+                            pipe(is, os, length);
+                        }
+                        ContentValues finishCv = new ContentValues();
+                        finishCv.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                        ctx.getContentResolver().update(uri, finishCv, null, null);
+                    } catch (Exception e) {
+                        try { ctx.getContentResolver().delete(uri, null, null); } catch (Exception ignored) {}
+                        throw e;
                     }
                 } else {
                     File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folder);
                     dir.mkdirs();
                     File out = new File(dir, fileName);
-                    try (OutputStream os = new FileOutputStream(out)) { pipe(is, os, length); }
-                    MediaScannerConnection.scanFile(ctx, new String[]{out.getAbsolutePath()}, new String[]{"video/mp4"}, null);
+                    try {
+                        try (OutputStream os = new FileOutputStream(out)) { pipe(is, os, length); }
+                        MediaScannerConnection.scanFile(ctx, new String[]{out.getAbsolutePath()}, new String[]{"video/mp4"}, null);
+                    } catch (Exception e) {
+                        try { out.delete(); } catch (Exception ignored) {}
+                        throw e;
+                    }
                 }
             }
         }
@@ -1524,25 +1821,40 @@ public class OfflineDownloader extends Plugin {
         }
 
         byte[] fetchBytes(String urlStr) throws Exception {
-            // Use buildRequest (fixed headers matching v1.5.7) — not adaptive.
-            // If the CDN requires anineko.to referer, adaptive would fail on retries.
-            Request req = buildRequest(urlStr);
-            try (Response resp = http.newCall(req).execute()) {
-                if (!resp.isSuccessful() || resp.body() == null) {
-                    throw new IOException("HTTP " + resp.code() + " for " + urlStr);
+            Exception lastEx = null;
+            for (int a = 0; a < 4; a++) {
+                if (isCancelled.get()) throw new IOException("Task cancelled");
+                if (a > 0) {
+                    try { Thread.sleep(400L * a); } catch (InterruptedException ignored) {}
                 }
-                return resp.body().bytes();
+                Request req = (a == 0) ? buildRequest(urlStr) : buildAdaptiveRequest(urlStr, a);
+                try (Response resp = http.newCall(req).execute()) {
+                    if (resp.isSuccessful() && resp.body() != null) {
+                        return resp.body().bytes();
+                    }
+                    lastEx = new IOException("HTTP " + resp.code() + " for " + urlStr);
+                } catch (Exception e) {
+                    lastEx = e;
+                }
             }
+            throw lastEx != null ? lastEx : new IOException("fetchBytes failed for " + urlStr);
         }
 
         private String getProperReferer(String urlStr, String fallbackRef) {
             if (urlStr == null) return fallbackRef != null ? fallbackRef : "";
             String lower = urlStr.toLowerCase();
-            if (lower.contains("megap.shiora") || lower.contains("megaplay") || lower.contains("rabbitstream") || lower.contains("mfast") || lower.contains("megacloud") || lower.contains("rapid-cloud")) {
-                return "https://megaplay.buzz/";
+            // Megaplay / Megacloud & AniHD direct CDNs
+            if (lower.contains("otakuhg") || lower.contains("premilkyway") || lower.contains("cdn-centaurus") || lower.contains("streamhg") || lower.contains("financialintelligence")) {
+                return "https://otakuhg.site/";
             }
-            if (lower.contains("akirax.buzz") || lower.contains("vidtube") || lower.contains("vidstream")) {
-                return "https://vidtube.site/";
+            if (lower.contains("otakuvid") || lower.contains("dramiyos") || lower.contains("acek-cdn") || lower.contains("earnvids") || lower.contains("mediadexmora")) {
+                return "https://otakuvid.online/";
+            }
+            if (lower.contains("megap") || lower.contains("megacloud") || lower.contains("rabbitstream")
+                    || lower.contains("mfast") || lower.contains("rapid-cloud") || lower.contains("kryntal")
+                    || lower.contains("norami") || lower.contains("imgnex") || lower.contains("dokicloud")
+                    || lower.contains("akirax.buzz") || lower.contains("akirax") || lower.contains("shiora") || lower.contains("mikora")) {
+                return "https://megaplay.buzz/";
             }
             if (lower.contains("vibevibe.workers.dev") || lower.contains("bibiemb")) {
                 return "https://bibiemb.xyz/";
@@ -1550,8 +1862,38 @@ public class OfflineDownloader extends Plugin {
             if (lower.contains("vivibebe")) {
                 return "https://vivibebe.site/";
             }
+            if (lower.contains("vidtube") || lower.contains("vidstream")) {
+                if (fallbackRef != null && (fallbackRef.contains("megap") || fallbackRef.contains("norami") || fallbackRef.contains("imgnex") || fallbackRef.contains("dokicloud"))) {
+                    return "https://megaplay.buzz/";
+                }
+                return "https://vidtube.site/";
+            }
             if (lower.contains("vidplay") || lower.contains("mycloud") || lower.contains("mcloud")) {
                 return "https://vidplay.online/";
+            }
+            if (lower.contains("echovideo")) {
+                return "https://play.echovideo.ru/";
+            }
+            if (lower.contains("anineko")) {
+                return "https://anineko.es/";
+            }
+            if (lower.contains("anivid")) {
+                return "https://anivid.net/";
+            }
+            if (lower.contains("gogoanime") || lower.contains("anitaku") || lower.contains("goload")) {
+                return "https://anitaku.to/";
+            }
+            if (lower.contains("desidub") || lower.contains("animedekho")) {
+                return "https://animedekho.to/";
+            }
+            if (lower.contains("animepahe") || lower.contains("pahe")) {
+                return "https://animepahe.ru/";
+            }
+            if (lower.contains("anizara") || lower.contains("aniwave")) {
+                return "https://aniwave.to/";
+            }
+            if (lower.contains("tiktokcdn") || lower.contains("tiktok") || lower.contains("snssdk")) {
+                return "https://megaplay.buzz/";
             }
             if (lower.contains("ibyteimg") || lower.contains("byteimg")) {
                 return ""; // Clean hotlink mode for ByteDance CDN
@@ -1601,31 +1943,11 @@ public class OfflineDownloader extends Plugin {
             b.header("Connection", "keep-alive");
 
             String properRef = getProperReferer(urlStr, referer);
-            String effectiveReferer = "";
-            if (attempt == 0) {
-                effectiveReferer = properRef;
-            } else if (attempt == 1) {
-                // attempt 1: Clean direct hotlink mode (no Referer/Origin) - bypasses anti-hotlinking rules
-                effectiveReferer = "";
-            } else if (attempt == 2) {
-                try {
-                    URL u = new URL(urlStr);
-                    effectiveReferer = u.getProtocol() + "://" + u.getHost() + "/";
-                } catch (Exception ignored) {}
-            } else if (attempt == 3) {
-                if (properRef != null && !properRef.isEmpty()) {
-                    effectiveReferer = properRef;
-                } else if (referer != null && !referer.isEmpty()) {
-                    try {
-                        URL u = new URL(referer);
-                        effectiveReferer = u.getProtocol() + "://" + u.getHost() + "/";
-                    } catch (Exception ignored) {}
-                }
-            } else {
-                effectiveReferer = srvUrl;
-            }
+            // CRITICAL FIX: NEVER corrupt or strip valid properRef on retries!
+            // CDNs like akirax.buzz, imgnex, norami, bibiemb strictly require their proper Referer.
+            String effectiveReferer = (properRef != null && !properRef.isEmpty()) ? properRef : "";
 
-            if (effectiveReferer != null && !effectiveReferer.isEmpty()) {
+            if (!effectiveReferer.isEmpty()) {
                 b.header("Referer", effectiveReferer);
                 try { URL ref = new URL(effectiveReferer); b.header("Origin", ref.getProtocol() + "://" + ref.getHost()); }
                 catch (Exception ignored) {}
@@ -1636,7 +1958,7 @@ public class OfflineDownloader extends Plugin {
                 StringBuilder sb = new StringBuilder();
                 android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
                 String c1 = cm.getCookie(urlStr);
-                String c2 = (effectiveReferer != null && !effectiveReferer.isEmpty()) ? cm.getCookie(effectiveReferer) : null;
+                String c2 = (!effectiveReferer.isEmpty()) ? cm.getCookie(effectiveReferer) : null;
                 if (c1 != null && !c1.isEmpty()) sb.append(c1);
                 if (c2 != null && !c2.isEmpty()) {
                     if (sb.length() > 0) sb.append("; ");
@@ -1651,9 +1973,21 @@ public class OfflineDownloader extends Plugin {
             return b.build();
         }
 
+        private static void copyFile(File src, File dst) throws IOException {
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = new FileOutputStream(dst)) {
+                byte[] buf = new byte[65536];
+                int len;
+                while ((len = in.read(buf)) > 0) {
+                    out.write(buf, 0, len);
+                }
+            }
+        }
+
         private void pipe(InputStream in, OutputStream out, long total) throws IOException {
             byte[] buf = new byte[65536]; long done = 0; int n; int lastP = 0;
             while ((n = in.read(buf)) != -1) {
+                if (isCancelled.get()) throw new IOException("Task cancelled");
                 out.write(buf, 0, n); done += n;
                 if (total > 0) {
                     int p = (int)(done * 95L / total);
@@ -1717,17 +2051,29 @@ public class OfflineDownloader extends Plugin {
                 }
 
                 String subReferer = referer;
-                // Resolve proxied subtitle URLs or url query params
-                if (subUrl.contains("/api/stream/subtitle?") || subUrl.contains("url=")) {
+                // Resolve native scheme or proxied subtitle URLs or url query params
+                if (subUrl.startsWith("subtitle-native://")) {
+                    try {
+                        Uri uri = Uri.parse(subUrl.replace("subtitle-native://", "https://native.local/"));
+                        String innerUrl = uri.getQueryParameter("url");
+                        if (innerUrl != null && !innerUrl.isEmpty()) {
+                            subUrl = java.net.URLDecoder.decode(innerUrl, "UTF-8");
+                        }
+                        String innerRef = uri.getQueryParameter("referer");
+                        if (innerRef != null && !innerRef.isEmpty()) {
+                            subReferer = java.net.URLDecoder.decode(innerRef, "UTF-8");
+                        }
+                    } catch (Exception ignored) {}
+                } else if (subUrl.contains("/api/stream/subtitle?") || subUrl.contains("url=")) {
                     try {
                         Uri uri = Uri.parse(subUrl.startsWith("http") ? subUrl : "https://dummy.org" + subUrl);
                         String innerUrl = uri.getQueryParameter("url");
                         if (innerUrl != null && !innerUrl.isEmpty()) {
-                            subUrl = innerUrl;
+                            subUrl = java.net.URLDecoder.decode(innerUrl, "UTF-8");
                         }
                         String innerRef = uri.getQueryParameter("referer");
                         if (innerRef != null && !innerRef.isEmpty()) {
-                            subReferer = innerRef;
+                            subReferer = java.net.URLDecoder.decode(innerRef, "UTF-8");
                         }
                     } catch (Exception ignored) {}
                 }
@@ -1738,10 +2084,11 @@ public class OfflineDownloader extends Plugin {
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
                     .header("Accept", "*/*");
                 
-                if (subReferer != null && !subReferer.isEmpty()) {
-                    reqBuilder.header("Referer", subReferer);
+                String properSubRef = getProperReferer(subUrl, subReferer);
+                if (properSubRef != null && !properSubRef.isEmpty()) {
+                    reqBuilder.header("Referer", properSubRef);
                     try {
-                        Uri refUri = Uri.parse(subReferer);
+                        Uri refUri = Uri.parse(properSubRef);
                         reqBuilder.header("Origin", refUri.getScheme() + "://" + refUri.getHost());
                     } catch (Exception ignored) {}
                 }
@@ -1756,14 +2103,28 @@ public class OfflineDownloader extends Plugin {
                 String subName = baseName + ".vtt";
                 String folder = plugin.getDownloadFolder();
 
-                // Always write directly to disk as primary or fallback
+                // 1. Dual-Store: Save directly to app's internal sandbox (guaranteed 100% permission-free read for AniPlayer)
+                try {
+                    File internalSubDir = new File(ctx.getFilesDir(), "subtitles");
+                    if (!internalSubDir.exists()) internalSubDir.mkdirs();
+                    File internalSubFile = new File(internalSubDir, subName);
+                    try (FileOutputStream fos = new FileOutputStream(internalSubFile)) {
+                        fos.write(data);
+                        fos.flush();
+                    }
+                    Log.d(TAG, "Subtitle saved to internal sandbox: " + internalSubFile.getAbsolutePath());
+                } catch (Exception exInternal) {
+                    Log.w(TAG, "Internal sandbox subtitle write failed: " + exInternal.getMessage());
+                }
+
+                // 2. Dual-Store: Save to public directory for external players (MX Player, VLC)
                 try {
                     writeSubtitleFallback(subName, data, folder);
                 } catch (Exception exDirect) {
                     Log.w(TAG, "Direct subtitle write failed: " + exDirect.getMessage());
                 }
 
-                // Also index in MediaStore on Android Q+
+                // 3. Dual-Store: Index in MediaStore on Android Q+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     try {
                         ContentValues cv = new ContentValues();

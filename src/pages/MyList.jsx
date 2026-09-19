@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bookmark, Heart, Play, X, CheckCircle2, Clock, Eye, ChevronDown } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getTitle, getCover } from '../api/anilist';
+import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
 import { registerBackButtonHandler } from '../utils/backButton';
 
 /* ── Status config ──────────────────────────────────────────────────────── */
@@ -58,7 +59,8 @@ function AnimeCard({ anime, status, progress, isFav, onRemove, onStatusChange, o
   const ep = progress?.[anime.id];
   const title = getTitle(anime);
   const cover = getCover(anime);
-  const pct = ep && anime.episodes ? Math.min(100, (ep.episode / anime.episodes) * 100) : 0;
+  const totalEps = getAiredEpisodeCount(anime) || anime.episodes || 0;
+  const pct = ep && totalEps ? Math.min(100, (ep.episode / totalEps) * 100) : 0;
 
   const handleRemove = (e) => {
     e.stopPropagation();
@@ -81,7 +83,7 @@ function AnimeCard({ anime, status, progress, isFav, onRemove, onStatusChange, o
     >
       {/* ── Poster ─────────────────────────────────────────────────────── */}
       <div
-        onClick={() => navigate(`/anime/${anime.id}`)}
+        onClick={() => navigate(`/anime/${anime.id}`, { state: { anime }, viewTransition: true })}
         style={{
           position: 'relative', borderRadius: 12, overflow: 'hidden',
           aspectRatio: '2/3', background: '#111',
@@ -92,7 +94,7 @@ function AnimeCard({ anime, status, progress, isFav, onRemove, onStatusChange, o
         onTouchEnd={e => { e.currentTarget.style.transform = 'scale(1)'; }}
       >
         <img
-          src={cover} alt={title} loading="lazy"
+          src={cover} alt={title} loading="eager" decoding="async"
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
         />
 

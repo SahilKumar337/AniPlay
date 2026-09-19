@@ -5,7 +5,7 @@
   "changelog": "[TEST BUILD] Added new server AniHD and AniVid, fixed Sword Art Online/One Piece matching issues, and resolved mid-playback HLS timeouts.",
   "forceUpdate": false,
   "domains": {
-    "neko": "https://anineko.to",
+    "neko": "https://anineko.es",
     "waves": "https://aniwaves.ru",
     "gogo": "https://anitaku.bz",
     "fallback_gogo": "https://anitaku.so",

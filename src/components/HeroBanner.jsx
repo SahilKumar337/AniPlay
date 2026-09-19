@@ -1,35 +1,56 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { Play, Plus, Check, Star } from 'lucide-react';
+import { Play, Plus, Check, Star, Info } from 'lucide-react';
 import { getTitle } from '../api/anilist';
 import { useApp } from '../context/AppContext';
 
 const AUTO_INTERVAL = 7000;
 
+export function getHeroBannerImage(anime) {
+  return anime?.coverImage?.extraLarge || anime?.coverImage?.large || anime?.coverImage?.medium || '';
+}
+
 export default function HeroBanner({ animes = [] }) {
   const navigate = useNavigate();
   const { addToWatchlist, removeFromWatchlist, isInWatchlist } = useApp();
   const [current, setCurrent] = useState(0);
-  const [prev, setPrev]       = useState(-1);
-  const [phase, setPhase]     = useState('idle');
+  const [transitioning, setTransitioning] = useState(false);
   const timerRef    = useRef(null);
   const touchRef    = useRef(0);
+  const rafRef      = useRef(null);
   const total       = Math.min(animes.length, 8);
 
-  /* ── Slide transition state machine ────────────── */
+  // Persistent ambient img ref — never remounted, src updates in-place
+  // so the blurred GPU layer is promoted once and never torn down
+  const ambientRef = useRef(null);
+
+  /* ── RAF-synced slide transition ────────────────────────────────
+     Using requestAnimationFrame keeps the opacity crossfade locked
+     to the display refresh cycle and avoids React re-renders during
+     the animation itself. Only 2 setState calls total, not chained. */
   const goTo = useCallback((to) => {
-    if (phase !== 'idle' || !total) return;
+    if (transitioning || !total) return;
     const target = ((to % total) + total) % total;
     if (target === current) return;
-    setPrev(current);
-    setPhase('exit');
-    setTimeout(() => {
-      setCurrent(target);
-      setPhase('enter');
-      setTimeout(() => setPhase('idle'), 500);
-    }, 420);
-  }, [phase, current, total]);
+
+    setTransitioning(true);
+
+    // Sync ambient src update to the NEXT frame so paint is batched
+    rafRef.current = requestAnimationFrame(() => {
+      const next = animes[target];
+      const nextImg = getHeroBannerImage(next);
+      if (ambientRef.current && nextImg) {
+        ambientRef.current.src = nextImg;
+      }
+
+      // After 400ms CSS transition completes, commit new slide index
+      setTimeout(() => {
+        setCurrent(target);
+        setTransitioning(false);
+      }, 420);
+    });
+  }, [transitioning, current, total, animes]);
 
   const advance = useCallback(() => goTo(current + 1), [goTo, current]);
 
@@ -39,6 +60,32 @@ export default function HeroBanner({ animes = [] }) {
   }, [advance, total]);
 
   useEffect(() => { resetTimer(); return () => clearInterval(timerRef.current); }, [resetTimer]);
+
+  // Cancel any pending RAF on unmount
+  useEffect(() => () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  // Preload all 8 slides into memory cache immediately on mount for 0ms instant display
+  useEffect(() => {
+    if (!animes?.length) return;
+    animes.slice(0, 8).forEach(a => {
+      const heroUrl = getHeroBannerImage(a);
+      if (heroUrl) {
+        const img = new Image();
+        img.fetchPriority = 'high';
+        img.decoding = 'async';
+        img.src = heroUrl;
+        img.decode?.().catch(() => {});
+      }
+      const xl = a?.coverImage?.extraLarge;
+      if (xl && xl !== heroUrl) {
+        const img2 = new Image();
+        img2.decoding = 'async';
+        img2.src = xl;
+      }
+    });
+  }, [animes]);
 
   /* ── Touch swipe ── */
   const onTouchStart = (e) => { touchRef.current = e.touches[0].clientX; };
@@ -58,12 +105,14 @@ export default function HeroBanner({ animes = [] }) {
 
   const anime   = animes[current];
   const title   = getTitle(anime);
-  // Use cover image (poster art)
-  const cover   = anime.coverImage?.extraLarge || anime.coverImage?.large || anime.coverImage?.medium || '';
   const inList  = isInWatchlist(anime.id);
   const score   = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
   const genres  = (anime.genres || []).slice(0, 2);
   const desc    = (anime.description || '').replace(/<[^>]*>/g, '').trim();
+  const isNotReleased = anime?.status === 'NOT_YET_RELEASED' || (anime?.episodes === 0 && !anime?.nextAiringEpisode) || (anime?.status === 'RELEASING' && anime?.nextAiringEpisode?.episode === 1);
+
+  // Initial ambient src
+  const initialAmbient = getHeroBannerImage(animes[0]);
 
   return (
     <div
@@ -82,54 +131,74 @@ export default function HeroBanner({ animes = [] }) {
         background: '#04040a',
       }}>
 
-        {/* ── Previous image (crossfade out) — FULL WIDTH ── */}
-        {prev >= 0 && phase === 'exit' && (
-          <img
-            key={`prev-${prev}`}
-            src={(() => {
-              const p = animes[prev];
-              return p?.coverImage?.extraLarge || p?.coverImage?.large || '';
-            })()}
-            alt="" aria-hidden="true"
-            style={{
-              position: 'absolute', inset: 0,
-              width: '100%', height: '100%',
-              objectFit: 'cover', objectPosition: 'center top',
-              opacity: 1,
-              transition: 'opacity 0.5s ease-out',
-              zIndex: 1,
-            }}
-          />
-        )}
-
-        {/* ── Current cover image — FULL WIDTH background ── */}
+        {/* ── Persistent ambient blurred backdrop ───────────────────────────
+            Key is intentionally ABSENT — this element lives forever.
+            GPU layer is promoted once via will-change:transform and never
+            torn down. Src updates happen in-place via ambientRef.
+            filter:blur is never animated — only src changes, which the
+            browser composites cheaply. */}
         <img
-          key={`curr-${current}`}
-          src={cover}
-          alt={title}
+          ref={ambientRef}
+          src={initialAmbient}
+          alt=""
+          aria-hidden="true"
+          decoding="async"
           style={{
             position: 'absolute', inset: 0,
             width: '100%', height: '100%',
-            objectFit: 'cover', objectPosition: 'center top',
-            opacity: phase === 'exit' ? 0 : 1,
-            transition: 'opacity 0.55s ease',
-            willChange: 'opacity',
-            zIndex: 2,
+            objectFit: 'cover',
+            filter: 'blur(35px) brightness(0.65)',
+            transform: 'scale(1.2) translateZ(0)',
+            willChange: 'transform',  // promoted once; filter never changes during animation
+            zIndex: 1,
           }}
         />
 
-        {/* ── Minimal gradient overlays — NO heavy black gradients ── */}
-        {/* Top gradient — subtle, just for header readability */}
+        {/* ── High-Resolution Pre-Rendered Image Stack (0ms instant slide display) ── */}
+        {animes.slice(0, 8).map((a, idx) => {
+          const isCurrent = idx === current;
+          const extraLarge = a?.coverImage?.extraLarge || '';
+          const large = a?.coverImage?.large || a?.coverImage?.medium || '';
+          const heroSrc = extraLarge || large;
+          if (!heroSrc) return null;
+
+          return (
+            <img
+              key={a.id || idx}
+              src={heroSrc}
+              alt={getTitle(a)}
+              decoding="async"
+              loading={idx === 0 ? 'eager' : 'lazy'}
+              fetchPriority={idx === 0 ? 'high' : 'auto'}
+              onError={(e) => {
+                if (large && e.currentTarget.src !== large) {
+                  e.currentTarget.src = large;
+                }
+              }}
+              style={{
+                position: 'absolute', inset: 0,
+                width: '100%', height: '100%',
+                objectFit: 'cover',
+                objectPosition: 'center 20%',
+                opacity: isCurrent ? (transitioning ? 0 : 1) : 0,
+                transition: 'opacity 0.42s cubic-bezier(0.4, 0, 0.2, 1)',
+                willChange: 'opacity',
+                pointerEvents: 'none',
+                zIndex: isCurrent ? 3 : 2,
+              }}
+            />
+          );
+        })}
+
+        {/* ── Gradient overlays ── */}
         <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, height: '22%',
-          zIndex: 3, pointerEvents: 'none',
+          zIndex: 4, pointerEvents: 'none',
           background: 'linear-gradient(to bottom, rgba(4,4,10,0.5) 0%, transparent 100%)',
         }} />
-
-        {/* Bottom gradient — seamless blend into content below, no flash line */}
         <div style={{
           position: 'absolute', bottom: -2, left: 0, right: 0, height: '58%',
-          zIndex: 3, pointerEvents: 'none',
+          zIndex: 4, pointerEvents: 'none',
           background: `linear-gradient(to bottom,
             transparent 0%,
             rgba(4,4,10,0.15) 20%,
@@ -140,15 +209,13 @@ export default function HeroBanner({ animes = [] }) {
           )`,
         }} />
 
-        {/* ── LEFT SIDE TEXT CONTENT ── */}
+        {/* ── TEXT CONTENT — opacity-only fade ── */}
         <div style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
-          zIndex: 4, padding: '0 16px 20px',
-          opacity: phase === 'exit' ? 0 : 1,
-          transform: phase === 'exit' ? 'translateY(8px)' : 'translateY(0)',
-          transition: 'opacity 0.4s ease, transform 0.4s ease',
+          zIndex: 5, padding: '0 16px 20px',
+          opacity: transitioning ? 0 : 1,
+          transition: 'opacity 0.38s cubic-bezier(0.4, 0, 0.2, 1)',
         }}>
-
           {/* Genre + Score badges */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             {genres.map(g => (
@@ -204,20 +271,21 @@ export default function HeroBanner({ animes = [] }) {
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <motion.button
-              onClick={() => navigate(`/anime/${anime.id}`, { viewTransition: true })}
+              onClick={() => navigate(`/anime/${anime.id}`, { state: { anime }, viewTransition: true })}
               whileTap={{ scale: 0.94 }}
               transition={{ type: 'spring', stiffness: 500, damping: 28 }}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                padding: '10px 24px', borderRadius: 28,
-                background: 'var(--accent)',
-                color: '#fff', border: 'none', fontSize: 13, fontWeight: 800,
+                padding: isNotReleased ? '10px 20px' : '10px 24px', borderRadius: 28,
+                background: isNotReleased ? 'rgba(255, 255, 255, 0.14)' : 'var(--accent)',
+                backdropFilter: isNotReleased ? 'blur(10px)' : undefined,
+                color: '#fff', border: isNotReleased ? '1px solid rgba(255, 255, 255, 0.25)' : 'none', fontSize: 13, fontWeight: 800,
                 cursor: 'pointer',
-                boxShadow: '0 4px 20px color-mix(in srgb, var(--accent) 40%, transparent)',
+                boxShadow: isNotReleased ? 'none' : '0 4px 20px color-mix(in srgb, var(--accent) 40%, transparent)',
               }}
             >
-              <Play size={15} fill="#fff" strokeWidth={0} />
-              Play
+              {isNotReleased ? <Info size={15} /> : <Play size={15} fill="#fff" strokeWidth={0} />}
+              {isNotReleased ? 'View Details' : 'Play'}
             </motion.button>
             <motion.button
               onClick={() => inList ? removeFromWatchlist(anime.id) : addToWatchlist(anime)}
@@ -238,16 +306,16 @@ export default function HeroBanner({ animes = [] }) {
           </div>
         </div>
 
-        {/* ── Slide counter — BOTTOM RIGHT ── */}
+        {/* ── Slide counter — solid bg, NO backdrop-filter blur ──
+            backdrop-filter inside a scrolling/animated container forces
+            the compositor to re-sample on every frame. Use solid instead. */}
         {total > 1 && (
           <div style={{
             position: 'absolute', bottom: 20, right: 16,
-            zIndex: 5,
+            zIndex: 6,
             fontSize: 11, fontWeight: 700,
-            color: 'rgba(255,255,255,0.7)',
-            background: 'rgba(0,0,0,0.45)',
-            backdropFilter: 'blur(10px)',
-            WebkitBackdropFilter: 'blur(10px)',
+            color: 'rgba(255,255,255,0.75)',
+            background: 'rgba(0, 0, 0, 0.55)',   // ← solid, not blur
             padding: '3px 10px',
             borderRadius: 12,
             border: '1px solid rgba(255,255,255,0.1)',
@@ -260,10 +328,7 @@ export default function HeroBanner({ animes = [] }) {
 
       {/* Preload next slide */}
       {total > 1 && (
-        <link rel="preload" as="image" href={(() => {
-          const n = animes[(current + 1) % total];
-          return n?.coverImage?.extraLarge || n?.coverImage?.large || '';
-        })()} />
+        <link rel="preload" as="image" href={getHeroBannerImage(animes[(current + 1) % total])} />
       )}
     </div>
   );

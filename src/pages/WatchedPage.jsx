@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Clock, ArrowLeft, Trash2, Play } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getTitle, getCover } from '../api/anilist';
+import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
 
 export default function WatchedPage() {
   const navigate = useNavigate();
@@ -92,13 +93,13 @@ export default function WatchedPage() {
                 const title = getTitle(anime);
                 const cover = getCover(anime);
                 const currentProg = progress[anime.id];
-                const totalEps = anime.episodes || 0;
+                const totalEps = getAiredEpisodeCount(anime) || anime.episodes || 0;
                 const progressPct = (currentProg && totalEps) ? (currentProg.episode / totalEps) * 100 : 0;
 
                 return (
                   <div
                     key={anime.id}
-                    onClick={() => navigate(`/anime/${anime.id}?play=true&ep=${episode}`)}
+                    onClick={() => navigate(`/anime/${anime.id}?play=true&ep=${episode}&direct=true`, { state: { anime, directPlay: true } })}
                     style={{
                       background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
                       padding: 10, display: 'flex', gap: 12, cursor: 'pointer', position: 'relative',
@@ -178,14 +179,14 @@ export default function WatchedPage() {
                   <div
                     key={anime.id}
                     className="mylist-card"
-                    onClick={() => navigate(`/anime/${anime.id}`)}
+                    onClick={() => navigate(`/anime/${anime.id}`, { state: { anime } })}
                     role="button"
                     tabIndex={0}
-                    onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`)}
+                    onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`, { state: { anime } })}
                     aria-label={title}
                   >
                     <div className="mylist-card-poster">
-                      <img src={cover} alt={title} loading="lazy" />
+                      <img src={cover} alt={title} loading="eager" decoding="async" />
                     </div>
                     <div className="mylist-card-info">
                       <div className="mylist-card-title">{title}</div>

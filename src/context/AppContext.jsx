@@ -95,13 +95,15 @@ export function AppProvider({ children }) {
   useEffect(() => {
     async function loadData() {
       try {
-        // Try loading from native preferences
-        const wVal = await Preferences.get({ key: 'aniplay_watchlist' });
-        const fVal = await Preferences.get({ key: 'aniplay_favorites' });
-        const rVal = await Preferences.get({ key: 'aniplay_recently_viewed' });
-        const pVal = await Preferences.get({ key: 'aniplay_progress' });
-        const sVal = await Preferences.get({ key: 'aniplay_settings' });
-        const lcVal = await Preferences.get({ key: 'aniplay_liked_comments' });
+        // Concurrently load all native preferences in a single batched IPC round-trip
+        const [wVal, fVal, rVal, pVal, sVal, lcVal] = await Promise.all([
+          Preferences.get({ key: 'aniplay_watchlist' }),
+          Preferences.get({ key: 'aniplay_favorites' }),
+          Preferences.get({ key: 'aniplay_recently_viewed' }),
+          Preferences.get({ key: 'aniplay_progress' }),
+          Preferences.get({ key: 'aniplay_settings' }),
+          Preferences.get({ key: 'aniplay_liked_comments' }),
+        ]);
 
         let finalWatchlist = wVal.value ? JSON.parse(wVal.value) : null;
         let finalFavorites = fVal.value ? JSON.parse(fVal.value) : null;
@@ -227,8 +229,8 @@ export function AppProvider({ children }) {
       }
 
       // ── Incremental fetch: only download rows changed since last sync ──
-      // On first ever sync (no lastSyncAt) download everything.
-      const sinceTs = lastSyncAt
+      // On first ever sync (no lastSyncAt) or forced sync (e.g. sign-in) download everything.
+      const sinceTs = (!force && lastSyncAt)
         ? new Date(Number(lastSyncAt)).toISOString()
         : null;
 
@@ -933,25 +935,100 @@ export function AppProvider({ children }) {
     const rawEp = typeof epOrObj === 'object' && epOrObj !== null ? epOrObj.episode : epOrObj;
     const episode = typeof rawEp === 'object' && rawEp !== null ? (rawEp.episode || 1) : (Number(rawEp) || 1);
     const timestamp = (typeof epOrObj === 'object' && epOrObj !== null && epOrObj.timestamp) || Date.now();
-    // Store seek position (seconds into episode) and duration for Netflix-style resume
-    const seek = seekPosition != null ? Math.floor(seekPosition) : (progressRef.current[animeId]?.seekPosition ?? null);
-    const dur  = duration    != null ? Math.floor(duration)    : (progressRef.current[animeId]?.duration    ?? null);
-    setProgress(prev => ({ ...prev, [animeId]: { episode, timestamp, seekPosition: seek, duration: dur } }));
+    const prevEntry = progressRef.current[animeId] || {};
+    const prevEpisodes = prevEntry.episodes || {};
+
+    const seek = seekPosition != null ? Math.floor(seekPosition) : (prevEpisodes[episode]?.seekPosition ?? (prevEntry.episode === episode ? prevEntry.seekPosition : null));
+    const dur  = duration != null ? Math.floor(duration) : (prevEpisodes[episode]?.duration ?? (prevEntry.episode === episode ? prevEntry.duration : null));
+
+    const updatedEpisodes = {
+      ...prevEpisodes,
+      [episode]: {
+        seekPosition: seek,
+        duration: dur,
+        timestamp,
+      }
+    };
+
+    const nextEntry = {
+      ...prevEntry,
+      episode,
+      timestamp,
+      seekPosition: seek,
+      duration: dur,
+      episodes: updatedEpisodes,
+    };
+
+    // Synchronous fast-cache write for immediate instant resume
+    try {
+      if (seek != null) {
+        localStorage.setItem(`aniplay_resume_${animeId}_${episode}`, String(seek));
+      }
+    } catch {}
+
+    progressRef.current = {
+      ...progressRef.current,
+      [animeId]: nextEntry,
+    };
+
+    setProgress(prev => ({
+      ...prev,
+      [animeId]: nextEntry,
+    }));
+
     pushAnimeToCloudRef.current?.(animeId, { episode, timestamp });
     triggerDebouncedSyncRef.current?.();
   }, []);
 
-  const getEpisodeProgress = useCallback((animeId) => {
+  const getEpisodeProgress = useCallback((animeId, specificEp = null) => {
     const p = progressRef.current[animeId];
+    const targetEp = specificEp != null ? Number(specificEp) : null;
+
+    // Check specific episode if requested
+    if (targetEp != null && p?.episodes?.[targetEp]) {
+      const epData = p.episodes[targetEp];
+      return {
+        episode: targetEp,
+        timestamp: epData.timestamp || 0,
+        seekPosition: epData.seekPosition ?? null,
+        duration: epData.duration ?? null,
+      };
+    }
+
+    // Check synchronous fast-cache for requested episode
+    if (targetEp != null) {
+      try {
+        const localSaved = localStorage.getItem(`aniplay_resume_${animeId}_${targetEp}`);
+        if (localSaved != null) {
+          const parsedSeek = parseFloat(localSaved);
+          if (!isNaN(parsedSeek) && parsedSeek > 0) {
+            return {
+              episode: targetEp,
+              timestamp: p?.timestamp || 0,
+              seekPosition: parsedSeek,
+              duration: p?.duration ?? null,
+            };
+          }
+        }
+      } catch {}
+    }
+
     if (!p) return null;
     const rawEp = typeof p.episode === 'object' && p.episode !== null ? p.episode.episode : p.episode;
-    return {
-      episode:     Number(rawEp) || 1,
-      timestamp:   p.timestamp || 0,
-      seekPosition: p.seekPosition ?? null,   // seconds into the episode (for resume)
-      duration:    p.duration ?? null,         // total episode duration in seconds
-    };
-  }, []); // STABLE — reads progressRef.current, not progress state
+    const currentEp = Number(rawEp) || 1;
+
+    // If targetEp was specified and matches currentEp or if no targetEp was specified
+    if (targetEp == null || targetEp === currentEp) {
+      return {
+        episode: currentEp,
+        timestamp: p.timestamp || 0,
+        seekPosition: p.seekPosition ?? null,
+        duration: p.duration ?? null,
+      };
+    }
+
+    return null;
+  }, []);
 
 
   const addToRecentlyViewed = useCallback((anime, episode) => {
@@ -979,34 +1056,86 @@ export function AppProvider({ children }) {
     triggerDebouncedSyncRef.current?.();
   }, []); // STABLE
 
+  // ── Remove a single anime from history (watching) ─────────────────────────
+  // Removes from recentlyViewed + progress (local + cloud).
+  // BUG FIX: previous version had a stale closure where nextRecently was always
+  // [] because it was captured before the setRecentlyViewed callback ran.
   const removeFromRecentlyViewed = useCallback((animeId) => {
-    let nextRecently = [];
-    // Remove from recentlyViewed array
+    const id = String(animeId);
+
+    // 1. Remove from React state — both sources that feed the "watching" list
     setRecentlyViewed(prev => {
-      nextRecently = prev.filter(item => item?.anime?.id !== animeId);
-      return nextRecently;
-    });
-    // Also remove from progress so it disappears from continueWatchingList (which combines both sources)
-    setProgress(prev => {
-      const next = { ...prev };
-      delete next[animeId];
+      const next = prev.filter(item => String(item?.anime?.id) !== id);
+      // Persist locally INSIDE the callback so we have the correct value
+      Preferences.set({ key: 'aniplay_recently_viewed', value: JSON.stringify(next) }).catch(() => {});
+      // Sync the filtered list to cloud (fire-and-forget)
+      if (userRef.current) {
+        updateCloudRecentlyViewed(next).catch(e => console.warn('[Sync] recentlyViewed:', e.message));
+      }
       return next;
     });
-    showToast('Removed from Continue Watching');
 
-    // Immediate cloud writes for BOTH watchlist table and user_profiles table!
-    const u = userRef.current;
-    if (u) {
+    setProgress(prev => {
+      const next = { ...prev };
+      delete next[id];
+      // Persist progress deletion immediately
+      Preferences.set({ key: 'aniplay_progress', value: JSON.stringify(next) }).catch(() => {});
+      return next;
+    });
+
+    // 2. Delete from Supabase watchlist table
+    if (userRef.current) {
       supabase
         .from('watchlist')
         .delete()
-        .eq('user_id', u.id)
-        .eq('anime_id', String(animeId))
-        .then(({ error }) => { if (error) console.warn('[Sync] remove error:', error.message); });
-
-      updateCloudRecentlyViewed(nextRecently).catch(e => console.warn('[RecentlyViewed Sync]', e.message));
+        .eq('user_id', userRef.current.id)
+        .eq('anime_id', id)
+        .then(({ error }) => { if (error) console.warn('[Sync] watchlist delete error:', error.message); });
     }
-    triggerDebouncedSyncRef.current?.();
+
+    showToast('Removed from history');
+  }, []); // STABLE — uses refs, not captured state
+
+  // ── Remove a completed anime from history ────────────────────────────────
+  // Removes from watchlist + favorites + recentlyViewed + progress (local + cloud).
+  const removeFromHistory = useCallback((animeId) => {
+    const id = String(animeId);
+
+    // Remove from all local state stores
+    setWatchlist(prev => {
+      const next = { ...prev };
+      delete next[id];
+      Preferences.set({ key: 'aniplay_watchlist', value: JSON.stringify(next) }).catch(() => {});
+      return next;
+    });
+
+    setProgress(prev => {
+      const next = { ...prev };
+      delete next[id];
+      Preferences.set({ key: 'aniplay_progress', value: JSON.stringify(next) }).catch(() => {});
+      return next;
+    });
+
+    setRecentlyViewed(prev => {
+      const next = prev.filter(item => String(item?.anime?.id) !== id);
+      Preferences.set({ key: 'aniplay_recently_viewed', value: JSON.stringify(next) }).catch(() => {});
+      if (userRef.current) {
+        updateCloudRecentlyViewed(next).catch(() => {});
+      }
+      return next;
+    });
+
+    // Delete from Supabase watchlist table
+    if (userRef.current) {
+      supabase
+        .from('watchlist')
+        .delete()
+        .eq('user_id', userRef.current.id)
+        .eq('anime_id', id)
+        .then(({ error }) => { if (error) console.warn('[Sync] watchlist delete error:', error.message); });
+    }
+
+    showToast('Removed from history');
   }, []); // STABLE
 
   // ── Liked Comments (local only, for comment reaction UI) ───────────────
@@ -1041,7 +1170,7 @@ export function AppProvider({ children }) {
     watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
     favorites, toggleFavorite, isFavorite,
     progress, setEpisodeProgress, getEpisodeProgress,
-    recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
+    recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed, removeFromHistory,
     likedComments, toggleLikeComment,
     showToast, loaded, user, userProfile, syncWithCloud, flushSync,
     settings, updateSettings,
@@ -1051,7 +1180,7 @@ export function AppProvider({ children }) {
     watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
     favorites, toggleFavorite, isFavorite,
     progress, setEpisodeProgress, getEpisodeProgress,
-    recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed,
+    recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed, removeFromHistory,
     likedComments, toggleLikeComment,
     showToast, loaded, user, syncWithCloud, flushSync,
     settings, updateSettings, refreshUnreadCount

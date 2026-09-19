@@ -51,6 +51,74 @@ public class APKUpdaterPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void openExternalUrl(PluginCall call) {
+        String urlString = call.getString("url");
+        if (urlString == null || urlString.isEmpty()) {
+            call.reject("URL is required");
+            return;
+        }
+        try {
+            android.content.Intent intent = new android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse(urlString)
+            );
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void share(PluginCall call) {
+        String title = call.getString("title", "Share AniPlay");
+        String text = call.getString("text", "");
+        String url = call.getString("url", "");
+        String dialogTitle = call.getString("dialogTitle", "Share via");
+
+        try {
+            // Also copy URL to system clipboard
+            if (url != null && !url.isEmpty()) {
+                try {
+                    android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        android.content.ClipData clip = android.content.ClipData.newPlainText("AniPlay Link", url);
+                        clipboard.setPrimaryClip(clip);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            android.content.Intent shareIntent = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+
+            String shareBody = text;
+            if (url != null && !url.isEmpty()) {
+                if (shareBody != null && !shareBody.isEmpty()) {
+                    shareBody = shareBody + "\n\n" + url;
+                } else {
+                    shareBody = url;
+                }
+            }
+
+            shareIntent.putExtra(android.content.Intent.EXTRA_SUBJECT, title);
+            shareIntent.putExtra(android.content.Intent.EXTRA_TEXT, shareBody);
+
+            android.content.Intent chooser = android.content.Intent.createChooser(shareIntent, dialogTitle);
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            if (getActivity() != null) {
+                getActivity().startActivity(chooser);
+            } else {
+                getContext().startActivity(chooser);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Failed to open share dialog: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
     public void downloadAndInstall(PluginCall call) {
         String urlString = call.getString("url");
         if (urlString == null) {

@@ -1,6 +1,7 @@
+import { memo } from 'react';
 import AnimeCard from './AnimeCard';
 
-export default function AnimeRow({
+function AnimeRow({
   title,
   subtitle,
   animes = [],
@@ -48,3 +49,5 @@ export default function AnimeRow({
     </section>
   );
 }
+
+export default memo(AnimeRow);

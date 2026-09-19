@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bell, Heart, MessageCircle, ChevronRight, Trash2, Play, Activity, ArrowLeft, CheckCheck } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { supabase } from '../api/supabase';
+import LoadingWheel from '../components/ui/LoadingWheel';
 
 export default function Notifications() {
   const navigate = useNavigate();
@@ -431,12 +432,8 @@ export default function Notifications() {
             subtitle="Never miss comment likes, replies, or new episode drops."
           />
         ) : loading ? (
-          <div style={{ padding: '60px 0', paddingTop: 'var(--sat)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-            <div className="spin" style={{
-              width: 32, height: 32, borderRadius: '50%',
-              border: '3px solid var(--accent)', borderTopColor: 'transparent'
-            }} />
-            <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 500 }}>Loading notifications...</span>
+          <div style={{ padding: '60px 0', paddingTop: 'var(--sat)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <LoadingWheel size={40} text="Loading notifications..." />
           </div>
         ) : filteredNotifs.length === 0 ? (
           <div style={{

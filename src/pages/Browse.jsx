@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, SlidersHorizontal, X, Star, Play, Tag, Loader, Check, RotateCcw } from 'lucide-react';
+import { Search, SlidersHorizontal, X, Star, Play, Tag, Check, RotateCcw } from 'lucide-react';
 import { motion } from 'motion/react';
 import AppDrawer from '../components/ui/AppDrawer';
+import LoadingWheel from '../components/ui/LoadingWheel';
 import {
   searchAnime, getTitle, getCover, getDisplayGenresOrTags,
   getTrending, getAiring, getSeasonal,
@@ -11,12 +12,13 @@ import {
 import { useApp } from '../context/AppContext';
 import { rankAnimeByKnn } from '../utils/knn';
 import { searchAndRankAnime } from '../utils/searchEngine';
+import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
 import { useDebounce } from '../hooks/useDebounce';
 
 
 const GENRES = [
   'Action', 'Adventure', 'Cars', 'Comedy', 'Dementia', 'Demons', 'Drama', 'Ecchi',
-  'Fantasy', 'Game', 'Harem', 'Historical', 'Horror', 'Isekai', 'Josei', 'Kids',
+  'Fantasy', 'Game', 'Harem', 'Hentai', 'Historical', 'Horror', 'Isekai', 'Josei', 'Kids',
   'Magic', 'Mahou Shoujo', 'Martial Arts', 'Mecha', 'Military', 'Music', 'Mystery',
   'Parody', 'Police', 'Psychological', 'Romance', 'Samurai', 'School', 'Sci-Fi',
   'Seinen', 'Shoujo', 'Shoujo Ai', 'Shounen', 'Shounen Ai', 'Slice of Life', 'Space',
@@ -160,7 +162,7 @@ export default function Browse() {
   // doSearch and loadMore now have [] deps (STABLE, never recreate).
   // They read fetchPageRef.current at call-time — always fresh, never stale.
   const fetchPage = useCallback(async (pg) => {
-    const PER_PAGE = 24;
+    const PER_PAGE = 20;
     let rows = [];
     let rawCount = 0;
     let hasNextPage = false;
@@ -550,8 +552,8 @@ export default function Browse() {
               />
             ))}
             {loading && results.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
-                <Loader size={22} className="spin" color="var(--accent)" />
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+                <LoadingWheel size={28} text="Loading more anime..." />
               </div>
             )}
           </>
@@ -756,12 +758,12 @@ const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
   return (
     <motion.div
       className="search-result-item"
-      onClick={() => navigate(`/anime/${anime.id}`, { viewTransition: true })}
+      onClick={() => navigate(`/anime/${anime.id}`, { state: { anime }, viewTransition: true })}
       whileTap={{ scale: 0.98 }}
       transition={{ type: 'spring', stiffness: 500, damping: 30 }}
       role="button"
       tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`, { viewTransition: true })}
+      onKeyDown={e => e.key === 'Enter' && navigate(`/anime/${anime.id}`, { state: { anime }, viewTransition: true })}
       id={`search-result-${anime.id}`}
       style={{
         display: 'flex', gap: 12, padding: '10px 14px',
@@ -775,11 +777,17 @@ const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
         <img
           src={cover}
           alt={title}
+          decoding="async"
+          onError={(e) => {
+            const fallback = anime?.coverImage?.large || anime?.coverImage?.medium || anime?.bannerImage;
+            if (fallback && fallback !== cover && e.currentTarget.src !== fallback) {
+              e.currentTarget.src = fallback;
+            }
+          }}
           style={{
             width: 62, height: 84, borderRadius: 10, objectFit: 'cover',
             background: 'var(--bg-card)',
           }}
-          loading="lazy"
         />
         <div style={{
           position: 'absolute', inset: 0, borderRadius: 10,
@@ -821,9 +829,14 @@ const SearchResultItem = memo(({ anime, activeGenres = [] }) => {
           {anime.startDate?.year && (
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{anime.startDate.year}</span>
           )}
-          {anime.episodes && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{anime.episodes} eps</span>
-          )}
+          {(() => {
+            const aired = getAiredEpisodeCount(anime);
+            if (anime.status === 'RELEASING' && anime.episodes && aired > 0 && aired < anime.episodes) {
+              return <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{aired}/{anime.episodes} eps</span>;
+            }
+            const eps = aired || anime.episodes;
+            return eps ? <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{eps} eps</span> : null;
+          })()}
           {status && (
             <span style={{
               fontSize: 11, fontWeight: 700,

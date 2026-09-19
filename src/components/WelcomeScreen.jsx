@@ -8,14 +8,14 @@ const TAGLINES = [
   { top: 'Track Progress &', bold: 'Build Your Watchlist' },
 ];
 
-// Curated anime poster images — used as static fallback while API loads
+// Curated anime poster images — authentic AniList CDN covers
 const FALLBACK_COVERS = [
-  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101922-PEn1CTc93blC.jpg',
-  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx11061-NMJGaKZCmFMO.jpg',
-  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx20954-oMwCkbDaUxSl.jpg',
-  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1535-lawCwhHMRMpf.jpg',
-  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx5114-q5vHWZhPSr3y.jpg',
-  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-C3H1hFBIobMb.jpg',
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101922-PEn1CTDYSoqh.png', // Demon Slayer
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-buvcRTBx4NSm.jpg',  // Attack on Titan
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-ELSYx3yMPcKM.jpg',    // One Piece
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21087-uvx9oiu5ixL9.jpg', // One Punch Man
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx5114-KJTQz9AImDCW.jpg',  // Fullmetal Alchemist: Brotherhood
+  'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx154587-n6hrHvlJLWdQ.jpg', // Frieren
 ];
 
 export default function WelcomeScreen({ onEnter, onSignIn }) {
@@ -74,8 +74,16 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
           {[...leftCovers, ...leftCovers, ...leftCovers].map((src, i) => (
             <div key={i} className="ws-poster">
               {/* Placeholder color shown before image loads */}
-              <img src={src} alt="" loading="eager" draggable={false}
-                style={{ opacity: 0, transition: 'opacity 0.4s ease' }}
+              <img
+                src={src}
+                alt=""
+                loading="eager"
+                decoding="async"
+                draggable={false}
+                ref={el => {
+                  if (el && el.complete && el.naturalWidth > 0) el.style.opacity = '1';
+                }}
+                style={{ opacity: 1, transition: 'opacity 0.3s ease' }}
                 onLoad={e => { e.currentTarget.style.opacity = '1'; }}
               />
             </div>
@@ -85,8 +93,16 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
         <div className="ws-col ws-col--right">
           {[...rightCovers, ...rightCovers, ...rightCovers].map((src, i) => (
             <div key={i} className="ws-poster">
-              <img src={src} alt="" loading="eager" draggable={false}
-                style={{ opacity: 0, transition: 'opacity 0.4s ease' }}
+              <img
+                src={src}
+                alt=""
+                loading="eager"
+                decoding="async"
+                draggable={false}
+                ref={el => {
+                  if (el && el.complete && el.naturalWidth > 0) el.style.opacity = '1';
+                }}
+                style={{ opacity: 1, transition: 'opacity 0.3s ease' }}
                 onLoad={e => { e.currentTarget.style.opacity = '1'; }}
               />
             </div>

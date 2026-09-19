@@ -1,7 +1,7 @@
 {
   "name": "anilab",
   "private": true,
-  "version": "1.5.5",
+  "version": "1.5.6",
   "type": "module",
   "scripts": {
     "dev": "concurrently --names \"VITE,PROXY\" --prefix-colors \"cyan,magenta\" \"node --insecure-http-parser ./node_modules/vite/bin/vite.js --host\" \"node --insecure-http-parser server/proxy.mjs\"",
@@ -12,7 +12,8 @@
     "build:local": "vite build --mode local",
     "start": "node --insecure-http-parser server/proxy.mjs",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "apk": "powershell -ExecutionPolicy Bypass -File ./build_apk.ps1"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",

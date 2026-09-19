@@ -2,6 +2,7 @@ import { memo } from 'react';
 import AppDrawer from '../ui/AppDrawer';
 import { Check, Tv, Zap } from 'lucide-react';
 import { motion } from 'motion/react';
+import { getServerSortPriority } from '../../api/stream';
 
 function ServerPickerDrawer({
   open,
@@ -36,23 +37,27 @@ function ServerPickerDrawer({
             SUB {subCount > 0 && `(${subCount})`}
           </button>
           <button
-            onClick={() => onCategoryChange?.('dub')}
+            disabled={dubCount === 0}
+            onClick={() => dubCount > 0 && onCategoryChange?.('dub')}
             style={{
               padding: '4px 12px',
               borderRadius: 8,
               fontSize: 11,
               fontWeight: 700,
-              background: category === 'dub' ? 'var(--accent)' : 'transparent',
-              color: category === 'dub' ? '#fff' : 'var(--text-tertiary)',
+              border: 'none',
+              background: category === 'dub' && dubCount > 0 ? 'var(--accent)' : 'transparent',
+              color: dubCount === 0 ? 'rgba(255,255,255,0.25)' : (category === 'dub' ? '#fff' : 'var(--text-tertiary)'),
+              opacity: dubCount === 0 ? 0.35 : 1,
+              cursor: dubCount === 0 ? 'not-allowed' : 'pointer',
             }}
           >
-            DUB {dubCount > 0 && `(${dubCount})`}
+            {dubCount > 0 ? `DUB (${dubCount})` : 'DUB (None)'}
           </button>
         </div>
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {servers.map((srv, idx) => {
+        {[...servers].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name)).map((srv, idx) => {
           const isSelected = currentServer && (srv.name === currentServer.name || srv.id === currentServer.id);
           const isFast = srv.name?.toLowerCase().includes('neko') || srv.name?.toLowerCase().includes('waves') || srv.name?.toLowerCase().includes('anihd');
 

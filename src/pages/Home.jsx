@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, Bell, Play, X, WifiOff, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, startTransition } from 'react';
+import { Search, Bell, Play, X, WifiOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   getTrending, getTopRated,
@@ -14,6 +14,9 @@ import AnimeRow from '../components/AnimeRow';
 import { imageCache } from '../components/AnimeCard';
 import { checkAndTriggerEpisodeAlerts } from '../api/notifications';
 import { withSWR, getCachedData } from '../utils/cache';
+import offlineCatalog from '../data/offlineCatalog.json';
+import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
+import NativeAdCard from '../components/ads/NativeAdCard';
 
 /* ══════════════════════════════════════════════════════════════════
    Continue Watching — individual card with remove action
@@ -22,7 +25,7 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
   const [removing, setRemoving] = useState(false);
   const title = getTitle(item.anime);
   const cover = getCover(item.anime);
-  const totalEps = item.anime.episodes || 24;
+  const totalEps = getAiredEpisodeCount(item.anime) || item.anime.episodes || 24;
   const currentEp = item.ep || item.episode || 1;
 
   // Within-episode progress: use seekPosition/duration if available (Netflix-style)
@@ -60,7 +63,7 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
     >
       <div
         className="continue-watching-card"
-        onClick={() => navigate(`/watch/${item.anime.id}/${currentEp}`)}
+        onClick={() => navigate(`/anime/${item.anime.id}?play=true&ep=${currentEp}&direct=true`, { state: { anime: item.anime, directPlay: true } })}
         style={{
           width: 130, height: 175, position: 'relative',
           borderRadius: 16, overflow: 'hidden', cursor: 'pointer',
@@ -71,6 +74,8 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
         <img
           src={cover} alt={title}
           decoding="async"
+          loading={idx < 3 ? 'eager' : 'lazy'}
+          fetchpriority={idx < 2 ? 'high' : 'auto'}
           onLoad={() => {
             if (cover) imageCache.add(cover);
             setImgLoaded(true);
@@ -153,6 +158,90 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   HOME HEADER — Isolated re-render boundary for 120 FPS scrolling
+══════════════════════════════════════════════════════════════════ */
+const HomeHeader = React.memo(function HomeHeader({ unreadCount, navigate }) {
+  const [scrolled, setScrolled] = useState(false);
+  const scrolledRef = useRef(false);
+
+  useEffect(() => {
+    let ticking = false;
+    const handleScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          const isOver = (window.scrollY || document.documentElement.scrollTop || 0) > 20;
+          if (isOver !== scrolledRef.current) {
+            scrolledRef.current = isOver;
+            setScrolled(isOver);
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: '50%',
+      transform: 'translateX(-50%) translateZ(0)',
+      WebkitTransform: 'translateX(-50%) translateZ(0)',
+      zIndex: 90,
+      width: '100%', maxWidth: 480,
+      padding: '12px 16px 12px',
+      paddingTop: 'var(--sat)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      background: scrolled ? 'rgba(4, 4, 10, 0.88)' : 'transparent',
+      backdropFilter: scrolled ? 'blur(16px)' : 'none',
+      WebkitBackdropFilter: scrolled ? 'blur(16px)' : 'none',
+      borderBottom: scrolled ? '0.5px solid rgba(255, 255, 255, 0.06)' : '0.5px solid transparent',
+      boxShadow: scrolled ? '0 1px 0 0 rgba(255,255,255,0.03), 0 4px 30px rgba(0,0,0,0.5)' : 'none',
+      transition: 'background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease',
+      willChange: 'transform',
+      isolation: 'isolate',
+      pointerEvents: 'none',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'all', cursor: 'pointer', opacity: scrolled ? 1 : 0.95, transition: 'opacity 0.2s' }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+        <div style={{
+          width: 28, height: 28, background: 'linear-gradient(135deg, var(--accent), var(--accent2))', borderRadius: 8,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 2px 8px var(--accent-glow)',
+        }}><Play size={13} color="#fff" fill="#fff" /></div>
+        <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', letterSpacing: -0.5 }}>AniPlay</span>
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
+        <button
+          onClick={() => navigate('/browse')}
+          id="home-search"
+          aria-label="Search"
+          className="floating-btn"
+        ><Search size={18} /></button>
+        <button
+          id="home-bell"
+          aria-label="Notifications"
+          className="floating-btn"
+          style={{ position: 'relative' }}
+          onClick={() => navigate('/notifications')}
+        >
+          <Bell size={18} />
+          {unreadCount > 0 && (
+            <span style={{
+              position: 'absolute', top: 3, right: 3, width: 8, height: 8,
+              borderRadius: '50%', background: '#e50914', boxShadow: '0 0 8px #e50914',
+              border: '1.5px solid var(--bg-primary)'
+            }} />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+});
+
+/* ══════════════════════════════════════════════════════════════════
    HOME PAGE — Netflix-premium with full-viewport hero
 ══════════════════════════════════════════════════════════════════ */
 export default function Home() {
@@ -208,35 +297,27 @@ export default function Home() {
       .slice(0, 15);
   }, [recentlyViewed, progress, watchlist, favorites]);
 
-  // Synchronous cache reads for INSTANT, zero-skeleton page navigation
-  const cachedTrending = getCachedData('trending') || [];
-  const cachedAiring = getCachedData('airing') || [];
-  const cachedNewReleases = getCachedData('newReleases') || [];
-  const cachedPopularSeason = getCachedData('popularSeason') || [];
-  const cachedTopRated = getCachedData('topRated') || [];
-  const cachedMovies = getCachedData('movies') || [];
-
-  const [trending, setTrending] = useState(cachedTrending);
-  const [airing, setAiring] = useState(cachedAiring);
-  const [newReleases, setNewReleases] = useState(cachedNewReleases);
-  const [popularSeason, setPopularSeason] = useState(cachedPopularSeason);
-  const [topRated, setTopRated] = useState(cachedTopRated);
-  const [movies, setMovies] = useState(cachedMovies);
+  // Lazy cache initializers — zero delay, instant 0ms baseline from offline catalog + SWR revalidation
+  const [trending, setTrending] = useState(() => getCachedData('trending') || offlineCatalog?.trending || []);
+  const [airing, setAiring] = useState(() => getCachedData('airing') || offlineCatalog?.airing || []);
+  const [newReleases, setNewReleases] = useState(() => getCachedData('newReleases') || offlineCatalog?.newReleases || []);
+  const [popularSeason, setPopularSeason] = useState(() => getCachedData('popularSeason') || offlineCatalog?.popularSeason || []);
+  const [topRated, setTopRated] = useState(() => getCachedData('topRated') || offlineCatalog?.topRated || []);
+  const [movies, setMovies] = useState(() => getCachedData('movies') || offlineCatalog?.movies || []);
   const [popular, setPopular] = useState([]);
   const [weekSchedule, setWeekSchedule] = useState([]);
-  const [scrolled, setScrolled] = useState(false);
-  const [ready, setReady] = useState(cachedTrending.length > 0);
+  const [ready, setReady] = useState(true);
   const [apiError, setApiError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
-  const [loadingSections, setLoadingSections] = useState({
-    trending: !cachedTrending.length,
-    airing: !cachedAiring.length,
-    newReleases: !cachedNewReleases.length,
-    popularSeason: !cachedPopularSeason.length,
-    topRated: !cachedTopRated.length,
-    movies: !cachedMovies.length,
-    schedule: true,
-  });
+  const [loadingSections, setLoadingSections] = useState(() => ({
+    trending: false,
+    airing: false,
+    newReleases: false,
+    popularSeason: false,
+    topRated: false,
+    movies: false,
+    schedule: false,
+  }));
 
   // Trigger native phone notifications for newly released episode alerts
   useEffect(() => {
@@ -245,40 +326,85 @@ export default function Home() {
     }
   }, [airing, watchlist]);
 
-  const scrolledRef = useRef(false);
-  useEffect(() => {
-    let ticking = false;
-    const handleScroll = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          const isOver = (window.scrollY || document.documentElement.scrollTop || 0) > 20;
-          if (isOver !== scrolledRef.current) {
-            scrolledRef.current = isOver;
-            setScrolled(isOver);
-          }
-          ticking = false;
-        });
-        ticking = true;
-      }
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-    };
-  }, []);
-
   useEffect(() => {
     let live = true;
     const timer = setTimeout(() => {
       if (!live) return;
 
-      // Parallel fetch — each section updates independently
-      withSWR('trending', getTrending, 10).then(d => { if (live && d?.length) { setTrending(d); setReady(true); setLoadingSections(s => ({ ...s, trending: false })); } }).catch(e => { console.error('Trending fetch failed:', e); setApiError(e.message); setLoadingSections(s => ({ ...s, trending: false })); setReady(true); });
-      withSWR('airing', getAiring, 10).then(d => { if (live && d?.length) { setAiring(d); setLoadingSections(s => ({ ...s, airing: false })); } }).catch(() => setLoadingSections(s => ({ ...s, airing: false })));
-      withSWR('newReleases', getNewReleases, 10).then(d => { if (live && d?.length) { setNewReleases(d); setLoadingSections(s => ({ ...s, newReleases: false })); } }).catch(() => setLoadingSections(s => ({ ...s, newReleases: false })));
-      withSWR('popularSeason', getPopularThisSeason, 10).then(d => { if (live && d?.length) { setPopularSeason(d); setLoadingSections(s => ({ ...s, popularSeason: false })); } }).catch(() => setLoadingSections(s => ({ ...s, popularSeason: false })));
-      withSWR('topRated', getTopRated, 30).then(d => { if (live && d?.length) { setTopRated(d); setLoadingSections(s => ({ ...s, topRated: false })); } }).catch(() => setLoadingSections(s => ({ ...s, topRated: false })));
-      withSWR('movies', getMovies, 30).then(d => { if (live && d?.length) { setMovies(d); setLoadingSections(s => ({ ...s, movies: false })); } }).catch(() => setLoadingSections(s => ({ ...s, movies: false })));
+      // Parallel fetch with React 18 startTransition — non-blocking concurrent updates
+      withSWR('trending', getTrending, 10).then(d => {
+        if (live && d?.length) {
+          startTransition(() => {
+            setTrending(d);
+            setReady(true);
+            setLoadingSections(s => ({ ...s, trending: false }));
+          });
+        }
+      }).catch(e => {
+        console.error('Trending fetch failed:', e);
+        if (live) {
+          startTransition(() => {
+            setApiError(e.message);
+            setLoadingSections(s => ({ ...s, trending: false }));
+            setReady(true);
+          });
+        }
+      });
+
+      withSWR('airing', getAiring, 10).then(d => {
+        if (live && d?.length) {
+          startTransition(() => {
+            setAiring(d);
+            setLoadingSections(s => ({ ...s, airing: false }));
+          });
+        }
+      }).catch(() => {
+        if (live) setLoadingSections(s => ({ ...s, airing: false }));
+      });
+
+      withSWR('newReleases', getNewReleases, 10).then(d => {
+        if (live && d?.length) {
+          startTransition(() => {
+            setNewReleases(d);
+            setLoadingSections(s => ({ ...s, newReleases: false }));
+          });
+        }
+      }).catch(() => {
+        if (live) setLoadingSections(s => ({ ...s, newReleases: false }));
+      });
+
+      withSWR('popularSeason', getPopularThisSeason, 10).then(d => {
+        if (live && d?.length) {
+          startTransition(() => {
+            setPopularSeason(d);
+            setLoadingSections(s => ({ ...s, popularSeason: false }));
+          });
+        }
+      }).catch(() => {
+        if (live) setLoadingSections(s => ({ ...s, popularSeason: false }));
+      });
+
+      withSWR('topRated', getTopRated, 30).then(d => {
+        if (live && d?.length) {
+          startTransition(() => {
+            setTopRated(d);
+            setLoadingSections(s => ({ ...s, topRated: false }));
+          });
+        }
+      }).catch(() => {
+        if (live) setLoadingSections(s => ({ ...s, topRated: false }));
+      });
+
+      withSWR('movies', getMovies, 30).then(d => {
+        if (live && d?.length) {
+          startTransition(() => {
+            setMovies(d);
+            setLoadingSections(s => ({ ...s, movies: false }));
+          });
+        }
+      }).catch(() => {
+        if (live) setLoadingSections(s => ({ ...s, movies: false }));
+      });
 
       // Schedule
       getSchedule().then(d => {
@@ -288,120 +414,58 @@ export default function Home() {
           const diff = (a.nextAiringEpisode?.airingAt || a._schedAt || 0) - now;
           return diff > 0 && diff < 7 * 86400;
         }).sort((a, b) => (a.nextAiringEpisode?.airingAt || a._schedAt || 0) - (b.nextAiringEpisode?.airingAt || b._schedAt || 0));
-        setWeekSchedule(weekAnime);
-        setLoadingSections(s => ({ ...s, schedule: false }));
-      }).catch(() => setLoadingSections(s => ({ ...s, schedule: false })));
+        startTransition(() => {
+          setWeekSchedule(weekAnime);
+          setLoadingSections(s => ({ ...s, schedule: false }));
+        });
+      }).catch(() => {
+        if (live) setLoadingSections(s => ({ ...s, schedule: false }));
+      });
     }, 30);
 
     return () => { live = false; clearTimeout(timer); };
   }, [retryCount]);
 
+  // Graceful fallback to offline seed catalog if live network is down
+  const displayTrending = trending.length > 0 ? trending : (offlineCatalog?.trending || []);
+  const displayAiring = airing.length > 0 ? airing : (offlineCatalog?.airing || []);
+  const displayNewReleases = newReleases.length > 0 ? newReleases : (offlineCatalog?.newReleases || displayAiring);
+  const displayPopularSeason = popularSeason.length > 0 ? popularSeason : (offlineCatalog?.popularSeason || []);
+  const displayTopRated = topRated.length > 0 ? topRated : (offlineCatalog?.topRated || []);
+  const displayMovies = movies.length > 0 ? movies : (offlineCatalog?.movies || []);
+
+  // Personalize rows using K-Nearest Neighbors based on watch history (memoized to prevent re-ranking on scrolls/renders)
+  const personalizedAiring = useMemo(() => rankAnimeByKnn(displayAiring, recentlyViewed), [displayAiring, recentlyViewed]);
+  const personalizedNewReleases = useMemo(() => rankAnimeByKnn(displayNewReleases, recentlyViewed), [displayNewReleases, recentlyViewed]);
+  const personalizedPopularSeason = useMemo(() => rankAnimeByKnn(displayPopularSeason, recentlyViewed), [displayPopularSeason, recentlyViewed]);
+  const personalizedTrending = useMemo(() => rankAnimeByKnn(displayTrending, recentlyViewed), [displayTrending, recentlyViewed]);
+  const topRatedTV = useMemo(() => displayTopRated.filter(a => a.format === 'TV'), [displayTopRated]);
+  const personalizedTopRated = useMemo(() => rankAnimeByKnn(topRatedTV, recentlyViewed), [topRatedTV, recentlyViewed]);
+  const personalizedMovies = useMemo(() => rankAnimeByKnn(displayMovies, recentlyViewed), [displayMovies, recentlyViewed]);
+
+  // Stable navigation callbacks to keep React.memo(AnimeRow) pristine across re-renders
+  const handleSeeAllNewReleases = useCallback(() => navigate('/browse?category=new-releases'), [navigate]);
+  const handleSeeAllAiring = useCallback(() => navigate('/browse?category=airing'), [navigate]);
+  const handleSeeAllSchedule = useCallback(() => navigate('/schedule'), [navigate]);
+  const handleSeeAllSeasonal = useCallback(() => navigate('/browse?category=seasonal'), [navigate]);
+  const handleSeeAllTrending = useCallback(() => navigate('/browse?category=trending'), [navigate]);
+  const handleSeeAllTopRated = useCallback(() => navigate('/browse?category=top-rated'), [navigate]);
+  const handleSeeAllMovies = useCallback(() => navigate('/browse?category=movies'), [navigate]);
+
   if (!ready) return <HomeSkeleton />;
-
-  // AniList is globally down — show a clear error screen
-  if (apiError && trending.length === 0) {
-    return (
-      <div className="page" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', padding: '0 24px', textAlign: 'center' }}>
-        <div style={{
-          width: 72, height: 72, borderRadius: 22, background: 'var(--bg-elevated)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20,
-          border: '0.5px solid var(--border)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-        }}>
-          <WifiOff size={30} color="var(--text-muted)" />
-        </div>
-        <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)', marginBottom: 10 }}>Service Unavailable</h2>
-        <p style={{ fontSize: 14, color: 'var(--text-tertiary)', lineHeight: 1.6, maxWidth: 300, marginBottom: 28, letterSpacing: '-0.1px' }}>
-          {apiError}
-        </p>
-        <button
-          onClick={() => { setApiError(null); setReady(false); setRetryCount(c => c + 1); }}
-          style={{
-            padding: '14px 36px', borderRadius: 'var(--radius-md)', border: 'none',
-            background: 'linear-gradient(135deg, var(--accent), var(--accent2))',
-            color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', letterSpacing: '-0.2px',
-            display: 'flex', alignItems: 'center', gap: 8,
-            boxShadow: '0 8px 32px -6px var(--accent-glow)',
-          }}
-        >
-          <RefreshCw size={16} />
-          Try Again
-        </button>
-      </div>
-    );
-  }
-
-  // Personalize rows using K-Nearest Neighbors based on watch history
-  const personalizedAiring = rankAnimeByKnn(airing, recentlyViewed);
-  const personalizedNewReleases = rankAnimeByKnn(newReleases, recentlyViewed);
-  const personalizedPopularSeason = rankAnimeByKnn(popularSeason, recentlyViewed);
-  const personalizedTrending = rankAnimeByKnn(trending, recentlyViewed);
-  const personalizedTopRated = rankAnimeByKnn(topRated.filter(a => a.format === 'TV'), recentlyViewed);
-  const personalizedMovies = rankAnimeByKnn(movies, recentlyViewed);
 
   return (
     <div className="page" style={{ position: 'relative' }}>
 
       {/* ══════════════════════════════════════════════════════════
-          FLOATING HEADER — liquid glass, overlaps hero image
+          FLOATING HEADER — isolated re-render boundary for 120 FPS
       ══════════════════════════════════════════════════════════ */}
-      <div style={{
-        position: 'fixed', top: 0, left: '50%',
-        transform: 'translateX(-50%) translateZ(0)',
-        WebkitTransform: 'translateX(-50%) translateZ(0)',
-        zIndex: 90,
-        width: '100%', maxWidth: 480,
-        padding: '12px 16px 12px',
-        paddingTop: 'var(--sat)',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: scrolled ? 'rgba(4, 4, 10, 0.78)' : 'transparent',
-        backdropFilter: scrolled ? 'blur(32px) saturate(200%) brightness(0.65)' : 'none',
-        WebkitBackdropFilter: scrolled ? 'blur(32px) saturate(200%) brightness(0.65)' : 'none',
-        borderBottom: scrolled ? '0.5px solid rgba(255, 255, 255, 0.06)' : '0.5px solid transparent',
-        boxShadow: scrolled ? '0 1px 0 0 rgba(255,255,255,0.03), 0 4px 30px rgba(0,0,0,0.5)' : 'none',
-        transition: 'background-color 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease, backdrop-filter 0.35s ease',
-        willChange: 'transform',
-        isolation: 'isolate',
-        pointerEvents: 'none',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'all', cursor: 'pointer', opacity: scrolled ? 1 : 0.95, transition: 'opacity 0.2s' }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-          <div style={{
-            width: 28, height: 28, background: 'linear-gradient(135deg, var(--accent), var(--accent2))', borderRadius: 8,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 2px 8px var(--accent-glow)',
-          }}><Play size={13} color="#fff" fill="#fff" /></div>
-          <span style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-brand)', color: '#fff', letterSpacing: -0.5 }}>AniPlay</span>
-        </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', pointerEvents: 'all' }}>
-          <button
-            onClick={() => navigate('/browse')}
-            id="home-search"
-            aria-label="Search"
-            className="floating-btn"
-          ><Search size={18} /></button>
-          <button
-            id="home-bell"
-            aria-label="Notifications"
-            className="floating-btn"
-            style={{ position: 'relative' }}
-            onClick={() => navigate('/notifications')}
-          >
-            <Bell size={18} />
-            {unreadCount > 0 && (
-              <span style={{
-                position: 'absolute', top: 3, right: 3, width: 8, height: 8,
-                borderRadius: '50%', background: '#e50914', boxShadow: '0 0 8px #e50914',
-                border: '1.5px solid var(--bg-primary)'
-              }} />
-            )}
-          </button>
-        </div>
-      </div>
+      <HomeHeader unreadCount={unreadCount} navigate={navigate} />
 
       {/* ── Hero Banner — OUTSIDE fade-in-up, never shifted by entrance animation ── */}
       <div style={{ position: 'relative' }}>
-        {trending.length > 0
-          ? <HeroBanner animes={trending} />
+        {displayTrending.length > 0
+          ? <HeroBanner animes={displayTrending} />
           : (
             <div style={{
               width: '100%', height: '55vh', maxHeight: 480, minHeight: 340,
@@ -410,6 +474,50 @@ export default function Home() {
           )
         }
       </div>
+
+      {/* ── Non-intrusive Resilience Status Banner if cloud API is degraded ── */}
+      {apiError && (
+        <div style={{
+          margin: '12px 16px 0',
+          padding: '10px 14px',
+          borderRadius: 12,
+          background: 'rgba(234, 179, 8, 0.12)',
+          border: '0.5px solid rgba(234, 179, 8, 0.35)',
+          color: '#fde047',
+          fontSize: 12,
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          zIndex: 10,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
+        }}>
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, lineHeight: 1.4 }}>
+            AniList cloud sync offline — displaying cached catalog. Playback and collections remain fully active.
+          </span>
+          <button
+            onClick={() => { setApiError(null); setRetryCount(c => c + 1); }}
+            style={{
+              background: 'rgba(255,255,255,0.1)',
+              border: 'none',
+              borderRadius: 6,
+              color: '#fde047',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              padding: '5px 8px',
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 700
+            }}
+            title="Retry live connection"
+          >
+            <RefreshCw size={11} />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
 
       {/* ── Content Wrapper with Entrance Animation (sections only) ─────── */}
       <div className="fade-in-up">
@@ -443,7 +551,7 @@ export default function Home() {
             subtitle="Last 2 weeks"
             animes={personalizedNewReleases}
             showEpBadge
-            onSeeAll={() => navigate('/browse?category=new-releases')}
+            onSeeAll={handleSeeAllNewReleases}
           />
         ) : null}
 
@@ -455,7 +563,7 @@ export default function Home() {
             title="Top Airing"
             subtitle="Trending now"
             animes={personalizedAiring}
-            onSeeAll={() => navigate('/browse?category=airing')}
+            onSeeAll={handleSeeAllAiring}
           />
         ) : null}
 
@@ -471,7 +579,7 @@ export default function Home() {
               </div>
               <button
                 className="see-all"
-                onClick={() => navigate('/schedule')}
+                onClick={handleSeeAllSchedule}
               >
                 See all
               </button>
@@ -491,12 +599,12 @@ export default function Home() {
                       <div
                         className="anime-card"
                         style={{ width: 100, height: 140 }}
-                        onClick={() => navigate(`/anime/${anime.id}`)}
+                        onClick={() => navigate(`/anime/${anime.id}`, { state: { anime }, viewTransition: true })}
                         role="button"
                         tabIndex={0}
                         aria-label={getTitle(anime)}
                       >
-                        <img src={getCover(anime)} alt={getTitle(anime)} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        <img src={getCover(anime)} alt={getTitle(anime)} loading="eager" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         <div style={{
                           position: 'absolute', inset: 0,
                           background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 55%)',
@@ -538,7 +646,7 @@ export default function Home() {
             title="Popular This Season"
             subtitle={(() => { const { season, year } = getCurrentSeason(); return `${season.charAt(0) + season.slice(1).toLowerCase()} ${year}`; })()}
             animes={personalizedPopularSeason}
-            onSeeAll={() => navigate('/browse?category=seasonal')}
+            onSeeAll={handleSeeAllSeasonal}
           />
         ) : null}
 
@@ -553,9 +661,14 @@ export default function Home() {
             cardWidth={130}
             cardHeight={180}
             showRank
-            onSeeAll={() => navigate('/browse?category=trending')}
+            onSeeAll={handleSeeAllTrending}
           />
         ) : null}
+
+        {/* Sponsored Partner Spotlight / Native Ad Banner */}
+        <div style={{ padding: '0 16px' }}>
+          <NativeAdCard placement="home_feed" />
+        </div>
 
         {/* 7. Top TV Series */}
         {loadingSections.topRated ? (
@@ -565,7 +678,7 @@ export default function Home() {
             title="Top TV Series"
             subtitle="Highest rated"
             animes={personalizedTopRated}
-            onSeeAll={() => navigate('/browse?category=top-rated')}
+            onSeeAll={handleSeeAllTopRated}
           />
         ) : null}
 
@@ -577,7 +690,7 @@ export default function Home() {
             title="Top Movies"
             subtitle="Films & specials"
             animes={personalizedMovies}
-            onSeeAll={() => navigate('/browse?category=movies')}
+            onSeeAll={handleSeeAllMovies}
           />
         ) : null}
 

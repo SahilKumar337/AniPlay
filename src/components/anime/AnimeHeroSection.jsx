@@ -2,8 +2,12 @@ import { useState, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Bookmark, Share2, Star, Play, Download, Heart, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import { motion } from 'motion/react';
+import { registerPlugin, Capacitor } from '@capacitor/core';
 import { getTitle, getCover, getDisplayGenresOrTags } from '../../api/anilist';
+import { getAiredEpisodeCount } from '../../utils/animeStreamUtils';
 import { useApp } from '../../context/AppContext';
+
+const APKUpdater = registerPlugin('APKUpdater');
 
 function AnimeHeroSection({
   anime,
@@ -21,7 +25,9 @@ function AnimeHeroSection({
   const title = getTitle(anime);
   const cover = getCover(anime);
   const score = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
-  const totalEps = anime.episodes || 0;
+  const isAiring = anime.status === 'RELEASING';
+  const totalEps = getAiredEpisodeCount(anime);
+  const genres = getDisplayGenresOrTags(anime, [], 4);
   const studios = anime.studios?.nodes?.map(s => s.name).join(', ') || '';
   const desc = (anime.description || 'No description available.')
     .replace(/<br\s*\/?>/gi, ' ')
@@ -33,18 +39,53 @@ function AnimeHeroSection({
   const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (totalEps === 0 && !anime.nextAiringEpisode);
 
   const handleShare = async () => {
-    if (navigator.share) {
+    const latestReleaseUrl = localStorage.getItem('aniplay_latest_release_url') || 'https://github.com/SahilKumar337/AniPlay/releases/latest';
+    const shareTitle = `Watch ${title} on AniPlay`;
+    const shareText = `Watch ${title} on AniPlay!\n\nDownload the latest AniPlay app:`;
+
+    // 1. Always copy the latest release link to clipboard immediately
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(latestReleaseUrl);
+      }
+    } catch (_) {}
+
+    // 2. On Native Android: open the native system share sheet (WhatsApp, Gmail, Messages, etc.)
+    if (Capacitor.isNativePlatform()) {
+      try {
+        await APKUpdater.share({
+          title: shareTitle,
+          text: shareText,
+          url: latestReleaseUrl,
+          dialogTitle: 'Share via'
+        });
+        showToast('Link copied! Select an app to share.');
+        return;
+      } catch (e) {
+        console.warn('[Share] Native share intent failed, falling back:', e);
+      }
+    }
+
+    // 3. Web Share API fallback (for mobile browsers supporting navigator.share)
+    if (navigator?.share) {
       try {
         await navigator.share({
-          title,
-          text: `Watch ${title} on AniPlay!`,
-          url: window.location.href,
+          title: shareTitle,
+          text: shareText,
+          url: latestReleaseUrl,
         });
-      } catch (_) {}
-    } else {
-      navigator.clipboard?.writeText(window.location.href);
-      showToast('Link copied to clipboard!');
+        showToast('Link copied to clipboard!');
+        return;
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          showToast('Link copied to clipboard!');
+        }
+        return;
+      }
     }
+
+    // 4. Fallback for desktop/unsupported browsers
+    showToast('Download link copied to clipboard!');
   };
 
   return (
@@ -64,11 +105,11 @@ function AnimeHeroSection({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          background: scrolled ? 'rgba(15, 15, 15, 0.75)' : 'rgba(15, 15, 15, 0)',
-          backdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
-          WebkitBackdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'blur(0px) saturate(100%)',
+          background: scrolled ? 'rgba(15, 15, 15, 0.75)' : 'transparent',
+          backdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'none',
+          WebkitBackdropFilter: scrolled ? 'blur(20px) saturate(180%)' : 'none',
           borderBottom: scrolled ? '1px solid var(--border)' : '1px solid transparent',
-          transition: 'all 0.3s ease',
+          transition: 'background-color 0.25s ease, border-color 0.25s ease',
           pointerEvents: 'none',
         }}
       >
@@ -214,7 +255,36 @@ function AnimeHeroSection({
             {anime.format.replace('_', ' ')}
           </span>
         )}
-        {totalEps > 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{totalEps} eps</span>}
+        {totalEps > 0 && (
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            {isAiring && anime.episodes && anime.episodes > totalEps
+              ? `${totalEps}/${anime.episodes} eps`
+              : `${totalEps} eps`}
+          </span>
+        )}
+        {isAiring && anime.nextAiringEpisode?.timeUntilAiring && (
+          <span
+            style={{
+              fontSize: 10,
+              color: '#4ade80',
+              fontWeight: 700,
+              background: 'rgba(74, 222, 128, 0.12)',
+              border: '1px solid rgba(74, 222, 128, 0.25)',
+              padding: '1px 6px',
+              borderRadius: 6,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            ● Ep {anime.nextAiringEpisode.episode} in {(() => {
+              const s = anime.nextAiringEpisode.timeUntilAiring;
+              const d = Math.floor(s / 86400);
+              const h = Math.floor((s % 86400) / 3600);
+              return d > 0 ? `${d}d ${h}h` : `${h}h`;
+            })()}
+          </span>
+        )}
       </div>
 
       {/* ── Action Buttons ── */}

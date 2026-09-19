@@ -1,6 +1,5 @@
-import { useState, useEffect, startTransition } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { motion } from 'motion/react';
 import { useApp } from '../context/AppContext';
 
 // High-fidelity SVG icons — filled for active, clean stroke for inactive
@@ -104,10 +103,13 @@ export default function Navbar() {
 
   const handleTabClick = (index, path, isDisabled) => {
     if (isDisabled) return;
-    setActiveIndex(index); // Instant optimistic sliding animation on GPU
-    startTransition(() => {
-      navigate(path, { viewTransition: true });
-    });
+    if (activeIndex === index) {
+      // Tapping active tab smoothly scrolls page to top
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    setActiveIndex(index); // Instant 120 FPS GPU glide
+    navigate(path);
   };
 
   return (
@@ -121,29 +123,29 @@ export default function Navbar() {
       {/* ── Floating Capsule Navbar ── */}
       <nav className="navbar navbar-container" aria-label="Bottom Navigation">
         <div className="navbar-capsule">
-          {/* ── Ultra-Smooth GPU Sliding Indicator Pill ── */}
-          <div
-            className="navbar-indicator-track"
-            style={{
-              transform: `translate3d(${Math.max(0, activeIndex) * 100}%, 0, 0)`,
-              opacity: activeIndex >= 0 ? 1 : 0,
-              transition: 'transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.18s ease',
-            }}
-          >
-            <div className="navbar-indicator-pill" />
-          </div>
+          {/* ── Hardware-Accelerated Sliding Liquid Glass Pill Indicator ── */}
+          {activeIndex >= 0 && (
+            <div
+              className="navbar-indicator-track"
+              style={{
+                transform: `translate3d(${activeIndex * 100}%, 0, 0)`,
+              }}
+              aria-hidden="true"
+            >
+              <div className="navbar-indicator-pill" />
+            </div>
+          )}
 
           {NAV_ITEMS.map(({ id, Icon, label, path }, idx) => {
             const active = activeIndex === idx;
             const isDisabledOffline = isOffline && path !== '/download';
 
             return (
-              <motion.button
+              <button
                 key={id}
+                type="button"
                 className={`nav-item ${active ? 'active' : ''}`}
                 onClick={() => handleTabClick(idx, path, isDisabledOffline)}
-                whileTap={{ scale: 0.90 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 28 }}
                 id={`nav-${id}`}
                 disabled={isDisabledOffline}
                 aria-label={label}
@@ -154,8 +156,10 @@ export default function Navbar() {
                     <span className="nav-badge" aria-label={`${unreadCount} unread`} />
                   )}
                 </span>
-                <span className="nav-label">{label}</span>
-              </motion.button>
+                <span className="nav-label">
+                  {label}
+                </span>
+              </button>
             );
           })}
         </div>
@@ -163,4 +167,3 @@ export default function Navbar() {
     </>
   );
 }
-
