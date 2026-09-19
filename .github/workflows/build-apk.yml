@@ -33,10 +33,16 @@ jobs:
           distribution: 'zulu'
           java-version: '21'
 
-      - name: Install Android SDK Packages
+      - name: Setup Android SDK
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "build-tools;35.0.0"
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find /usr/local/lib/android/sdk -name sdkmanager -type f 2>/dev/null | head -n 1)
+          fi
+          echo "Found sdkmanager at: $SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER"):$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "build-tools;35.0.0"
 
       - name: Capacitor Sync
         run: npx cap sync
