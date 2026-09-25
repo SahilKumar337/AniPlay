@@ -330,8 +330,16 @@ function AppInner({ showWelcome, onEnter }) {
 
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>
-      {showWelcome ? (
-        <WelcomeScreen onEnter={onEnter} onSignIn={() => navigate('/auth', { state: { mode: 'login' } })} />
+      {showWelcome && location.pathname === '/' ? (
+        <WelcomeScreen
+          onEnter={onEnter}
+          onSignIn={() => {
+            onEnter();
+            localStorage.setItem('aniplay_onboarded', 'true');
+            hasShownAuthRef.current = true;
+            navigate('/auth', { state: { mode: 'login' } });
+          }}
+        />
       ) : (
         <>
           {/* Main Tab Stage — Persistent Mounting (Instant Launch + 120 FPS Kept-Alive Tabs) */}

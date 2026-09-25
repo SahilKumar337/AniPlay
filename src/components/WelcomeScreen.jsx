@@ -54,9 +54,10 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
     setTimeout(() => onEnterRef.current?.(), 420);
   };
 
-  // Sign In — open modal WITHOUT hiding the welcome screen
+  // Sign In — animate out then proceed to auth
   const handleSignIn = () => {
-    onSignInRef.current?.();
+    setExiting(true);
+    setTimeout(() => onSignInRef.current?.(), 300);
   };
 
   // 6 covers in one row for the left panel, 6 in right panel
