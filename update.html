@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Download AniPlay v1.6.0 Update</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #06060f;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 20px;
+      text-align: center;
+      overflow-x: hidden;
+    }
+    .bg-glow {
+      position: fixed;
+      top: 20%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 320px;
+      height: 320px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(168, 85, 247, 0.08) 50%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .card {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 420px;
+      background: rgba(18, 18, 30, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 28px;
+      padding: 32px 24px;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    }
+    .logo-badge {
+      width: 68px;
+      height: 68px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4);
+    }
+    .logo-badge svg {
+      width: 34px;
+      height: 34px;
+      fill: #ffffff;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+      color: #ffffff;
+    }
+    .version-tag {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    p.desc {
+      font-size: 14px;
+      color: #94a3b8;
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+    .btn-download {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 16px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #ffffff;
+      font-size: 16px;
+      font-weight: 700;
+      text-decoration: none;
+      box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      cursor: pointer;
+      border: none;
+      margin-bottom: 14px;
+    }
+    .btn-download:active {
+      transform: scale(0.98);
+    }
+    .btn-secondary {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.15s ease;
+      margin-bottom: 24px;
+    }
+    .btn-secondary:active {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .instructions {
+      text-align: left;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 16px;
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+    .instructions-title {
+      font-weight: 700;
+      color: #e2e8f0;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .instructions ol {
+      margin-left: 18px;
+    }
+    .instructions li {
+      margin-bottom: 4px;
+    }
+    .status-msg {
+      font-size: 12px;
+      color: #38bdf8;
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(56, 189, 248, 0.3);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+
+  <div class="card">
+    <div class="logo-badge">
+      <svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg>
+    </div>
+
+    <h1>AniPlay Update Ready</h1>
+    <div class="version-tag">Version 1.6.0 (Official Release)</div>
+
+    <p class="desc">
+      Realtime comment alerts, push notifications, 100% correct streams, and 120Hz smooth UI.
+    </p>
+
+    <!-- Primary Action: Direct Download -->
+    <a id="downloadBtn" href="https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk" class="btn-download" target="_blank" rel="noopener noreferrer" onclick="handleDownloadClick(event)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download APK (68.3 MB)
+    </a>
+
+    <!-- Secondary: Alternative direct asset link -->
+    <a id="mirrorBtn" href="https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay-v1.6.0-release.apk" class="btn-secondary" target="_blank" rel="noopener noreferrer" style="margin-bottom: 10px;">
+      Alternative Download Link (Mirror) ↗
+    </a>
+
+    <!-- Secondary: GitHub Release Page -->
+    <a href="https://github.com/SahilKumar337/AniPlay/releases/tag/v1.6.0" class="btn-secondary" target="_blank" rel="noopener noreferrer">
+      View on GitHub Releases ↗
+    </a>
+
+    <!-- Helpful tips to prevent Chrome confusion -->
+    <div class="instructions">
+      <div class="instructions-title">
+        <span>💡</span> Quick Installation Guide:
+      </div>
+      <ol>
+        <li>Tap <strong>Download APK</strong> above.</li>
+        <li>If Chrome asks <em>"File might be harmful"</em>, tap <strong>Download anyway</strong> (AniPlay is 100% safe & open source).</li>
+        <li>Swipe down from the top of your screen to monitor the download progress.</li>
+        <li>Once finished, tap the notification to install the update!</li>
+      </ol>
+    </div>
+
+    <div class="status-msg" id="statusMsg">
+      <div class="spinner"></div>
+      <span>Starting download automatically in <b id="cd">2</b>s...</span>
+    </div>
+  </div>
+
+  <script>
+    var APK_URL = "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk";
+    var countdown = 2;
+    var timerInterval = null;
+
+    function startAutoDownload() {
+      timerInterval = setInterval(function() {
+        countdown--;
+        var cd = document.getElementById('cd');
+        if (cd) cd.textContent = countdown;
+
+        if (countdown <= 0) {
+          clearInterval(timerInterval);
+          window.location.href = APK_URL;
+
+          var status = document.getElementById('statusMsg');
+          if (status) {
+            status.innerHTML = '<span style="color:#4ade80;font-weight:700;">✓ Download started! Check your notification bar above.</span>';
+          }
+        }
+      }, 1000);
+    }
+
+    function handleDownloadClick(e) {
+      if (timerInterval) clearInterval(timerInterval);
+      var status = document.getElementById('statusMsg');
+      if (status) {
+        status.innerHTML = '<span style="color:#4ade80;font-weight:700;">✓ Download starting! Check your notification bar above.</span>';
+      }
+    }
+
+    startAutoDownload();
+  </script>
+</body>
+</html>
