@@ -613,26 +613,51 @@ export default function App() {
   };
 
 
-  // ── In-app Update: open APK in system browser (same as CloudStream/Aniyomi) ──
+  // ── In-app Update: download in-app with live progress, then trigger native Android install ──
   const handleUpdateNow = async () => {
     if (!updateInfo?.apkUrl) return;
 
-    try {
-      if (Capacitor.isNativePlatform()) {
-        // Native APKUpdater plugin: fires Android ACTION_VIEW Intent directly to system browser
-        await APKUpdater.openExternalUrl({ url: updateInfo.apkUrl });
+    if (Capacitor.isNativePlatform()) {
+      try {
+        setUpdateProgress({ progress: 0, receivedBytes: 0, totalBytes: 0, status: 'downloading' });
+
+        const progSub = await APKUpdater.addListener('downloadProgress', (data) => {
+          setUpdateProgress({
+            progress: data.progress || 0,
+            receivedBytes: data.receivedBytes || 0,
+            totalBytes: data.totalBytes || 0,
+            status: 'downloading'
+          });
+        });
+
+        const compSub = await APKUpdater.addListener('downloadComplete', () => {
+          setUpdateProgress({ progress: 100, status: 'installing' });
+        });
+
+        const errSub = await APKUpdater.addListener('downloadError', (err) => {
+          console.error('[APKUpdater] Download error:', err);
+          setUpdateProgress(null);
+          const releasePage = updateInfo.releasePageUrl || ('https://github.com/SahilKumar337/AniPlay/releases/tag/v' + updateInfo.latestVersion);
+          APKUpdater.openExternalUrl({ url: releasePage });
+        });
+
+        await APKUpdater.downloadAndInstall({ url: updateInfo.apkUrl });
         return;
+      } catch (err) {
+        console.warn('[Updater] In-app download failed, falling back:', err);
+        setUpdateProgress(null);
       }
-    } catch (err) {
-      console.warn('[Updater] Failed to open via APKUpdater:', err);
     }
 
-    // Web fallback
+    // Web fallback: Open GitHub Release page
+    const releasePage = updateInfo.releasePageUrl || ('https://github.com/SahilKumar337/AniPlay/releases/tag/v' + updateInfo.latestVersion);
     try {
-      window.location.href = updateInfo.apkUrl;
-    } catch (_) {
-      window.open(updateInfo.apkUrl, '_blank');
-    }
+      if (Capacitor.isNativePlatform()) {
+        await APKUpdater.openExternalUrl({ url: releasePage });
+        return;
+      }
+    } catch (_) {}
+    window.open(releasePage, '_blank');
   };
 
   return (
@@ -727,37 +752,83 @@ export default function App() {
             )}
 
 
-            <div style={{ display: 'flex', gap: 10 }}>
-              {!updateInfo.forceUpdate && (
-                <button
-                  onClick={() => setUpdateInfo(null)}
-                  style={{
-                    flex: 1, padding: '12px 0', borderRadius: 10,
-                    border: '1px solid var(--border)',
-                    background: 'transparent',
-                    color: 'var(--text-primary)',
-                    fontSize: 13, fontWeight: 600, cursor: 'pointer'
-                  }}
-                >
-                  Later
-                </button>
-              )}
-              <button
-                onClick={handleUpdateNow}
-                style={{
-                  flex: 1, padding: '12px 0', borderRadius: 10,
-                  border: 'none',
-                  background: 'linear-gradient(135deg, #6366f1, #a78bfa)',
-                  color: '#fff',
-                  fontSize: 13, fontWeight: 700,
-                  cursor: 'pointer',
-                  touchAction: 'manipulation',
-                  transition: 'background-color 0.2s ease, opacity 0.2s ease, transform 0.15s ease',
-                }}
-              >
-                🚀 Update Now
-              </button>
-            </div>
+            {updateProgress ? (
+              <div style={{ padding: '8px 0 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, color: '#fff', marginBottom: 8 }}>
+                  <span>{updateProgress.status === 'installing' ? 'Opening Installer...' : 'Downloading Update...'}</span>
+                  <span>{updateProgress.progress}%</span>
+                </div>
+                <div style={{
+                  width: '100%', height: 8, background: 'rgba(255,255,255,0.08)',
+                  borderRadius: 4, overflow: 'hidden', marginBottom: 8
+                }}>
+                  <div style={{
+                    width: `${updateProgress.progress}%`, height: '100%',
+                    background: 'linear-gradient(90deg, #6366f1, #a78bfa)',
+                    borderRadius: 4, transition: 'width 0.2s ease',
+                    boxShadow: '0 0 12px rgba(99, 102, 241, 0.6)'
+                  }} />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {updateProgress.totalBytes > 0
+                    ? `${(updateProgress.receivedBytes / (1024 * 1024)).toFixed(1)} MB / ${(updateProgress.totalBytes / (1024 * 1024)).toFixed(1)} MB`
+                    : 'Connecting to update server...'
+                  }
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {!updateInfo.forceUpdate && (
+                    <button
+                      onClick={() => setUpdateInfo(null)}
+                      style={{
+                        flex: 1, padding: '12px 0', borderRadius: 10,
+                        border: '1px solid var(--border)',
+                        background: 'transparent',
+                        color: 'var(--text-primary)',
+                        fontSize: 13, fontWeight: 600, cursor: 'pointer'
+                      }}
+                    >
+                      Later
+                    </button>
+                  )}
+                  <button
+                    onClick={handleUpdateNow}
+                    style={{
+                      flex: 1, padding: '12px 0', borderRadius: 10,
+                      border: 'none',
+                      background: 'linear-gradient(135deg, #6366f1, #a78bfa)',
+                      color: '#fff',
+                      fontSize: 13, fontWeight: 700,
+                      cursor: 'pointer',
+                      touchAction: 'manipulation',
+                      transition: 'background-color 0.2s ease, opacity 0.2s ease, transform 0.15s ease',
+                    }}
+                  >
+                    🚀 Update Now
+                  </button>
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    onClick={() => {
+                      const releasePage = updateInfo.releasePageUrl || ('https://github.com/SahilKumar337/AniPlay/releases/tag/v' + updateInfo.latestVersion);
+                      if (Capacitor.isNativePlatform()) {
+                        APKUpdater.openExternalUrl({ url: releasePage });
+                      } else {
+                        window.open(releasePage, '_blank');
+                      }
+                    }}
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--text-muted)',
+                      fontSize: 11, textDecoration: 'underline', cursor: 'pointer', padding: '4px 8px'
+                    }}
+                  >
+                    Or open GitHub Release page
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -121,76 +121,129 @@ public class APKUpdaterPlugin extends Plugin {
     @PluginMethod
     public void downloadAndInstall(PluginCall call) {
         String urlString = call.getString("url");
-        if (urlString == null) {
+        if (urlString == null || urlString.isEmpty()) {
             call.reject("URL is required");
             return;
         }
 
         new Thread(() -> {
+            java.net.HttpURLConnection conn = null;
+            java.io.InputStream input = null;
+            java.io.OutputStream output = null;
             try {
-                java.net.URL url = new java.net.URL(urlString);
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.connect();
-                
-                int fileLength = conn.getContentLength();
-                java.io.InputStream input = new java.io.BufferedInputStream(url.openStream(), 8192);
-                
+                String currentUrl = urlString;
+                int redirects = 0;
+                while (redirects < 10) {
+                    java.net.URL url = new java.net.URL(currentUrl);
+                    conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setConnectTimeout(20000);
+                    conn.setReadTimeout(30000);
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AniPlay/1.6.0");
+                    conn.connect();
+                    int code = conn.getResponseCode();
+                    if (code == java.net.HttpURLConnection.HTTP_MOVED_PERM 
+                        || code == java.net.HttpURLConnection.HTTP_MOVED_TEMP 
+                        || code == 307 || code == 308) {
+                        String loc = conn.getHeaderField("Location");
+                        conn.disconnect();
+                        if (loc != null && !loc.isEmpty()) {
+                            currentUrl = loc;
+                            redirects++;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                if (conn == null || conn.getResponseCode() != java.net.HttpURLConnection.HTTP_OK) {
+                    int respCode = conn != null ? conn.getResponseCode() : -1;
+                    throw new Exception("HTTP error code: " + respCode);
+                }
+
+                long fileLength = conn.getContentLengthLong();
+                input = new java.io.BufferedInputStream(conn.getInputStream(), 32768);
+
                 java.io.File cacheDir = getContext().getCacheDir();
                 java.io.File apkFile = new java.io.File(cacheDir, "update.apk");
                 if (apkFile.exists()) {
                     apkFile.delete();
                 }
-                
-                java.io.OutputStream output = new java.io.FileOutputStream(apkFile);
-                
-                byte[] data = new byte[1024];
+
+                output = new java.io.FileOutputStream(apkFile);
+
+                byte[] data = new byte[32768];
                 long total = 0;
                 int count;
+                int lastProgress = -1;
+                long lastNotifyTime = 0;
+
                 while ((count = input.read(data)) != -1) {
                     total += count;
                     output.write(data, 0, count);
-                    
+
                     if (fileLength > 0) {
                         int progress = (int) (total * 100 / fileLength);
-                        JSObject progressObj = new JSObject();
-                        progressObj.put("progress", progress);
-                        notifyListeners("downloadProgress", progressObj);
+                        long now = System.currentTimeMillis();
+                        if (progress != lastProgress && (now - lastNotifyTime > 120 || progress == 100)) {
+                            lastProgress = progress;
+                            lastNotifyTime = now;
+                            JSObject progressObj = new JSObject();
+                            progressObj.put("progress", progress);
+                            progressObj.put("receivedBytes", total);
+                            progressObj.put("totalBytes", fileLength);
+                            notifyListeners("downloadProgress", progressObj);
+                        }
                     }
                 }
-                
+
                 output.flush();
-                output.close();
-                input.close();
-                
+
                 JSObject completeObj = new JSObject();
                 completeObj.put("status", "success");
+                completeObj.put("fileLength", total);
                 notifyListeners("downloadComplete", completeObj);
-                
+
                 triggerInstall(apkFile);
-                call.resolve();
-                
+                call.resolve(completeObj);
+
             } catch (Exception e) {
                 JSObject errObj = new JSObject();
-                errObj.put("error", e.getMessage());
+                errObj.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
                 notifyListeners("downloadError", errObj);
                 call.reject(e.getMessage());
+            } finally {
+                try { if (output != null) output.close(); } catch (Exception ignored) {}
+                try { if (input != null) input.close(); } catch (Exception ignored) {}
+                try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
             }
         }).start();
     }
 
     private void triggerInstall(java.io.File file) {
         android.content.Context context = getContext();
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            if (!context.getPackageManager().canRequestPackageInstalls()) {
+                android.content.Intent permIntent = new android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    android.net.Uri.parse("package:" + context.getPackageName())
+                );
+                permIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(permIntent);
+            }
+        }
+
         android.net.Uri apkUri = androidx.core.content.FileProvider.getUriForFile(
             context,
             context.getPackageName() + ".fileprovider",
             file
         );
-        
+
         android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
         intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-        
+
         context.startActivity(intent);
     }
 }
