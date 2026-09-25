@@ -610,13 +610,25 @@ export default function App() {
 
 
   // ── In-app Update: open APK in system browser (same as CloudStream/Aniyomi) ──
-  // The system browser (Chrome/etc.) handles the APK download + install natively.
-  // This avoids REQUEST_INSTALL_PACKAGES and the Play Protect "dropper" classification.
-  const handleUpdateNow = () => {
+  const handleUpdateNow = async () => {
     if (!updateInfo?.apkUrl) return;
-    // '_system' tells Capacitor WebView to open in the device's default browser (Chrome)
-    // The browser handles download progress, file saving, and install prompt natively
-    window.open(updateInfo.apkUrl, '_system');
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        // Native APKUpdater plugin: fires Android ACTION_VIEW Intent directly to system browser
+        await APKUpdater.openExternalUrl({ url: updateInfo.apkUrl });
+        return;
+      }
+    } catch (err) {
+      console.warn('[Updater] Failed to open via APKUpdater:', err);
+    }
+
+    // Web fallback
+    try {
+      window.location.href = updateInfo.apkUrl;
+    } catch (_) {
+      window.open(updateInfo.apkUrl, '_blank');
+    }
   };
 
   return (
