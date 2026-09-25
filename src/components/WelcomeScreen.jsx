@@ -189,6 +189,7 @@ export default function WelcomeScreen({ onEnter, onSignIn }) {
         /* Exiting: scale up + blur dissolve */
         .ws-root.ws-exiting {
           opacity: 0 !important;
+          pointer-events: none !important;
           transform: scale(1.06);
           filter: blur(10px);
           transition: opacity 0.42s cubic-bezier(0.4,0,1,1),

@@ -206,20 +206,6 @@ function AppInner({ showWelcome, onEnter }) {
   }, [isNative, user?.id, navigate]);
 
 
-  // First-time onboarding: navigate to auth page after 1.5s if not logged in
-  useEffect(() => {
-    if (!showWelcome && !user && !hasShownAuthRef.current) {
-      const onboarded = localStorage.getItem('aniplay_onboarded');
-      if (!onboarded) {
-        hasShownAuthRef.current = true;
-        const timer = setTimeout(() => {
-          navigate('/auth', { state: { mode: 'login' } });
-          localStorage.setItem('aniplay_onboarded', 'true');
-        }, 1500);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [showWelcome, user, navigate]);
 
   // Dismiss welcome onboarding automatically if user is logged in
   useEffect(() => {
@@ -330,75 +316,78 @@ function AppInner({ showWelcome, onEnter }) {
 
   return (
     <div className={`app-container ${isNative ? 'app-container--native' : ''}`}>
-      {showWelcome && location.pathname === '/' ? (
+      {/* Main Tab Stage — Persistent Mounting (Instant Launch + 120 FPS Kept-Alive Tabs) */}
+      <div className="tab-stage" style={{ display: isMainTab ? 'block' : 'none', flex: 1, position: 'relative' }}>
+        <div className={`tab-panel ${currentTab === 'home' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+          {visitedTabs.has('home') && <Home />}
+        </div>
+        <div className={`tab-panel ${currentTab === 'schedule' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+          {visitedTabs.has('schedule') && (
+            <Suspense fallback={<PageLoader />}>
+              <Schedule />
+            </Suspense>
+          )}
+        </div>
+        <div className={`tab-panel ${currentTab === 'mylist' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+          {visitedTabs.has('mylist') && (
+            <Suspense fallback={<PageLoader />}>
+              <MyList />
+            </Suspense>
+          )}
+        </div>
+        <div className={`tab-panel ${currentTab === 'download' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+          {visitedTabs.has('download') && (
+            <Suspense fallback={<PageLoader />}>
+              <DownloadPage />
+            </Suspense>
+          )}
+        </div>
+        <div className={`tab-panel ${currentTab === 'profile' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
+          {visitedTabs.has('profile') && (
+            <Suspense fallback={<PageLoader />}>
+              <Profile />
+            </Suspense>
+          )}
+        </div>
+      </div>
+
+      {/* Sub-routes (Anime detail, Search, Notifications, History, etc.) */}
+      {!isMainTab && (
+        <div style={{ position: 'relative', flex: 1 }}>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path="/browse" element={<Browse />} />
+              <Route path="/anime/:id" element={<AnimePage />} />
+              <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
+              <Route path="/favorites" element={<FavoritesPage />} />
+              <Route path="/watched" element={<WatchedPage />} />
+              <Route path="/history" element={<HistoryPage />} />
+              <Route path="/notifications" element={<Notifications />} />
+              <Route path="/auth" element={<AuthPage />} />
+              <Route path="/landing" element={<Landing />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </div>
+      )}
+      {isMainTab ? <Navbar /> : (!playParam && <div className="app-bottom-bezel" aria-hidden="true" />)}
+
+      {/* Welcome Screen Overlay (Only shown on root landing route on first launch) */}
+      {showWelcome && location.pathname === '/' && (
         <WelcomeScreen
-          onEnter={onEnter}
+          onEnter={() => {
+            onEnter();
+            if (location.pathname !== '/') navigate('/');
+          }}
           onSignIn={() => {
             onEnter();
-            localStorage.setItem('aniplay_onboarded', 'true');
+            try { localStorage.setItem('aniplay_onboarded', 'true'); } catch (_) {}
             hasShownAuthRef.current = true;
-            navigate('/auth', { state: { mode: 'login' } });
+            navigate('/auth', { state: { mode: 'login', from: '/' } });
           }}
         />
-      ) : (
-        <>
-          {/* Main Tab Stage — Persistent Mounting (Instant Launch + 120 FPS Kept-Alive Tabs) */}
-          <div className="tab-stage" style={{ display: isMainTab ? 'block' : 'none', flex: 1, position: 'relative' }}>
-            <div className={`tab-panel ${currentTab === 'home' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('home') && <Home />}
-            </div>
-            <div className={`tab-panel ${currentTab === 'schedule' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('schedule') && (
-                <Suspense fallback={<PageLoader />}>
-                  <Schedule />
-                </Suspense>
-              )}
-            </div>
-            <div className={`tab-panel ${currentTab === 'mylist' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('mylist') && (
-                <Suspense fallback={<PageLoader />}>
-                  <MyList />
-                </Suspense>
-              )}
-            </div>
-            <div className={`tab-panel ${currentTab === 'download' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('download') && (
-                <Suspense fallback={<PageLoader />}>
-                  <DownloadPage />
-                </Suspense>
-              )}
-            </div>
-            <div className={`tab-panel ${currentTab === 'profile' ? 'tab-panel-active' : 'tab-panel-hidden'}`}>
-              {visitedTabs.has('profile') && (
-                <Suspense fallback={<PageLoader />}>
-                  <Profile />
-                </Suspense>
-              )}
-            </div>
-          </div>
-
-          {/* Sub-routes (Anime detail, Search, Notifications, History, etc.) */}
-          {!isMainTab && (
-            <div style={{ position: 'relative', flex: 1 }}>
-              <Suspense fallback={<PageLoader />}>
-                <Routes>
-                  <Route path="/browse" element={<Browse />} />
-                  <Route path="/anime/:id" element={<AnimePage />} />
-                  <Route path="/watch/:id/:ep" element={<WatchRedirect />} />
-                  <Route path="/favorites" element={<FavoritesPage />} />
-                  <Route path="/watched" element={<WatchedPage />} />
-                  <Route path="/history" element={<HistoryPage />} />
-                  <Route path="/notifications" element={<Notifications />} />
-                  <Route path="/auth" element={<AuthPage />} />
-                  <Route path="/landing" element={<Landing />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </Suspense>
-            </div>
-          )}
-          {isMainTab ? <Navbar /> : (!playParam && <div className="app-bottom-bezel" aria-hidden="true" />)}
-        </>
       )}
+
       {showNewPasswordModal && (
         <NewPasswordModal isOpen={showNewPasswordModal} onClose={() => setShowNewPasswordModal(false)} />
       )}
@@ -408,7 +397,11 @@ function AppInner({ showWelcome, onEnter }) {
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => {
-    return !localStorage.getItem('anilab_welcomed');
+    try {
+      return !localStorage.getItem('anilab_welcomed');
+    } catch (_) {
+      return false;
+    }
   });
 
   const [updateInfo, setUpdateInfo] = useState(null);
@@ -612,7 +605,10 @@ export default function App() {
   }, []);
 
   const handleEnter = () => {
-    localStorage.setItem('anilab_welcomed', '1');
+    try {
+      localStorage.setItem('anilab_welcomed', '1');
+      localStorage.setItem('aniplay_onboarded', 'true');
+    } catch (_) {}
     setShowWelcome(false);
   };
 

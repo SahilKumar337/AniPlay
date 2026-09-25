@@ -128,14 +128,16 @@ export default function AuthPage() {
     if (exiting) return;
     setExiting(true);
     setTimeout(() => {
-      // Go back if there's history, otherwise go home
-      if (window.history.length > 1) {
+      const from = location.state?.from;
+      if (from) {
+        navigate(from, { replace: true });
+      } else if (window.history.length > 1) {
         navigate(-1);
       } else {
         navigate('/', { replace: true });
       }
     }, 220);
-  }, [exiting, navigate]);
+  }, [exiting, navigate, location.state]);
 
   const validateEmail = (v) => /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(v);
 

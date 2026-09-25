@@ -20,6 +20,8 @@ const GENRES = [
  * Convert an anime object to a normalized feature vector.
  */
 export function getFeatureVector(anime) {
+  if (!anime) return new Array(GENRES.length + 2).fill(0);
+
   const vec = new Array(GENRES.length + 2).fill(0);
   
   // 1. Genre dimensions
@@ -29,8 +31,6 @@ export function getFeatureVector(anime) {
       vec[i] = 1.0;
     }
   }
-
-  if (!anime) return new Array(GENRES.length + 2).fill(0);
 
   // 2. Score dimension (normalized [0, 1])
   const score = anime.averageScore || 70;
