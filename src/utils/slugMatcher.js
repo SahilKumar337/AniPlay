@@ -535,6 +535,9 @@ export function generateSearchQueries(title, allTitles = [], language = 'english
 // ─── 6. Master Pre-Indexed Mappings (Industry Benchmark) ───
 
 export const INDUSTRY_MAPPINGS = {
+  // Crowned in a Hundred Days (Bai Ri Cheng Wang)
+  '213484': { neko: 'crowned-in-a-hundred-days', anikoto: 'crowned-in-a-hundred-days', anikotoId: '8906', waves: 'bai-ri-cheng-wang-82689' },
+
   // ONE PIECE (1100+ episodes — instant index lookup)
   '21': { neko: 'one-piece', anikoto: 'one-piece-odmau', anikotoId: '1642', waves: 'one-piece-ov8' },
 

@@ -119,6 +119,7 @@ export default function AnimePage() {
     allSubtitleTracks,
     selectServer,
     fetchStream,
+    retryStream,
   } = useAnimeStream({
     anime,
     epParam,
@@ -522,7 +523,7 @@ export default function AnimePage() {
           onAudioTrackChange={handleAudioTrackChange}
           onSelectServer={handleSelectServer}
           onAutoFailoverServer={handleAutoFailoverServer}
-          onRetryFetch={fetchStream}
+          onRetryFetch={retryStream}
           onBack={handleExitPlayer}
           onEpisodeChange={handleEpisodeSelect}
           onPrefetchEp={handlePrefetchEp}

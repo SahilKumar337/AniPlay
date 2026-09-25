@@ -893,7 +893,7 @@ export default function AniPlayer({
       url.includes('_capacitor_file_') ||
       url.startsWith('file://') ||
       url.startsWith('blob:') ||
-      (!url.includes('.m3u8') && isLocal)
+      (!url.includes('.m3u8') && !url.includes('/api/iframe-proxy') && !url.includes('proxy/iframe'))
     );
     if (isDirectVideoFile) {
       log('Direct video file mode: setting src directly on native video element');

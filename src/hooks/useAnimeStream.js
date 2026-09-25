@@ -540,6 +540,15 @@ export function useAnimeStream({
     }
   }, [anime, epParam, selectServer, resolveSubSubtitlesForDub]); // ← no 'servers' or 'audioTrack' dep — uses refs
 
+  // Retrying clears the cache for this episode and re-runs a clean full scraper pass
+  const retryStream = useCallback(() => {
+    if (anime && epParam) {
+      invalidateStreamCache(anime, epParam);
+    }
+    lastFetchedRef.current = null;
+    fetchStream();
+  }, [anime, epParam, fetchStream]);
+
   // When switching to DUB track, ensure sub dialogue subtitles are fetched & shared
   useEffect(() => {
     if (audioTrack === 'dub' && anime && epParam) {
@@ -576,5 +585,6 @@ export function useAnimeStream({
     allSubtitleTracks,
     selectServer,
     fetchStream,
+    retryStream,
   };
 }

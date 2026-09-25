@@ -984,7 +984,7 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
             const stream = await extractWavesDirectStream(embedUrl);
             if (stream?.videoUrl) {
               finalVideoUrl = stream.videoUrl;
-              directHls = true;
+              directHls = Boolean(stream.isHLS ?? stream.videoUrl.includes('.m3u8'));
             }
           } catch (_) {}
 
@@ -1029,7 +1029,7 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
             const stream = await extractWavesDirectStream(embedUrl);
             if (stream?.videoUrl) {
               finalVideoUrl = stream.videoUrl;
-              directHls = true;
+              directHls = Boolean(stream.isHLS ?? stream.videoUrl.includes('.m3u8'));
             }
           } catch (_) {}
 

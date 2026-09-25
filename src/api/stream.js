@@ -24,17 +24,20 @@ if (typeof localStorage !== 'undefined') {
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      // Purge only OLD versioned entries — NOT current v14
+      // Purge only OLD versioned entries
       if (k && (
         k.startsWith('stream_v9_') ||
         k.startsWith('stream_v10_') ||
         k.startsWith('stream_v11_') ||
         k.startsWith('stream_v12_') ||
         k.startsWith('stream_v13_') ||
+        k.startsWith('stream_v14_') ||
+        k.startsWith('stream_v15_') ||
         k.startsWith('res_srv_v10_') ||
         k.startsWith('res_srv_v11_') ||
         k.startsWith('res_srv_v12_') ||
-        k.startsWith('res_srv_v13_')
+        k.startsWith('res_srv_v13_') ||
+        k.startsWith('res_srv_v14_')
       )) {
         localStorage.removeItem(k);
       }
@@ -53,7 +56,7 @@ export function isDirectStreamUrl(url) {
   if (low.includes('megaplay.buzz/stream/') || low.includes('megaplay.buzz/videojs/')) return false;
   if (low.includes('/embed') || low.includes('echovideo.ru/embed')) return false;
   if (low.includes('anineko.to/watch') || low.includes('anineko.es/watch')) return false;
-  return low.includes('.m3u8') || low.includes('/cdn/') || low.includes('.mp4') || low.includes('token=');
+  return low.includes('.m3u8') || low.includes('/cdn/') || low.includes('.mp4') || low.includes('.webm') || low.includes('token=') || low.includes('savedly.net') || low.includes('cdn.');
 }
 
 // ── Slug Persistence Cache ─────────────────────────────────────────────────
@@ -150,26 +153,32 @@ export function getCachedServers(anime, episode) {
   const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
   if (clientStreamCache.has(cacheKey)) {
     const cached = clientStreamCache.get(cacheKey);
-    const hasTokenizedUrl = cached.data?.servers?.some(s => s.videoUrl && (s.videoUrl.includes('token=') || s.videoUrl.includes('.m3u8')));
-    const effectiveTtl = hasTokenizedUrl ? TOKEN_CACHE_TTL : CACHE_TTL;
-    if (Date.now() - cached.timestamp < effectiveTtl) {
-      return cached.data;
-    } else {
-      clientStreamCache.delete(cacheKey);
+    if (!cached.data?.isPartial) {
+      const hasTokenizedUrl = cached.data?.servers?.some(s => s.videoUrl && (s.videoUrl.includes('token=') || s.videoUrl.includes('.m3u8')));
+      const effectiveTtl = hasTokenizedUrl ? TOKEN_CACHE_TTL : CACHE_TTL;
+      if (Date.now() - cached.timestamp < effectiveTtl) {
+        return cached.data;
+      } else {
+        clientStreamCache.delete(cacheKey);
+      }
     }
   }
   // Check localStorage persistence (0.05ms instant hit across app restarts)
   try {
-    const raw = localStorage.getItem(`stream_v15_cache_${cacheKey}`);
+    const raw = localStorage.getItem(`stream_v16_cache_${cacheKey}`);
     if (raw) {
       const parsed = JSON.parse(raw);
+      if (parsed.data?.isPartial) {
+        localStorage.removeItem(`stream_v16_cache_${cacheKey}`);
+        return null;
+      }
       const hasTokenizedUrl = parsed.data?.servers?.some(s => s.videoUrl && (s.videoUrl.includes('token=') || s.videoUrl.includes('.m3u8')));
       const effectiveTtl = hasTokenizedUrl ? TOKEN_CACHE_TTL : CACHE_TTL;
       if (Date.now() - parsed.timestamp < effectiveTtl) {
         clientStreamCache.set(cacheKey, parsed);
         return parsed.data;
       } else {
-        localStorage.removeItem(`stream_v15_cache_${cacheKey}`);
+        localStorage.removeItem(`stream_v16_cache_${cacheKey}`);
       }
     }
   } catch {}
@@ -181,12 +190,15 @@ export function invalidateStreamCache(anime, episode) {
   const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
   clientStreamCache.delete(cacheKey);
   try {
+    localStorage.removeItem(`stream_v16_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v15_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v14_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v13_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v12_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v11_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v10_cache_${cacheKey}`);
+    sessionStorage.removeItem(`stream_v16_cache_${cacheKey}`);
+    sessionStorage.removeItem(`stream_v15_cache_${cacheKey}`);
     sessionStorage.removeItem(`stream_v9_cache_${cacheKey}`);
   } catch {}
   console.log(`[ClientEngine] Invalidated stream cache for: ${cacheKey}`);
@@ -774,7 +786,7 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
         }).catch(() => {});
       });
 
-      // Update stream cache with newly augmented servers
+      // Update stream cache with newly augmented servers (marked partial while other scrapers run)
       try {
         const entry = {
           data: {
@@ -782,14 +794,13 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
             servers: [...combinedServers],
             animeTitle: mainTitle,
             slug: activeSlug,
-            isPartial: false,
+            isPartial: true,
             errors
           },
           timestamp: Date.now()
         };
         clientStreamCache.set(cacheKey, entry);
-        localStorage.setItem(`stream_v15_cache_${cacheKey}`, JSON.stringify(entry));
-        sessionStorage.setItem(`stream_v15_cache_${cacheKey}`, JSON.stringify(entry));
+        sessionStorage.setItem(`stream_v16_cache_${cacheKey}`, JSON.stringify(entry));
       } catch (_) {}
     }
   };
@@ -866,7 +877,7 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
         if (combinedServers.length > 0 && !timer) {
           const hasVidstream = combinedServers.some(s => s.name.toLowerCase().includes('vidstream'));
           const onlyWaves = combinedServers.every(s => s.name.toLowerCase().includes('waves'));
-          const delay = hasVidstream ? 15 : (onlyWaves ? 450 : 35);
+          const delay = hasVidstream ? 35 : (onlyWaves ? 2500 : 100);
           timer = setTimeout(() => {
             resolve('eager');
           }, delay);
@@ -906,8 +917,8 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
     const entry = { data: resultData, timestamp: Date.now() };
     clientStreamCache.set(cacheKey, entry);
     try {
-      localStorage.setItem(`stream_v12_cache_${cacheKey}`, JSON.stringify(entry));
-      sessionStorage.setItem(`stream_v9_cache_${cacheKey}`, JSON.stringify(entry));
+      localStorage.setItem(`stream_v16_cache_${cacheKey}`, JSON.stringify(entry));
+      sessionStorage.setItem(`stream_v16_cache_${cacheKey}`, JSON.stringify(entry));
     } catch {}
   }
 
