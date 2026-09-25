@@ -3,15 +3,15 @@
   "versionCode": 60,
   "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk",
   "forceUpdate": false,
-  "changelog": "AniPlay v1.6.0 — Mega Release (Realtime Comment Alerts, Airing Push Engine, Multi-Part Matcher & Glass UI)",
+  "changelog": "AniPlay v1.6.0 \u2014 Mega Release (Realtime Comment Alerts, Airing Push Engine, Multi-Part Matcher & Glass UI)",
   "changelogItems": [
-    "🔔 YouTube-Style Notification System: In-app Bell with live unread badge, dedicated inbox tabs (All, Releases, Reminders), and native Android status bar alerts",
-    "💬 Realtime Comment & Like Alerts: Instant notifications when someone likes your comments or replies to your discussion in the community",
-    "🎬 Universal Multi-Part & Season Stream Matcher: Seamless playback support for complex titled anime (e.g. 86 Part 2, Roman numerals, number-word titles) via Cloudflare KV slug map",
-    "🎨 Tactile Liquid Glass Header: Fixed icon transparency on mobile tap; navigation pills remain solid and responsive with haptic scaling",
-    "🛡️ Anti-Random-Anime Shield & DUB Parity: Precision keyword coverage guarantees 100% correct streams and downloads across AniNeko, AniKoto, and AniWaves",
-    "🧊 GPU Decoder Freeze Watchdog: Hardware-level recovery prevents video freezing while audio continues playing on weak decoders",
-    "✨ Butter-Smooth 120Hz Animations: Fluid visionOS/iOS 18 glassmorphism, zero-jitter transitions, and persistent orientation locks"
+    "\ud83d\udd14 YouTube-Style Notification System: In-app Bell with live unread badge, dedicated inbox tabs (All, Releases, Reminders), and native Android status bar alerts",
+    "\ud83d\udcac Realtime Comment & Like Alerts: Instant notifications when someone likes your comments or replies to your discussion in the community",
+    "\ud83c\udfac Universal Multi-Part & Season Stream Matcher: Seamless playback support for complex titled anime (e.g. 86 Part 2, Roman numerals, number-word titles) via Cloudflare KV slug map",
+    "\ud83c\udfa8 Tactile Liquid Glass Header: Fixed icon transparency on mobile tap; navigation pills remain solid and responsive with haptic scaling",
+    "\ud83d\udee1\ufe0f Anti-Random-Anime Shield & DUB Parity: Precision keyword coverage guarantees 100% correct streams and downloads across AniNeko, AniKoto, and AniWaves",
+    "\ud83e\uddca GPU Decoder Freeze Watchdog: Hardware-level recovery prevents video freezing while audio continues playing on weak decoders",
+    "\u2728 Butter-Smooth 120Hz Animations: Fluid visionOS/iOS 18 glassmorphism, zero-jitter transitions, and persistent orientation locks"
   ],
   "domains": {
     "neko": "https://anineko.es",
