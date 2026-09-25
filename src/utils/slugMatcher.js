@@ -15,11 +15,30 @@ import aninekoCatalog from '../data/aninekoCatalog.js';
 export const VERIFIED_SLUGS_KEY = 'aniplay_verified_slugs_v2';
 export const VERIFIED_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-// Purge legacy poisoned v1 verified slugs from user device storage
+// Purge legacy poisoned verified slugs and corrupted anime caches from user device storage
 if (typeof localStorage !== 'undefined') {
   try {
     if (localStorage.getItem('aniplay_verified_slugs_v1')) {
       localStorage.removeItem('aniplay_verified_slugs_v1');
+    }
+    // Purge poisoned Spy x Family Cour 2 (142838) and mismapped cache keys
+    const poisonedKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.includes('142838') || k.includes('oshi_no_ko_142838'))) {
+        poisonedKeys.push(k);
+      }
+    }
+    poisonedKeys.forEach(k => localStorage.removeItem(k));
+
+    // Also check aniplay_verified_slugs_v2
+    const v2Raw = localStorage.getItem('aniplay_verified_slugs_v2');
+    if (v2Raw) {
+      const v2Store = JSON.parse(v2Raw);
+      if (v2Store['142838']) {
+        delete v2Store['142838'];
+        localStorage.setItem('aniplay_verified_slugs_v2', JSON.stringify(v2Store));
+      }
     }
   } catch {}
 }
@@ -565,19 +584,23 @@ export const INDUSTRY_MAPPINGS = {
   '119661': { neko: 'rezero-starting-life-in-another-world-2nd-season-part-2' },
   '163588': { neko: 'rezero-starting-life-in-another-world-season-3' },
 
-  // Slime
-  '101280': { neko: 'that-time-i-got-reincarnated-as-a-slime' },
-  '108511': { neko: 'that-time-i-got-reincarnated-as-a-slime-season-2' },
-  '116742': { neko: 'that-time-i-got-reincarnated-as-a-slime-2nd-season-part-2' },
-  '156822': { neko: 'that-time-i-got-reincarnated-as-a-slime-season-3' },
 
   // Solo Leveling
   '151807': { neko: 'solo-leveling', anikoto: 'solo-leveling-ilh08' },
   '175841': { neko: 'solo-leveling-season-2-arise-from-the-shadow' },
 
-  // Chainsaw Man & SPY x FAMILY
+  // Chainsaw Man
   '127230': { neko: 'chainsaw-man-the-compilation', anikoto: 'chainsaw-man-efeig' },
-  '140960': { neko: 'spy-x-family' },
+
+  // SPY x FAMILY (Franchise Master Index)
+  '140960': { neko: 'spy-x-family', waves: 'spy-x-family-74534', anikoto: 'spy-x-family-6zlbz', anikotoId: '7095' },
+  '50265':  { neko: 'spy-x-family', waves: 'spy-x-family-74534', anikoto: 'spy-x-family-6zlbz', anikotoId: '7095' }, // MAL
+  '142838': { neko: 'spy-x-family-part-2', waves: 'spy-x-family-part-2-74529', anikoto: 'spy-x-family-part-2-p56od', anikotoId: '7165' },
+  '53887':  { neko: 'spy-x-family-part-2', waves: 'spy-x-family-part-2-74529', anikoto: 'spy-x-family-part-2-p56od', anikotoId: '7165' }, // MAL
+  '158927': { neko: 'spy-x-family-season-2', waves: 'spy-x-family-season-2-74531', anikoto: 'spy-x-family-season-2-qlfdj', anikotoId: '6399' },
+  '55347':  { neko: 'spy-x-family-season-2', waves: 'spy-x-family-season-2-74531', anikoto: 'spy-x-family-season-2-qlfdj', anikotoId: '6399' }, // MAL
+  '158928': { neko: 'spy-x-family-code-white', waves: 'spy-x-family-movie-code-white-74539', anikoto: 'spy-x-family-code-white-pwzbi', anikotoId: '6303' },
+  '55348':  { neko: 'spy-x-family-code-white', waves: 'spy-x-family-movie-code-white-74539', anikoto: 'spy-x-family-code-white-pwzbi', anikotoId: '6303' }, // MAL
 
   // Death Note & Fullmetal Alchemist
   '1535': { neko: 'death-note', anikoto: 'death-note-fc8mq' },
@@ -613,10 +636,10 @@ export const INDUSTRY_MAPPINGS = {
   '53580':  { neko: 'that-time-i-got-reincarnated-as-a-slime-season-3' },
   '116742': { neko: 'that-time-i-got-reincarnated-as-a-slime-2nd-season-part-2' },
   '41487':  { neko: 'that-time-i-got-reincarnated-as-a-slime-2nd-season-part-2' },
-  '108511': { neko: 'that-time-i-got-reincarnated-as-a-slime-season-2' },
-  '39551':  { neko: 'that-time-i-got-reincarnated-as-a-slime-season-2' },
-  '101280': { neko: 'that-time-i-got-reincarnated-as-a-slime' },
-  '37430':  { neko: 'that-time-i-got-reincarnated-as-a-slime' },
+  '108511': { neko: 'that-time-i-got-reincarnated-as-a-slime-season-2', waves: 'tensei-shitara-slime-datta-ken-2nd-season-77967' },
+  '39551':  { neko: 'that-time-i-got-reincarnated-as-a-slime-season-2', waves: 'tensei-shitara-slime-datta-ken-2nd-season-77967' },
+  '101280': { neko: 'that-time-i-got-reincarnated-as-a-slime', waves: 'tensei-shitara-slime-datta-ken-77966' },
+  '37430':  { neko: 'that-time-i-got-reincarnated-as-a-slime', waves: 'tensei-shitara-slime-datta-ken-77966' },
 
   // Recent & Airing Hits
   '144647': { neko: 'kaiju-no-8', waves: 'kaijuu-8-gou-77976', anikoto: 'kaiju-no-8-ewvpr', anikotoId: '6089' },
@@ -625,8 +648,10 @@ export const INDUSTRY_MAPPINGS = {
   '171018': { neko: 'dandadan', waves: 'dandadan-82405', anikoto: 'dandadan-m3o4v' },
   '163270': { neko: 'wind-breaker', waves: 'wind-breaker-82305', anikoto: 'wind-breaker-5yly8' },
   '132405': { neko: 'my-dress-up-darling' },
-  '142838': { neko: 'oshi-no-ko', waves: 'oshi-no-ko-18342', anikoto: 'my-star-hg319', anikotoId: '6475' },
+  '150672': { neko: 'oshi-no-ko', waves: 'oshi-no-ko-18342', anikoto: 'my-star-hg319', anikotoId: '6475' },
+  '52034':  { neko: 'oshi-no-ko', waves: 'oshi-no-ko-18342', anikoto: 'my-star-hg319', anikotoId: '6475' }, // MAL
   '166531': { neko: 'oshi-no-ko-season-2', waves: 'oshi-no-ko-2nd-season-19252', anikoto: 'my-star-season-2-cwjwu', anikotoId: '6328' },
+  '55791':  { neko: 'oshi-no-ko-season-2', waves: 'oshi-no-ko-2nd-season-19252', anikoto: 'my-star-season-2-cwjwu', anikotoId: '6328' }, // MAL
   '21202': { neko: 'konosuba-gods-blessing-on-this-wonderful-world' },
   '21699': { neko: 'konosuba-gods-blessing-on-this-wonderful-world-2' },
   '146984': { neko: 'konosuba-gods-blessing-on-this-wonderful-world-3' },
@@ -651,12 +676,6 @@ export const INDUSTRY_MAPPINGS = {
   // Mushoku Tensei: Jobless Reincarnation (All Seasons + Season 3)
   '108465': { neko: 'mushoku-tensei-jobless-reincarnation', anikoto: 'mushoku-tensei-jobless-reincarnation-g20z1', anikotoId: '5694', waves: 'mushoku-tensei-isekai-ittara-honki-dasu-76467' },
   '39535':  { neko: 'mushoku-tensei-jobless-reincarnation', anikoto: 'mushoku-tensei-jobless-reincarnation-g20z1', anikotoId: '5694', waves: 'mushoku-tensei-isekai-ittara-honki-dasu-76467' },
-  '127720': { neko: 'mushoku-tensei-jobless-reincarnation-part-2', anikoto: 'mushoku-tensei-jobless-reincarnation-part-2-hkgog', anikotoId: '6675', waves: 'mushoku-tensei-isekai-ittara-honki-dasu-part-2-76468' },
-  '45576':  { neko: 'mushoku-tensei-jobless-reincarnation-part-2', anikoto: 'mushoku-tensei-jobless-reincarnation-part-2-hkgog', anikotoId: '6675', waves: 'mushoku-tensei-isekai-ittara-honki-dasu-part-2-76468' },
-  '146065': { neko: 'mushoku-tensei-jobless-reincarnation-season-2', anikoto: 'mushoku-tensei-jobless-reincarnation-season-2-u1lv2', anikotoId: '6537', waves: 'mushoku-tensei-ii-isekai-ittara-honki-dasu-76470' },
-  '51179':  { neko: 'mushoku-tensei-jobless-reincarnation-season-2', anikoto: 'mushoku-tensei-jobless-reincarnation-season-2-u1lv2', anikotoId: '6537', waves: 'mushoku-tensei-ii-isekai-ittara-honki-dasu-76470' },
-  '166873': { neko: 'mushoku-tensei-jobless-reincarnation-season-2-part-2', anikoto: 'mushoku-tensei-jobless-reincarnation-season-2-part-2-eaqko', anikotoId: '6159', waves: 'mushoku-tensei-ii-isekai-ittara-honki-dasu-part-2-76485' },
-  '55888':  { neko: 'mushoku-tensei-jobless-reincarnation-season-2-part-2', anikoto: 'mushoku-tensei-jobless-reincarnation-season-2-part-2-eaqko', anikotoId: '6159', waves: 'mushoku-tensei-ii-isekai-ittara-honki-dasu-part-2-76485' },
   '127720': { neko: 'mushoku-tensei-jobless-reincarnation-part-2', anikoto: 'mushoku-tensei-jobless-reincarnation-part-2-hkgog', anikotoId: '6675', waves: 'mushoku-tensei-isekai-ittara-honki-dasu-part-2-76468' },
   '45576':  { neko: 'mushoku-tensei-jobless-reincarnation-part-2', anikoto: 'mushoku-tensei-jobless-reincarnation-part-2-hkgog', anikotoId: '6675', waves: 'mushoku-tensei-isekai-ittara-honki-dasu-part-2-76468' },
   '146065': { neko: 'mushoku-tensei-jobless-reincarnation-season-2', anikoto: 'mushoku-tensei-jobless-reincarnation-season-2-u1lv2', anikotoId: '6537', waves: 'mushoku-tensei-ii-isekai-ittara-honki-dasu-76470' },
@@ -688,24 +707,20 @@ export const INDUSTRY_MAPPINGS = {
 
   // Kaguya-sama: Love is War
   '101921': { neko: 'kaguya-sama-love-is-war', waves: 'kaguya-sama-wa-kokurasetai-tensai-tachi-no-renai-zunousen-76442' },
-  '127720': { neko: 'kaguya-sama-love-is-war-season-2' },
-  '131681': { neko: 'kaguya-sama-love-is-war-ultra-romantic' },
-  '163916': { neko: 'kaguya-sama-love-is-war-the-first-kiss-that-never-ends' },
+  '112641': { neko: 'kaguya-sama-love-is-war-season-2' },
+  '125367': { neko: 'kaguya-sama-love-is-war-ultra-romantic' },
+  '151384': { neko: 'kaguya-sama-love-is-war-the-first-kiss-that-never-ends' },
 
   // The Rising of the Shield Hero
   '99263':  { neko: 'the-rising-of-the-shield-hero', waves: 'tate-no-yuusha-no-nariagari-77974' },
   '108729': { neko: 'the-rising-of-the-shield-hero-season-2', waves: 'tate-no-yuusha-no-nariagari-season-2-77975' },
   '145662': { neko: 'the-rising-of-the-shield-hero-season-3', waves: 'tate-no-yuusha-no-nariagari-season-3-82269' },
 
-  // That Time I Got Reincarnated as a Slime (additional MAL IDs)
-  '37430':  { neko: 'that-time-i-got-reincarnated-as-a-slime', waves: 'tensei-shitara-slime-datta-ken-77966' },
-  '39551':  { neko: 'that-time-i-got-reincarnated-as-a-slime-season-2', waves: 'tensei-shitara-slime-datta-ken-2nd-season-77967' },
-
   // Sword Art Online (sequels)
   '20594':  { neko: 'sword-art-online-ii', waves: 'sword-art-online-ii-1001' },
   '79491':  { neko: 'sword-art-online-alicization', waves: 'sword-art-online-alicization-1002' },
   '107191': { neko: 'sword-art-online-alicization-war-of-underworld', waves: 'sword-art-online-alicization-war-of-underworld-1003' },
-  '119661': { neko: 'sword-art-online-alicization-war-of-underworld-2nd-season', waves: 'sword-art-online-alicization-war-of-underworld-part-2-1004' },
+  '114308': { neko: 'sword-art-online-alicization-war-of-underworld-2nd-season', waves: 'sword-art-online-alicization-war-of-underworld-part-2-1004' },
   '144970': { neko: 'sword-art-online-progressive-aria-of-a-starless-night', waves: 'sword-art-online-progressive-movie-hoshi-naki-yoru-no-aria-1005' },
 
   // Tokyo Ghoul (sequels)
@@ -721,12 +736,11 @@ export const INDUSTRY_MAPPINGS = {
   '20787':  { neko: 'fate-stay-night-heavens-feel-i-presage-flower', waves: 'fate-stay-night-movie-heavens-feel-i-presage-flower-1' },
   '25537':  { neko: 'fate-stay-night-heavens-feel-ii-lost-butterfly', waves: 'fate-stay-night-movie-heavens-feel-ii-lost-butterfly-2' },
   '100444': { neko: 'fate-stay-night-heavens-feel-iii-spring-song', waves: 'fate-stay-night-movie-heavens-feel-iii-spring-song-3' },
-  '112641': { neko: 'fate-grand-order-absolute-demonic-front-babylonia', waves: 'fate-grand-order-zettai-majuu-sensen-babylonia-1' },
+  '103275': { neko: 'fate-grand-order-absolute-demonic-front-babylonia', waves: 'fate-grand-order-zettai-majuu-sensen-babylonia-1' },
 
   // Haikyuu sequels
-  '20464':  { neko: 'haikyu', waves: 'haikyuu-88' },
   '20583':  { neko: 'haikyu-2nd-season', waves: 'haikyuu-2nd-season-89' },
-  '21699':  { neko: 'haikyu-3rd-season', waves: 'haikyuu-3rd-season-90' },
+  '21698':  { neko: 'haikyu-3rd-season', waves: 'haikyuu-3rd-season-90' },
   '100261': { neko: 'haikyu-to-the-top', waves: 'haikyuu-to-the-top-91' },
   '107207': { neko: 'haikyu-to-the-top-2nd-season', waves: 'haikyuu-to-the-top-2nd-season-92' },
   '124406': { neko: 'haikyu-the-dumpster-battle', waves: 'haikyuu-movie-gomisuteba-no-kessen-93' },
@@ -741,7 +755,7 @@ export const INDUSTRY_MAPPINGS = {
 
   // Dr. Stone
   '105333': { neko: 'dr-stone', waves: 'dr-stone-77959' },
-  '112151': { neko: 'dr-stone-stone-wars', waves: 'dr-stone-stone-wars-77960' },
+  '113936': { neko: 'dr-stone-stone-wars', waves: 'dr-stone-stone-wars-77960' },
   '130013': { neko: 'dr-stone-new-world', waves: 'dr-stone-new-world-82264' },
 
   // Mashle
@@ -749,26 +763,21 @@ export const INDUSTRY_MAPPINGS = {
   '163292': { neko: 'mashle-magic-and-muscles-season-2', waves: 'mashle-magic-and-muscles-2nd-season-82272' },
 
   // Dungeon (DanMachi)
-  '19815':  { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-77977' },
-  '100688': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-ii', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-ii-77978' },
-  '116350': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-iii', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-iii-77979' },
-  '150672': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-iv', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-iv-77980' },
+  '20920':  { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-77977' },
+  '101167': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-ii', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-ii-77978' },
+  '112124': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-iii', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-iii-77979' },
+  '129196': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-iv', waves: 'dungeon-ni-deai-wo-motomeru-no-wa-machigatteiru-darou-ka-iv-77980' },
+  '155211': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-iv-part-2' },
+  '170732': { neko: 'is-it-wrong-to-try-to-pick-up-girls-in-a-dungeon-v' },
 
   // Tensei Slime / Black Clover (additional)
   '108569': { neko: 'black-clover-movie-sword-of-the-wizard-king' },
-
-  // Oshi no Ko (AniList ID 142838 already exists; adding MAL ID alias)
-  '54233':  { neko: 'oshi-no-ko', waves: 'oshi-no-ko-18342' },
 
   // Bocchi the Rock
   '130003': { neko: 'bocchi-the-rock', waves: 'bocchi-the-rock-82252' },
 
   // Lycoris Recoil
   '130112': { neko: 'lycoris-recoil', waves: 'lycoris-recoil-82253' },
-
-  // Spy x Family (Season 2)
-  '142838': { neko: 'oshi-no-ko', anikoto: 'my-star-hg319' }, // Already in table but aliased
-  '152954': { neko: 'spy-x-family-season-2', waves: 'spy-x-family-season-2-82259' },
 
   // Hell's Paradise
   '130010': { neko: 'hells-paradise', waves: 'jigokuraku-82260' },

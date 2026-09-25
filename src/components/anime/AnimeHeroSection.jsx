@@ -11,6 +11,7 @@ const APKUpdater = registerPlugin('APKUpdater');
 
 function AnimeHeroSection({
   anime,
+  loading = false,
   resumeEp = 1,
   onPlay,
   onOpenDownloads,
@@ -36,7 +37,11 @@ function AnimeHeroSection({
 
   const inList = isInWatchlist(anime.id);
   const fav = isFavorite(anime.id);
-  const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (totalEps === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING');
+  const hasConfirmedStatus = Boolean(anime.status || typeof anime.episodes === 'number');
+  const isNotReleased = !loading && hasConfirmedStatus && (
+    anime.status === 'NOT_YET_RELEASED' ||
+    (totalEps === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING' && anime.status !== 'FINISHED')
+  );
 
   const handleShare = async () => {
     const latestReleaseUrl = localStorage.getItem('aniplay_latest_release_url') || 'https://github.com/SahilKumar337/AniPlay/releases/latest';
@@ -302,6 +307,7 @@ function AnimeHeroSection({
                 fontWeight: 700,
                 borderRadius: 12,
                 boxShadow: '0 4px 20px color-mix(in srgb, var(--accent) 40%, transparent)',
+                opacity: (loading && !hasConfirmedStatus) ? 0.8 : 1,
               }}
             >
               <Play size={17} fill="#fff" />
@@ -323,6 +329,7 @@ function AnimeHeroSection({
                 background: 'rgba(255,255,255,0.08)',
                 border: '1px solid rgba(255,255,255,0.1)',
                 color: 'var(--text-primary)',
+                opacity: (loading && !hasConfirmedStatus) ? 0.8 : 1,
               }}
             >
               <Download size={17} color="var(--accent)" fill="var(--accent)" />

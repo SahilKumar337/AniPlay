@@ -76,11 +76,12 @@ export default function AnimePage() {
   }, [anime, isAdultAnime]);
 
   const currentYear = new Date().getFullYear();
+  const hasConfirmedStatus = Boolean(anime && (anime.status || typeof anime.episodes === 'number'));
   const isNotYetReleased = Boolean(
-    anime && (
+    !loading && hasConfirmedStatus && (
       (anime.status === 'NOT_YET_RELEASED' && (!anime.startDate?.year || anime.startDate.year > currentYear)) ||
       // Only block playback if zero episodes have aired AND there is no upcoming airing schedule AND release year isn't past.
-      (getAiredEpisodeCount(anime) === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING' && (!anime.startDate?.year || anime.startDate.year > currentYear))
+      (getAiredEpisodeCount(anime) === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING' && anime.status !== 'FINISHED' && (!anime.startDate?.year || anime.startDate.year > currentYear))
     )
   );
 
@@ -660,10 +661,16 @@ export default function AnimePage() {
       {/* 1. Detail Hero Section */}
       <AnimeHeroSection
         anime={anime}
+        loading={loading}
         resumeEp={resumeEp}
         onPlay={() => {
-          if (isNotYetReleased || totalEps === 0) {
+          if (isNotYetReleased) {
             showToast('This anime has not been released yet.');
+            return;
+          }
+          if (totalEps === 0 && loading) return;
+          if (totalEps === 0) {
+            showToast('No episodes available yet.');
             return;
           }
           adEngine.triggerEpisodeAd();
@@ -685,7 +692,7 @@ export default function AnimePage() {
           }}
         >
           {[
-            { k: 'episodes', l: `Episodes (${totalEps})` },
+            { k: 'episodes', l: (loading && totalEps === 0) ? 'Episodes' : `Episodes (${totalEps})` },
             { k: 'similar', l: 'More like this' },
             { k: 'comments', l: 'Discussion' },
             { k: 'characters', l: 'Characters' },
@@ -718,32 +725,44 @@ export default function AnimePage() {
         {tab === 'episodes' && (
           <>
             {totalEps === 0 ? (
-              <div style={{
-                textAlign: 'center',
-                padding: '44px 20px',
-                background: 'rgba(255, 255, 255, 0.02)',
-                borderRadius: 16,
-                border: '1px solid var(--border)',
-                margin: '12px 0 24px',
-              }}>
-                <div style={{
-                  width: 52, height: 52, borderRadius: 26,
-                  background: 'rgba(124, 58, 237, 0.12)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  margin: '0 auto 14px',
-                  color: 'var(--accent)',
-                }}>
-                  <AlertCircle size={26} />
+              loading ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(68px, 1fr))', gap: 8, padding: '12px 0' }}>
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="skeleton"
+                      style={{ height: 44, borderRadius: 10, background: 'rgba(255,255,255,0.04)' }}
+                    />
+                  ))}
                 </div>
-                <h3 style={{ fontSize: 17, fontWeight: 700, color: '#fff', marginBottom: 6 }}>
-                  {isNotYetReleased ? 'Anime Not Yet Released' : 'No Episodes Available'}
-                </h3>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 360, margin: '0 auto', lineHeight: 1.5 }}>
-                  {anime?.startDate?.year 
-                    ? `Scheduled for premiere in ${anime.startDate.year}${anime.season ? ` (${anime.season})` : ''}. Episodes will appear here as soon as they air worldwide.`
-                    : 'Episodes for this anime have not aired yet. Check back closer to the broadcast date!'}
-                </p>
-              </div>
+              ) : (
+                <div style={{
+                  textAlign: 'center',
+                  padding: '44px 20px',
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  borderRadius: 16,
+                  border: '1px solid var(--border)',
+                  margin: '12px 0 24px',
+                }}>
+                  <div style={{
+                    width: 52, height: 52, borderRadius: 26,
+                    background: 'rgba(124, 58, 237, 0.12)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    margin: '0 auto 14px',
+                    color: 'var(--accent)',
+                  }}>
+                    <AlertCircle size={26} />
+                  </div>
+                  <h3 style={{ fontSize: 17, fontWeight: 700, color: '#fff', marginBottom: 6 }}>
+                    {isNotYetReleased ? 'Anime Not Yet Released' : 'No Episodes Available'}
+                  </h3>
+                  <p style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 360, margin: '0 auto', lineHeight: 1.5 }}>
+                    {anime?.startDate?.year 
+                      ? `Scheduled for premiere in ${anime.startDate.year}${anime.season ? ` (${anime.season})` : ''}. Episodes will appear here as soon as they air worldwide.`
+                      : 'Episodes for this anime have not aired yet. Check back closer to the broadcast date!'}
+                  </p>
+                </div>
+              )
             ) : (
               <EpisodeGrid
                 episodes={allEps.map(n => ({ number: n }))}

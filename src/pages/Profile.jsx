@@ -751,7 +751,7 @@ export default function Profile() {
   const [showSignOut, setShowSignOut] = useState(false);
   const [showCloudLogOut, setShowCloudLogOut] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
-  const [appVersion, setAppVersion] = useState("1.0.0");
+  const [appVersion, setAppVersion] = useState("1.6.0");
   const [devTaps, setDevTaps] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -927,7 +927,7 @@ export default function Profile() {
   if (showSettings) return <SettingsPanel onBack={() => setShowSettings(false)} />;
 
   const MENU = [
-    { icon: Sparkles, label: "What's New (v1.5.6)", action: () => setShowReleaseNotes(true), color: "#f59e0b" },
+    { icon: Sparkles, label: "What's New (v1.6.0)", action: () => setShowReleaseNotes(true), color: "#f59e0b" },
     { icon: Settings, label: "Settings", action: () => setShowSettings(true), color: "var(--accent)" },
     { icon: Bell, label: "Notifications", action: () => navigate('/notifications') },
     { icon: Info, label: "About AniPlay", action: () => setShowAbout(true) },
@@ -1236,14 +1236,14 @@ export default function Profile() {
       )}
 
       {showReleaseNotes && (
-        <Modal title="What's New in v1.5.6" onClose={() => setShowReleaseNotes(false)}>
+        <Modal title="What's New in v1.6.0" onClose={() => setShowReleaseNotes(false)}>
           <div style={{ maxHeight: "65vh", overflowY: "auto", paddingRight: 4, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ textAlign: "center", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div style={{ fontSize: 13, fontWeight: 800, color: "var(--accent)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
                 Grand Release · Ultra-Stability Update
               </div>
               <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                Version 1.5.6 · The Most Stable AniPlay Ever
+                Version 1.6.0 · The Most Stable AniPlay Ever
               </div>
             </div>
 

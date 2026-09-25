@@ -69,7 +69,7 @@ if (Test-Path $GeneratedApk) {
         New-Item -ItemType Directory -Path $ApkFolder | Out-Null
     }
 
-    $TargetNamedApk = "$ApkFolder\AniPlay-v1.5.6-release.apk"
+    $TargetNamedApk = "$ApkFolder\AniPlay-v1.6.0-release.apk"
     $TargetRootApk = "$RootPath\AniPlay.apk"
     $TargetRootReleaseApk = "$RootPath\app-release.apk"
 
