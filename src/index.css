@@ -136,6 +136,8 @@ body {
   user-select: none;
   overscroll-behavior-y: none;
   overscroll-behavior: none;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 img {
@@ -222,9 +224,7 @@ button,
 .vaul-drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.78);
   z-index: 10000;
   transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -417,26 +417,25 @@ body,
   position: relative;
   /* opacity-ONLY animation — never add transform here or all fixed children lose viewport pin */
   animation: pageEnter 0.22s cubic-bezier(0.2, 0.9, 0.3, 1) both;
-  will-change: opacity;
 }
 
 /* ── Page Transition Wrapper — smooth fade on every tab switch ──────── */
 .page-transition-wrapper {
   animation: pageEnter 0.24s cubic-bezier(0.2, 0.9, 0.3, 1) both;
-  will-change: opacity;
 }
 
 /* Scrollable page content wrapper */
 .page-content {
   animation: pageContentEnter 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both;
   animation-delay: 0.02s;
-  will-change: opacity;
 }
 
-/* Staggered section entrance */
+/* Staggered section entrance + content-visibility skips off-screen rows */
+.home-section,
 .section-enter {
   animation: sectionFadeUp 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both;
-  /* No permanent will-change — too many layers on mobile GPU */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
 }
 
 .player-overlay-anim {
@@ -474,11 +473,9 @@ body,
 }
 
 .btn-outline {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .btn-outline:active {
@@ -701,9 +698,9 @@ body.keyboard-open .navbar-bottom-bezel {
   border-radius: 9999px;
 
   /* Frosted deep liquid glass styling with lightweight GPU fillrate */
-  background: rgba(14, 14, 22, 0.92);
-  backdrop-filter: blur(28px) saturate(190%) brightness(0.95);
-  -webkit-backdrop-filter: blur(28px) saturate(190%) brightness(0.95);
+  background: rgba(14, 14, 22, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 
   /* Specular highlight rim & multi-depth borders */
   border: 1px solid rgba(255, 255, 255, 0.13);
@@ -1197,7 +1194,6 @@ body.theme-light .nav-item.active .nav-label {
   cursor: pointer;
   transition: background 0.15s ease;
   align-items: center;
-  will-change: transform, background;
   transform: translate3d(0, 0, 0);
   -webkit-transform: translate3d(0, 0, 0);
 }
@@ -1244,15 +1240,13 @@ body.theme-light .nav-item.active .nav-label {
   left: 16px;
   width: 34px;
   height: 34px;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(18, 18, 28, 0.84);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
 }
 
 .share-btn {
@@ -1261,15 +1255,13 @@ body.theme-light .nav-item.active .nav-label {
   right: 16px;
   width: 34px;
   height: 34px;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(18, 18, 28, 0.84);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
 }
 
 .ep-search {
@@ -1359,15 +1351,14 @@ body.theme-light .nav-item.active .nav-label {
   left: 12px;
   width: 32px;
   height: 32px;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(18, 18, 28, 0.84);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
   cursor: pointer;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
 }
 
 .player-info {
@@ -1497,7 +1488,6 @@ body.theme-light .nav-item.active .nav-label {
   flex-direction: column;
   cursor: pointer;
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: transform;
 }
 
 .mylist-card-poster {
@@ -1523,9 +1513,7 @@ body.theme-light .nav-item.active .nav-label {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(18, 18, 28, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.15);
   display: flex;
   align-items: center;
@@ -1664,8 +1652,6 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   pointer-events: none;
   white-space: nowrap;
   z-index: 200;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
 }
 
 .toast.show {
@@ -1678,9 +1664,7 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   position: sticky;
   top: 0;
   z-index: 90;
-  background: rgba(12, 12, 16, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(12, 12, 16, 0.96);
   border-bottom: 0.5px solid var(--border);
   transition: background-color 0.25s ease, border-color 0.25s ease;
   padding-top: var(--sat);
@@ -1692,10 +1676,8 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   height: 36px;
   border-radius: 50%;
   /* Multi-layer glass effect */
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(25, 25, 38, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
   box-shadow:
     0 2px 12px rgba(0,0,0,0.4),
     0 1px 0 rgba(255,255,255,0.12) inset,
@@ -1704,14 +1686,27 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform var(--spring), opacity var(--transition), background var(--transition);
+  transition: transform var(--spring), background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  color: #fff;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.floating-btn:hover {
+  background: rgba(35, 35, 52, 0.95);
+  border-color: rgba(255, 255, 255, 0.24);
   color: #fff;
 }
 
 .floating-btn:active {
-  transform: scale(0.87);
-  opacity: 0.8;
-  background: rgba(255, 255, 255, 0.15);
+  transform: scale(0.92);
+  opacity: 1;
+  background: rgba(45, 45, 68, 0.98);
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow:
+    0 1px 6px rgba(0,0,0,0.5),
+    0 1px 0 rgba(255,255,255,0.18) inset;
+  color: #fff;
 }
 
 /* ---------- Animations ---------- */
@@ -1844,14 +1839,12 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
 
 .pop-in {
   animation: popIn 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: transform, opacity;
   backface-visibility: hidden;
 }
 
 /* Staggered children entrance — apply to parent, children use nth-child delay */
 .stagger-children>* {
   animation: fadeInUp 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: transform, opacity;
   backface-visibility: hidden;
 }
 
@@ -1891,14 +1884,13 @@ button:active:not(.player-ctrl):not(.video-ctrl):not([data-player]) {
   animation-delay: 0.32s;
 }
 
-/* GPU layer prep for ALL interactive cards — prevents compositing on first touch */
+/* GPU layer prep for ALL interactive cards — hardware accelerated with translateZ(0) */
 .anime-card,
 .mylist-card,
 [class*="-card"] {
   transform: translateZ(0);
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
-  will-change: transform;
 }
 
 /* Smooth press feedback — GPU composited */
@@ -1988,7 +1980,6 @@ body.compact-cards .mylist-card select {
 
 .fade-in-up {
   animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: opacity;
 }
 
 /* ─── fade-in: opacity only (safe for fixed children) ─────────────── */
@@ -2162,10 +2153,8 @@ body.compact-cards .mylist-card select {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(16px) saturate(180%);
-  -webkit-backdrop-filter: blur(16px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(25, 25, 38, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   padding: 4px 12px;
   border-radius: 20px;
   margin-bottom: 8px;
@@ -2320,64 +2309,6 @@ body.compact-cards .mylist-card select {
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   VAUL MODERN 120 FPS BOTTOM SHEET / DRAWER SYSTEM
-   ══════════════════════════════════════════════════════════════════════ */
-.vaul-drawer-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  z-index: 10000;
-  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.vaul-drawer-content {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: var(--bg-secondary);
-  border-top-left-radius: 28px;
-  border-top-right-radius: 28px;
-  border: 1px solid var(--border-strong);
-  border-bottom: none;
-  box-shadow: var(--shadow-sheet);
-  z-index: 10001;
-  display: flex;
-  flex-direction: column;
-  max-height: 85vh;
-  outline: none;
-  transform: translateZ(0);
-  will-change: transform;
-  padding-bottom: max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 32px);
-}
-
-.vaul-drawer-handle {
-  width: 38px;
-  height: 4.5px;
-  background: rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
-  margin: 12px auto 8px;
-  flex-shrink: 0;
-}
-
-.vaul-drawer-header {
-  padding: 8px 20px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.vaul-drawer-body {
-  padding: 16px 20px calc(28px + max(var(--android-safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 24px));
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  flex: 1;
-}
 
 /* ══════════════════════════════════════════════════════════════════════
    VIRTUALIZED GRID / LIST CONTAINERS (ZERO MEMORY BLOAT)

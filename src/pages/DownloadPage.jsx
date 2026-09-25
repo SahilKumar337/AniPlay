@@ -5,6 +5,7 @@ import { ScreenOrientation } from "@capacitor/screen-orientation";
 import { registerPlugin, Capacitor } from "@capacitor/core";
 import { downloadManager } from "../utils/DownloadManager";
 import { registerBackButtonHandler } from "../utils/backButton";
+import { getAniNekoServers, resolveSingleServer } from "../api/stream";
 import AniPlayer from "../components/AniPlayer";
 import LoadingWheel from "../components/ui/LoadingWheel";
 
@@ -37,10 +38,9 @@ function LocalPlayerOverlay({ item, onClose }) {
     const isNative = Capacitor.isNativePlatform();
     if (isNative) {
       if (EmbedScraper?.setOrientation) {
-        EmbedScraper.setOrientation({ orientation: "sensor-landscape" }).catch(() => {});
+        EmbedScraper.setOrientation({ orientation: "landscape" }).catch(() => {});
       }
-      ScreenOrientation.lock({ orientation: "sensor-landscape" })
-        .catch(() => ScreenOrientation.lock({ orientation: "landscape" }).catch(() => {}));
+      ScreenOrientation.lock({ orientation: "landscape" }).catch(() => {});
       if (EmbedScraper?.setImmersiveMode) {
         EmbedScraper.setImmersiveMode({ enabled: true }).catch(() => {});
       }
@@ -55,13 +55,11 @@ function LocalPlayerOverlay({ item, onClose }) {
     return () => {
       unregisterBack();
       if (isNative) {
-        // Restore portrait orientation and navigation bar when player closes
+        // On exit: simply unlock so system returns to sensor control — never force portrait
         if (EmbedScraper?.setOrientation) {
           EmbedScraper.setOrientation({ orientation: "portrait" }).catch(() => {});
         }
-        ScreenOrientation.lock({ orientation: "portrait" })
-          .then(() => ScreenOrientation.unlock())
-          .catch(() => {});
+        ScreenOrientation.unlock().catch(() => {});
         if (EmbedScraper?.setImmersiveMode) {
           EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
         }
@@ -73,41 +71,101 @@ function LocalPlayerOverlay({ item, onClose }) {
     let cancelled = false;
     const load = async () => {
       try {
-        // getLocalFileUri returns http://localhost/_capacitor_file_/... URLs
-        // via Capacitor.convertFileSrc — the WebView can stream these directly
-        // with byte-range support (needed for seeking in large video files).
-        const uris = await downloadManager.getLocalFileUri(item.animeTitle, item.episode, item.track);
+        // 1. Direct stream check (from session or getLocalFileUri)
+        let videoUri = item.streamUrl || null;
+        let subtitleUri = item.subtitles?.[0]?.url || item.subtitles?.[0]?.file || null;
+        let subtitleContent = null;
+        let subtitles = item.subtitles || [];
+        let referer = item.referer || '';
+
+        if (!videoUri) {
+          const uris = await downloadManager.getLocalFileUri(item.animeTitle, item.episode, item.track);
+          if (cancelled) return;
+          if (uris?.videoUri) {
+            videoUri = uris.videoUri;
+            subtitleUri = uris.subtitleUri || subtitleUri;
+            subtitleContent = uris.subtitleContent || null;
+            if (uris.subtitles?.length) subtitles = uris.subtitles;
+            if (uris.referer) referer = uris.referer;
+          }
+        }
+
+        // 2. Resilient fallback: If no local file found (e.g. desktop web browser or missing offline file),
+        // dynamically resolve the episode stream using AniNeko / MegaPlay so the user can still watch without errors!
+        if (!videoUri) {
+          console.log('[DownloadPage] Resolving stream for offline player fallback:', item.animeTitle, 'Ep', item.episode);
+          const animeObj = {
+            id: item.animeId || '0',
+            title: {
+              english: item.animeTitle,
+              romaji: item.animeTitle,
+              userPreferred: item.animeTitle
+            },
+            coverImage: { large: item.cover }
+          };
+
+          const serverRes = await getAniNekoServers(animeObj, item.episode, null, false);
+          if (cancelled) return;
+
+          if (serverRes?.servers && serverRes.servers.length > 0) {
+            const trackType = item.track || 'sub';
+            let chosen = serverRes.servers.find(s => (s.type || 'sub') === trackType && s.videoUrl)
+                      || serverRes.servers.find(s => (s.type || 'sub') === trackType)
+                      || serverRes.servers[0];
+
+            if (chosen && (!chosen.videoUrl || !chosen.videoUrl.includes('.m3u8'))) {
+              try {
+                const resolved = await resolveSingleServer(chosen, animeObj, item.episode);
+                if (resolved?.videoUrl) chosen = resolved;
+              } catch (_) {}
+            }
+
+            if (chosen?.videoUrl) {
+              videoUri = chosen.videoUrl;
+              referer = chosen.referer || referer;
+              if (chosen.subtitles?.length) subtitles = chosen.subtitles;
+              subtitleUri = subtitles[0]?.url || subtitles[0]?.file || null;
+
+              // Save stream metadata so future opens are instant
+              downloadManager.saveStreamMetadata(
+                item.animeId,
+                item.animeTitle,
+                item.cover,
+                item.episode,
+                item.track,
+                videoUri,
+                referer,
+                subtitles
+              );
+            }
+          }
+        }
+
         if (cancelled) return;
-        if (!uris.videoUri) {
+
+        if (!videoUri) {
           setError("Video file not found. It may have been deleted from your Downloads folder.");
           return;
         }
 
         // ── Ensure subtitle content is available ──
-        // The native plugin may return subtitlePath (file path) but no subtitleContent
-        // (inlined VTT text). When that happens, fetch the content ourselves so AniPlayer
-        // gets it via the instant `content` path — no URL resolution needed.
-        let subtitleContent = uris.subtitleContent || null;
-        if (!subtitleContent && uris.subtitleUri) {
+        if (!subtitleContent && subtitleUri && (subtitleUri.startsWith('http://localhost') || subtitleUri.startsWith('file://'))) {
           try {
-            // Try window.fetch first (Capacitor local file server)
-            const res = await window.fetch(uris.subtitleUri);
+            const res = await window.fetch(subtitleUri);
             if (res.ok) {
               const text = await res.text();
               if (text && text.length > 5 && (text.includes('-->') || text.includes('WEBVTT') || text.trimStart().startsWith('['))) {
                 subtitleContent = text;
-                console.log(`[DownloadPage] Fetched subtitle content (${text.length} chars) from local file`);
               }
             }
           } catch (fetchErr) {
             console.warn('[DownloadPage] window.fetch subtitle failed:', fetchErr.message);
           }
 
-          // Fallback: CapacitorHttp for file:// paths
           if (!subtitleContent && window.Capacitor?.isNativePlatform?.()) {
             try {
               const { CapacitorHttp } = await import('@capacitor/core');
-              let localPath = uris.subtitleUri;
+              let localPath = subtitleUri;
               if (localPath.includes('_capacitor_file_')) {
                 const match = localPath.match(/_capacitor_file_(.+)/);
                 if (match) localPath = 'file://' + decodeURIComponent(match[1]);
@@ -115,7 +173,6 @@ function LocalPlayerOverlay({ item, onClose }) {
               const resp = await CapacitorHttp.request({ url: localPath, method: 'GET', responseType: 'text' });
               if (resp.status === 200 && resp.data) {
                 subtitleContent = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
-                console.log(`[DownloadPage] CapacitorHttp fetched subtitle content (${subtitleContent.length} chars)`);
               }
             } catch (e) {
               console.warn('[DownloadPage] CapacitorHttp subtitle fallback failed:', e.message);
@@ -125,9 +182,11 @@ function LocalPlayerOverlay({ item, onClose }) {
 
         if (cancelled) return;
         setPlayerData({
-          videoUri: uris.videoUri,
-          subtitleUri: uris.subtitleUri || null,
-          subtitleContent: subtitleContent
+          videoUri,
+          subtitleUri,
+          subtitleContent,
+          subtitles,
+          referer
         });
       } catch (e) {
         if (!cancelled) setError(e.message || "Failed to open video");
@@ -137,17 +196,24 @@ function LocalPlayerOverlay({ item, onClose }) {
     return () => { cancelled = true; };
   }, [item]);
 
-
-  const subtracks = playerData && (playerData.subtitleContent || playerData.subtitleUri)
-    ? [{
-        id: 0,
-        file: playerData.subtitleUri || 'local://subtitles.vtt',
-        content: playerData.subtitleContent || null,
-        label: "English",
+  const subtracks = (playerData?.subtitles && playerData.subtitles.length > 0)
+    ? playerData.subtitles.map((s, idx) => ({
+        id: idx,
+        file: s.url || s.file || (typeof s === 'string' ? s : ''),
+        label: s.lang || s.label || `Subtitle ${idx + 1}`,
         kind: "captions",
-        default: true
-      }]
-    : [];
+        default: idx === 0 || (s.lang && s.lang.toLowerCase().includes('eng'))
+      }))
+    : (playerData && (playerData.subtitleContent || playerData.subtitleUri)
+      ? [{
+          id: 0,
+          file: playerData.subtitleUri || 'local://subtitles.vtt',
+          content: playerData.subtitleContent || null,
+          label: "English",
+          kind: "captions",
+          default: true
+        }]
+      : []);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -167,6 +233,7 @@ function LocalPlayerOverlay({ item, onClose }) {
       {!error && playerData && (
         <AniPlayer
           url={playerData.videoUri}
+          referer={playerData.referer}
           isLocal={true}
           title={`${item.animeTitle} — Ep ${item.episode} (${(item.track || "sub").toUpperCase()})`}
           subtitles={subtracks}

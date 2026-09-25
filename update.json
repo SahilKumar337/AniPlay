@@ -1,17 +1,17 @@
 {
-  "latestVersion": "1.5.6",
-  "versionCode": 56,
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.6/AniPlay.apk",
+  "latestVersion": "1.6.0",
+  "versionCode": 60,
+  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk",
   "forceUpdate": false,
-  "changelog": "AniPlay v1.5.6 \u2014 Grand Ultra-Stability & Precision Update (Freeze Watchdog, Anti-Random-Anime Shield, Low-Network Streaming & Full DUB Parity)",
+  "changelog": "AniPlay v1.6.0 — Mega Release (Realtime Comment Alerts, Airing Push Engine, Multi-Part Matcher & Glass UI)",
   "changelogItems": [
-    "\ud83d\udee1\ufe0f Anti-Random-Anime Shield: Mathematical 60%+ significant keyword coverage eliminates wrong anime or random titles on DUB",
-    "\ud83e\uddca Silent Video Freeze Watchdog: Auto-detects hardware GPU decoder stalls and instantly recovers picture while sound plays",
-    "\ud83d\udcfa YouTube/Netflix Low-Network Stream Engine: Instant fallback to stable resolutions when internet bandwidth fluctuates",
-    "\u26a1 Mega-Series 1000+ Episode Acceleration: Instant sub-second episode jumps for One Piece and giant series with cached lists",
-    "\ud83c\udfa7 Unified DUB Availability & Download Parity: 3-state DUB discovery ensures accurate DUB options across player and download drawers",
-    "\ud83d\udcc5 Airing Episode Synchronizer: Prevents unreleased future episodes (e.g. Ep 24) from showing as playable before world premiere",
-    "\u2728 Butter-Smooth 120Hz Animations: Fluid glassmorphism UI, zero-jitter transitions, and persistent orientation lock"
+    "🔔 YouTube-Style Notification System: In-app Bell with live unread badge, dedicated inbox tabs (All, Releases, Reminders), and native Android status bar alerts",
+    "💬 Realtime Comment & Like Alerts: Instant notifications when someone likes your comments or replies to your discussion in the community",
+    "🎬 Universal Multi-Part & Season Stream Matcher: Seamless playback support for complex titled anime (e.g. 86 Part 2, Roman numerals, number-word titles) via Cloudflare KV slug map",
+    "🎨 Tactile Liquid Glass Header: Fixed icon transparency on mobile tap; navigation pills remain solid and responsive with haptic scaling",
+    "🛡️ Anti-Random-Anime Shield & DUB Parity: Precision keyword coverage guarantees 100% correct streams and downloads across AniNeko, AniKoto, and AniWaves",
+    "🧊 GPU Decoder Freeze Watchdog: Hardware-level recovery prevents video freezing while audio continues playing on weak decoders",
+    "✨ Butter-Smooth 120Hz Animations: Fluid visionOS/iOS 18 glassmorphism, zero-jitter transitions, and persistent orientation locks"
   ],
   "domains": {
     "neko": "https://anineko.es",
@@ -21,7 +21,7 @@
     "animepahe": "https://animepahe.pw"
   },
   "maintenanceMessage": null,
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.5.6/bundle.zip",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/bundle.zip",
   "ads": {
     "enabled": false,
     "directLink": {

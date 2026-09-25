@@ -3,6 +3,7 @@ import { Preferences } from '@capacitor/preferences';
 import { App } from '@capacitor/app';
 import { supabase, fetchCloudWatchlist, syncCloudProgress, fetchUserProfile, updateCloudRecentlyViewed, updateCloudSettings, backupLocalDataOnUpdate } from '../api/supabase';
 import { getAnimesByIds } from '../api/anilist';
+import { triggerNativeBanner } from '../api/notifications';
 
 const AppContext = createContext(null);
 
@@ -20,6 +21,12 @@ function minimizeAnime(anime) {
     season: anime.season,
     seasonYear: anime.seasonYear,
     format: anime.format,
+    // Required for getAiredEpisodeCount() to correctly report episode totals
+    // for currently-airing shows in Continue Watching. Without this, airing
+    // anime show "EP X / 1" instead of the correct aired count.
+    nextAiringEpisode: anime.nextAiringEpisode
+      ? { episode: anime.nextAiringEpisode.episode, timeUntilAiring: anime.nextAiringEpisode.timeUntilAiring }
+      : null,
   };
 }
 
@@ -53,6 +60,8 @@ const DEFAULT_SETTINGS = {
   // Data
   autoBackup: true,
   downloadLocation: 'AniPlay',
+  // Adult / 18+ Content
+  adultMode: true,
   updatedAt: 0,
 };
 
@@ -145,7 +154,8 @@ export function AppProvider({ children }) {
         if (sVal.value) {
           try {
             const savedSettings = JSON.parse(sVal.value);
-            setSettings(prev => ({ ...prev, ...savedSettings }));
+            setSettings(prev => ({ ...prev, ...savedSettings, adultMode: false }));
+            localStorage.setItem('anilab_adult_mode', 'false');
           } catch (_) {}
         }
 
@@ -714,6 +724,7 @@ export function AppProvider({ children }) {
     try {
       if (settings.accentColor) localStorage.setItem('aniplay_accent_fast', settings.accentColor);
       localStorage.setItem('aniplay_dark_fast', String(settings.darkMode !== false));
+      localStorage.setItem('anilab_adult_mode', 'false');
     } catch (_) {}
   }, [settings, loaded]);
 
@@ -1035,14 +1046,18 @@ export function AppProvider({ children }) {
     let nextRecently = [];
     setRecentlyViewed(prev => {
       const filtered = prev.filter(item => item?.anime?.id !== anime.id);
-
-      const minimizedAnime = {
+      // Use the shared minimizeAnime helper to ensure all needed fields (including
+      // nextAiringEpisode + episodes) are preserved for accurate episode count display
+      const minimizedAnime = minimizeAnime(anime) || {
         id: anime.id,
         title: anime.title || {},
         coverImage: anime.coverImage || {},
-        genres: anime.genres || [],
-        averageScore: anime.averageScore || 70,
-        status: anime.status || 'FINISHED'
+        status: anime.status || 'FINISHED',
+        episodes: anime.episodes,
+        format: anime.format,
+        nextAiringEpisode: anime.nextAiringEpisode
+          ? { episode: anime.nextAiringEpisode.episode, timeUntilAiring: anime.nextAiringEpisode.timeUntilAiring }
+          : null,
       };
 
       nextRecently = [{ anime: minimizedAnime, episode, timestamp: Date.now() }, ...filtered].slice(0, 15);
@@ -1163,8 +1178,102 @@ export function AppProvider({ children }) {
   // deps (stable, created once at mount) thanks to userRef and
   // triggerDebouncedSyncRef. On login, only syncWithCloud (which genuinely
   // needs user) updates in context — causing at most 1 Browse re-render.
-  // Stub — future: count unread from Supabase notifications table
-  const refreshUnreadCount = useCallback(() => {}, []); // STABLE
+  // ── Notification Unread Badge Management ──────────────────────────────
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const calculateUnreadCount = useCallback(async () => {
+    let count = 0;
+    try {
+      const raw = localStorage.getItem('aniplay_local_notifications') || '[]';
+      const list = JSON.parse(raw);
+      const now = Date.now();
+      const localUnread = list.filter(n => {
+        if (n.is_read) return false;
+        const cAt = n.created_at ? new Date(n.created_at).getTime() : now;
+        return cAt <= now;
+      }).length;
+      count += localUnread;
+    } catch (_) {}
+
+    if (userRef.current?.id) {
+      try {
+        const { count: remoteUnread, error } = await supabase
+          .from('notifications')
+          .select('id', { count: 'exact', head: true })
+          .eq('target_user_id', userRef.current.id)
+          .eq('is_read', false);
+        if (!error && typeof remoteUnread === 'number') {
+          count += remoteUnread;
+        }
+      } catch (_) {}
+    }
+
+    setUnreadCount(count);
+  }, []);
+
+  const refreshUnreadCount = useCallback(() => {
+    calculateUnreadCount().catch(() => {});
+  }, [calculateUnreadCount]);
+
+  useEffect(() => {
+    refreshUnreadCount();
+    const handleUpdate = () => refreshUnreadCount();
+    window.addEventListener('aniplay_unread_notifications_updated', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
+    return () => {
+      window.removeEventListener('aniplay_unread_notifications_updated', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
+    };
+  }, [refreshUnreadCount, user]);
+
+  // ── Realtime Notification Listener (Instant Alert on Likes & Replies) ──
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`realtime_notifs_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `target_user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const notif = payload.new;
+          if (!notif) return;
+
+          refreshUnreadCount();
+
+          const isLike = notif.type === 'like';
+          const isReply = notif.type === 'reply';
+          const title = isLike
+            ? `❤️ ${notif.actor_name || 'Someone'} liked your comment`
+            : isReply
+              ? `💬 ${notif.actor_name || 'Someone'} replied to your comment`
+              : `🎬 ${notif.actor_name || 'AniPlay'}`;
+
+          const body = notif.comment_preview || (isLike ? 'Liked your comment' : 'Replied to your comment');
+
+          triggerNativeBanner({
+            title,
+            body,
+            animeId: notif.anime_id,
+            extraData: {
+              type: notif.type,
+              target_user_id: notif.target_user_id,
+              actorName: notif.actor_name,
+            },
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, refreshUnreadCount]);
 
   const contextValue = useMemo(() => ({
     watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
@@ -1174,8 +1283,8 @@ export function AppProvider({ children }) {
     likedComments, toggleLikeComment,
     showToast, loaded, user, userProfile, syncWithCloud, flushSync,
     settings, updateSettings,
-    unreadCount: 0,         // reserved for future notification system
-    refreshUnreadCount,     // used by Notifications.jsx
+    unreadCount,
+    refreshUnreadCount,
   }), [
     watchlist, addToWatchlist, removeFromWatchlist, updateWatchlistStatus, isInWatchlist,
     favorites, toggleFavorite, isFavorite,
@@ -1183,7 +1292,7 @@ export function AppProvider({ children }) {
     recentlyViewed, addToRecentlyViewed, removeFromRecentlyViewed, removeFromHistory,
     likedComments, toggleLikeComment,
     showToast, loaded, user, syncWithCloud, flushSync,
-    settings, updateSettings, refreshUnreadCount
+    settings, updateSettings, unreadCount, refreshUnreadCount
   ]);
 
   return (

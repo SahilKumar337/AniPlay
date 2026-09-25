@@ -12,6 +12,7 @@ import WelcomeScreen from './components/WelcomeScreen';
 import NewPasswordModal from './components/NewPasswordModal';
 import Navbar from './components/Navbar';
 import { requestInitialPermissions } from './api/permissions';
+import { initPushNotifications } from './api/notifications';
 import { setDynamicDomains, setDynamicMappings } from './api/scrapers';
 import adEngine from './services/adEngine';
 
@@ -195,6 +196,14 @@ function AppInner({ showWelcome, onEnter }) {
     if (!isNative) return;
     requestInitialPermissions().catch(() => {});
   }, [isNative]);
+
+  // Initialize Push & Local Notifications (channel setup, FCM token sync, foreground & tap listeners)
+  useEffect(() => {
+    if (!isNative) return;
+    initPushNotifications(user?.id, navigate).catch(err => {
+      console.warn('[PushNotifications] Init warning:', err);
+    });
+  }, [isNative, user?.id, navigate]);
 
 
   // First-time onboarding: navigate to auth page after 1.5s if not logged in

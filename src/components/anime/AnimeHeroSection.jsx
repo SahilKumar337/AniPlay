@@ -36,7 +36,7 @@ function AnimeHeroSection({
 
   const inList = isInWatchlist(anime.id);
   const fav = isFavorite(anime.id);
-  const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (totalEps === 0 && !anime.nextAiringEpisode);
+  const isNotReleased = anime.status === 'NOT_YET_RELEASED' || (totalEps === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING');
 
   const handleShare = async () => {
     const latestReleaseUrl = localStorage.getItem('aniplay_latest_release_url') || 'https://github.com/SahilKumar337/AniPlay/releases/latest';
@@ -260,29 +260,6 @@ function AnimeHeroSection({
             {isAiring && anime.episodes && anime.episodes > totalEps
               ? `${totalEps}/${anime.episodes} eps`
               : `${totalEps} eps`}
-          </span>
-        )}
-        {isAiring && anime.nextAiringEpisode?.timeUntilAiring && (
-          <span
-            style={{
-              fontSize: 10,
-              color: '#4ade80',
-              fontWeight: 700,
-              background: 'rgba(74, 222, 128, 0.12)',
-              border: '1px solid rgba(74, 222, 128, 0.25)',
-              padding: '1px 6px',
-              borderRadius: 6,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-          >
-            ● Ep {anime.nextAiringEpisode.episode} in {(() => {
-              const s = anime.nextAiringEpisode.timeUntilAiring;
-              const d = Math.floor(s / 86400);
-              const h = Math.floor((s % 86400) / 3600);
-              return d > 0 ? `${d}d ${h}h` : `${h}h`;
-            })()}
           </span>
         )}
       </div>

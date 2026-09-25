@@ -101,3 +101,4 @@ android/app/google-services.json
 # 🔐 Supabase configs, edge functions & database migrations
 supabase/
 *.sql
+slug-server/

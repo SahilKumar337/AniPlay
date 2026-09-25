@@ -1,21 +1,42 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# AniPlay Production ProGuard / R8 Optimization Rules
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ── App Native Plugins & Service ──────────────────────────────────────────────
+-keep class com.aniplay.aniplay.** { *; }
+-keepclassmembers class com.aniplay.aniplay.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ── Capacitor Core & Plugin Interfaces ─────────────────────────────────────────
+-keep class com.getcapacitor.** { *; }
+-keepclassmembers class com.getcapacitor.** { *; }
+-keep public class * extends com.getcapacitor.Plugin {
+    public *;
+}
+-keepclassmembers class * extends com.getcapacitor.Plugin {
+    @com.getcapacitor.PluginMethod public *;
+    @com.getcapacitor.annotation.ActivityCallback public *;
+    @com.getcapacitor.annotation.PermissionCallback public *;
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ── JavaScript Interface & WebView Bridge ──────────────────────────────────────
+-keepattributes JavascriptInterface
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+
+# ── FFmpegKit (Muxing & Remuxing Engine) ──────────────────────────────────────
+-keep class com.arthenica.ffmpegkit.** { *; }
+-keepclassmembers class com.arthenica.ffmpegkit.** { *; }
+-dontwarn com.arthenica.ffmpegkit.**
+
+# ── OkHttp & Okio (Parallel Chunk Downloader) ──────────────────────────────────
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+-keep class okio.** { *; }
+-keep interface okio.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+
+# ── AndroidX SplashScreen & Core ───────────────────────────────────────────────
+-keep class androidx.core.splashscreen.** { *; }
+-dontwarn androidx.core.splashscreen.**

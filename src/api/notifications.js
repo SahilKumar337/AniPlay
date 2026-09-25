@@ -12,19 +12,17 @@ const IS_NATIVE = Capacitor.isNativePlatform();
 export async function setupNotificationChannels() {
   if (!IS_NATIVE) return;
   try {
-
     await LocalNotifications.createChannel({
       id: 'aniplay_alerts',
       name: 'AniPlay Alerts',
-      description: 'Episode release alerts and community replies',
+      description: 'Episode release alerts and community updates',
       importance: 5, // High
       visibility: 1, // Public on lockscreen
-      sound: 'notification_sound.mp3',
       vibration: true,
       lights: true,
       lightColor: '#7C3AED',
     });
-    console.log('[NativeNotifications] Channel created: aniplay_alerts');
+    console.log('[NativeNotifications] Channel verified: aniplay_alerts');
   } catch (e) {
     console.warn('[NativeNotifications] Channel setup warning:', e.message);
   }
@@ -33,23 +31,26 @@ export async function setupNotificationChannels() {
 /**
  * ── Save Notification to LocalStorage for In-App Display (0 Supabase Egress) ──
  */
-export async function saveEpisodeNotificationInApp({ title, body, animeId, episode, airingAtMs }) {
-  const animeIdStr = String(animeId);
+export async function saveNotificationInApp({ title, body, animeId, episode, type = 'episode', actorName = 'AniPlay', airingAtMs }) {
+  const animeIdStr = animeId ? String(animeId) : null;
   const notifObj = {
-    id: `ep_${animeIdStr}_${episode}_${Date.now()}`,
-    actor_name: 'AniPlay',
-    type: 'episode',
-    comment_preview: body || `Episode ${episode} is now available to watch!`,
+    id: `notif_${animeIdStr || 'gen'}_${episode || Date.now()}_${Math.floor(Math.random() * 10000)}`,
+    actor_name: actorName || 'AniPlay',
+    type: type || 'episode',
+    comment_preview: body || (episode ? `Episode ${episode} is now available to watch!` : title || 'New update available'),
     anime_id: animeIdStr,
     is_read: false,
     created_at: airingAtMs ? new Date(airingAtMs).toISOString() : new Date().toISOString(),
   };
 
-  // Saved 100% in LocalStorage (ZERO Supabase DB storage & ZERO Egress)
+  // Saved in LocalStorage (0 Supabase DB storage & 0 Egress)
   try {
     const raw = localStorage.getItem('aniplay_local_notifications') || '[]';
     const list = JSON.parse(raw);
-    const exists = list.some(n => n.anime_id === animeIdStr && n.comment_preview === notifObj.comment_preview);
+    const exists = list.some(n =>
+      (animeIdStr && n.anime_id === animeIdStr && n.comment_preview === notifObj.comment_preview) ||
+      (n.id === notifObj.id)
+    );
     if (!exists) {
       list.unshift(notifObj);
       localStorage.setItem('aniplay_local_notifications', JSON.stringify(list.slice(0, 50)));
@@ -60,6 +61,8 @@ export async function saveEpisodeNotificationInApp({ title, body, animeId, episo
   } catch (_) {}
 }
 
+export const saveEpisodeNotificationInApp = saveNotificationInApp;
+
 /**
  * ── Show Native System Status Bar Banner ──────────────────────────────────
  */
@@ -67,13 +70,20 @@ export async function triggerNativeBanner({ title, body, animeId, episode, extra
   if (!title || !body) return;
 
   // Always save in-app notification first so the Notifications page is updated
-  if (animeId) {
-    saveEpisodeNotificationInApp({ title, body, animeId, episode }).catch(() => {});
-  }
+  saveNotificationInApp({
+    title,
+    body,
+    animeId,
+    episode,
+    type: extraData?.type || (episode ? 'episode' : 'system'),
+    actorName: extraData?.actor_name || extraData?.actorName || 'AniPlay'
+  }).catch(() => {});
 
   if (!IS_NATIVE) {
     if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(title, { body, icon: '/icon.png' });
+      try {
+        new Notification(title, { body, icon: '/icon.png' });
+      } catch (_) {}
     }
     return;
   }
@@ -114,14 +124,19 @@ export async function initPushNotifications(userId, navigateCallback) {
 
     const handleTap = (extra) => {
       if (!navigateCallback || !extra) return;
-      if (extra.animeId && extra.episode) {
-        navigateCallback(`/watch/${extra.animeId}/${extra.episode}`);
-      } else if (extra.animeId) {
-        navigateCallback(`/anime/${extra.animeId}`);
-      } else if (extra.type === 'reply' || extra.type === 'like') {
+      const animeId = extra.animeId || extra.anime_id;
+      if (animeId && extra.episode) {
+        navigateCallback(`/watch/${animeId}/${extra.episode}`);
+      } else if (animeId) {
+        navigateCallback(`/anime/${animeId}`);
+      } else if (extra.type === 'reply' || extra.type === 'like' || extra.target_user_id) {
         navigateCallback('/notifications');
       }
     };
+
+    try {
+      await LocalNotifications.removeAllListeners();
+    } catch (_) {}
 
     try {
       LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
@@ -140,32 +155,56 @@ export async function initPushNotifications(userId, navigateCallback) {
 
     if (perm?.receive === 'granted') {
       try {
+        // If we have a cached FCM token and a user is logged in, sync it immediately
+        const cachedToken = localStorage.getItem('aniplay_fcm_token');
+        if (userId && cachedToken) {
+          supabase
+            .from('user_profiles')
+            .update({ fcm_token: cachedToken })
+            .eq('id', userId)
+            .catch(() => {});
+        }
+
+        try {
+          await PushNotifications.removeAllListeners();
+        } catch (_) {}
+
         PushNotifications.addListener('registration', async (token) => {
-          if (userId && token?.value) {
-            try {
-              await supabase
-                .from('user_profiles')
-                .update({ fcm_token: token.value })
-                .eq('id', userId);
-            } catch (_) {}
+          if (token?.value) {
+            localStorage.setItem('aniplay_fcm_token', token.value);
+            if (userId) {
+              try {
+                await supabase
+                  .from('user_profiles')
+                  .update({ fcm_token: token.value })
+                  .eq('id', userId);
+              } catch (_) {}
+            }
           }
         });
 
+        PushNotifications.addListener('registrationError', (err) => {
+          console.warn('[PushNotifications] Registration error:', err);
+        });
+
         PushNotifications.addListener('pushNotificationReceived', (notification) => {
+          console.log('[PushNotifications] Received in foreground:', notification);
           triggerNativeBanner({
             title: notification?.title || 'AniPlay Notification',
             body: notification?.body || '',
-            animeId: notification?.data?.animeId,
+            animeId: notification?.data?.animeId || notification?.data?.anime_id,
             episode: notification?.data?.episode,
             extraData: notification?.data,
           });
         });
 
         PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+          console.log('[PushNotifications] Action performed:', action);
           if (navigateCallback && action?.notification?.data) {
             const extra = action.notification.data;
-            if (extra.animeId && extra.episode) navigateCallback(`/watch/${extra.animeId}/${extra.episode}`);
-            else if (extra.animeId) navigateCallback(`/anime/${extra.animeId}`);
+            const animeId = extra.animeId || extra.anime_id;
+            if (animeId && extra.episode) navigateCallback(`/watch/${animeId}/${extra.episode}`);
+            else if (animeId) navigateCallback(`/anime/${animeId}`);
             else navigateCallback('/notifications');
           }
         });
@@ -258,6 +297,14 @@ export async function checkAndTriggerEpisodeAlerts(airingList = [], watchlist = 
             console.warn('[NativeNotifications] Pre-schedule error:', e.message);
           }
         }
+
+        saveNotificationInApp({
+          title: `🎬 New Episode Released!`,
+          body: `Episode ${nextEp.episode} of ${title} is now available to watch!`,
+          animeId: anime.id,
+          episode: nextEp.episode,
+          airingAtMs: airTimeMs
+        }).catch(() => {});
       }
     }
 

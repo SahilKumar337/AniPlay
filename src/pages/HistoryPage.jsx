@@ -206,10 +206,11 @@ export default function HistoryPage() {
         <AnimatePresence mode="wait">
           <motion.div
             key={tab}
-            initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }}
-            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
-            transition={{ duration: 0.24, ease: [0.25, 1, 0.5, 1] }}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+            style={{ willChange: 'transform, opacity' }}
           >
             {displayed.length === 0 ? (
               <EmptyState tab={tab} />
@@ -218,9 +219,10 @@ export default function HistoryPage() {
                 {displayed.map((item, idx) => (
                   <motion.div
                     key={item.anime?.id || idx}
-                    initial={{ opacity: 0, y: 6 }}
+                    initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2, delay: Math.min(idx * 0.03, 0.18) }}
+                    transition={{ duration: 0.18, delay: Math.min(idx * 0.025, 0.12), ease: [0.25, 1, 0.5, 1] }}
+                    style={{ willChange: 'transform, opacity' }}
                   >
                     <HistoryCard
                       item={item}

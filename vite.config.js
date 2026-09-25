@@ -3,20 +3,31 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  oxc: {
+    drop: ['console', 'debugger'],
+  },
   build: {
-    rolldownOptions: {
+    rollupOptions: {
       output: {
-        minify: {
-          compress: {
-            dropConsole: true,
-          },
-        },
         manualChunks(id) {
           if (id.includes('node_modules/hls.js')) return 'player-engine';
-          if (id.includes('node_modules/gsap') || id.includes('node_modules/lenis') || id.includes('node_modules/three')) return 'landing-animation';
+          if (id.includes('node_modules/gsap') || id.includes('node_modules/lenis')) return 'landing-animation';
           if (id.includes('node_modules/@supabase')) return 'supabase';
           if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) return 'vendor-react';
           if (id.includes('node_modules/motion')) return 'motion';
+          if (id.includes('/api/scrapers') || id.includes('/api/embedScraper') || id.includes('/api/stream') || id.includes('/utils/slugMatcher') || id.includes('/utils/megaplayDecrypt') || id.includes('/utils/vidplayDecrypt')) return 'scraper-engine';
+        },
+      },
+    },
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/hls.js')) return 'player-engine';
+          if (id.includes('node_modules/gsap') || id.includes('node_modules/lenis')) return 'landing-animation';
+          if (id.includes('node_modules/@supabase')) return 'supabase';
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) return 'vendor-react';
+          if (id.includes('node_modules/motion')) return 'motion';
+          if (id.includes('/api/scrapers') || id.includes('/api/embedScraper') || id.includes('/api/stream') || id.includes('/utils/slugMatcher') || id.includes('/utils/megaplayDecrypt') || id.includes('/utils/vidplayDecrypt')) return 'scraper-engine';
         },
       },
     },

@@ -1,18 +1,32 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Hls from 'hls.js';
-import { CapacitorHttp, CapacitorCookies, registerPlugin } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, CapacitorCookies, registerPlugin } from '@capacitor/core';
 import {
   Play, Pause, Volume2, VolumeX, Volume1,
   Maximize, Minimize, Settings, Subtitles,
-  RotateCcw, RotateCw, ArrowLeft, Clock, SkipForward, SkipBack, X
+  RotateCcw, RotateCw, ArrowLeft, Clock, SkipForward, SkipBack, X,
+  RectangleHorizontal, ZoomIn, MoveHorizontal
 } from 'lucide-react';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
+import { registerBackButtonHandler } from '../utils/backButton';
 import VideoAdOverlay from './ads/VideoAdOverlay';
 import adEngine from '../services/adEngine';
 import { getNetworkProfile, findLowestQualityLevel, recordNetworkSample, subscribeNetworkChanges } from '../utils/networkSpeed';
+import { getCachedPlaylistText } from '../api/stream';
 import './AniPlayer.css';
+
+export function isNativePlatform() {
+  try {
+    if (typeof window !== 'undefined' && (window.Capacitor?.isNativePlatform?.() || window.Capacitor?.getPlatform?.() === 'android')) {
+      return true;
+    }
+    return Capacitor.isNativePlatform();
+  } catch (_) {
+    return false;
+  }
+}
 
 const EmbedScraper = registerPlugin('EmbedScraper');
 
@@ -25,7 +39,7 @@ let _BrightnessPlugin = undefined; // lazy-loaded on first use
 function getBrightnessPlugin() {
   if (_BrightnessPlugin !== undefined) return _BrightnessPlugin;
   // Only attempt on native platforms
-  if (!window.Capacitor?.isNativePlatform?.()) {
+  if (!isNativePlatform()) {
     _BrightnessPlugin = null;
     return null;
   }
@@ -98,7 +112,22 @@ function sanitizeSubtitleHtml(raw) {
    CapacitorHttp which bypasses CORS at the OS network layer.
    This eliminates the need for any backend HLS proxy server.
 ──────────────────────────────────────────────────────────────── */
-const isNative = typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
+const isNative = isNativePlatform();
+
+export function getEffectivePlayableUrl(rawUrl, referer) {
+  if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+  if (isNativePlatform() || rawUrl.includes('localhost:8081') || rawUrl.includes('_capacitor_file_') || rawUrl.startsWith('file:') || rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) {
+    return rawUrl;
+  }
+  // If already proxied via backend, keep it
+  if (rawUrl.includes('/api/stream/hls') || rawUrl.includes('/api/stream/segment')) {
+    return rawUrl;
+  }
+  const streamProxy = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_STREAM_PROXY_URL) || 'http://localhost:4000/api/stream/hls';
+  const effectiveRef = referer || 'https://megaplay.buzz/';
+  const sep = streamProxy.includes('?') ? '&' : '?';
+  return `${streamProxy}${sep}url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(effectiveRef)}`;
+}
 
 /* ─── MPEG-TS / fMP4 Header De-obfuscator ───────────────────────
    MegaCloud / MegaPlay disguise video segments on TikTok CDN (and other CDNs)
@@ -149,27 +178,97 @@ function stripObfuscatedHeader(data) {
 function base64ToArrayBuffer(base64) {
   if (!base64) return new ArrayBuffer(0);
   if (base64 instanceof ArrayBuffer) return base64;
-  if (ArrayBuffer.isView(base64)) return base64.buffer;
+  if (ArrayBuffer.isView(base64)) return base64.buffer.slice(base64.byteOffset, base64.byteOffset + base64.byteLength);
   let clean = typeof base64 === 'string' ? base64 : String(base64);
   const commaIdx = clean.indexOf(',');
-  if (commaIdx !== -1) {
+  if (commaIdx !== -1 && commaIdx < 100) {
     clean = clean.slice(commaIdx + 1);
   }
-  clean = clean.replace(/[\r\n\s]/g, '');
-  while (clean.length % 4 !== 0) {
-    clean += '=';
+  // Strip whitespace / newlines from Capacitor Base64.DEFAULT
+  if (clean.includes('\n') || clean.includes('\r') || clean.includes(' ') || clean.includes('\t')) {
+    clean = clean.replace(/[\r\n\s\t]/g, '');
   }
-  const binary_string = window.atob(clean);
-  const len = binary_string.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binary_string.charCodeAt(i);
+  if (!clean) return new ArrayBuffer(0);
+
+  const rem = clean.length % 4;
+  if (rem === 2) clean += '==';
+  else if (rem === 3) clean += '=';
+
+  try {
+    const binary_string = window.atob(clean);
+    const len = binary_string.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary_string.charCodeAt(i);
+    }
+    return bytes.buffer;
+  } catch (e) {
+    console.error('[base64ToArrayBuffer] atob failed:', e.message, 'clean len:', clean.length);
+    return new ArrayBuffer(0);
   }
-  return bytes.buffer;
 }
 
-// Cache of hosts that require CapacitorHttp due to lack of CORS headers on Android
-const corsBlockedHostnames = new Set();
+// Proper referer resolver matching native OfflineDownloader
+function getProperReferer(urlStr, fallbackRef) {
+  if (!urlStr) return fallbackRef || '';
+  const lower = urlStr.toLowerCase();
+  if (lower.includes('otakuhg') || lower.includes('premilkyway') || lower.includes('cdn-centaurus') || lower.includes('streamhg') || lower.includes('financialintelligence')) {
+    return 'https://otakuhg.site/';
+  }
+  if (lower.includes('otakuvid') || lower.includes('dramiyos') || lower.includes('acek-cdn') || lower.includes('earnvids') || lower.includes('mediadexmora')) {
+    return 'https://otakuvid.online/';
+  }
+  if (lower.includes('megap') || lower.includes('megacloud') || lower.includes('rabbitstream')
+      || lower.includes('mfast') || lower.includes('rapid-cloud') || lower.includes('kryntal')
+      || lower.includes('norami') || lower.includes('imgnex') || lower.includes('dokicloud')
+      || lower.includes('akirax') || lower.includes('shiora') || lower.includes('mikora')
+      || lower.includes('quavex') || lower.includes('nexabloom') || lower.includes('streamzone')
+      || lower.includes('silverorbit') || lower.includes('anihd')) {
+    return 'https://megaplay.buzz/';
+  }
+  if (lower.includes('vibevibe.workers.dev') || lower.includes('bibiemb')) {
+    return 'https://bibiemb.xyz/';
+  }
+  if (lower.includes('vivibebe')) {
+    return 'https://vivibebe.site/';
+  }
+  if (lower.includes('vidtube') || lower.includes('vidstream')) {
+    if (fallbackRef && (fallbackRef.includes('megap') || fallbackRef.includes('norami') || fallbackRef.includes('imgnex') || fallbackRef.includes('dokicloud'))) {
+      return 'https://megaplay.buzz/';
+    }
+    return 'https://vidtube.site/';
+  }
+  if (lower.includes('vidplay') || lower.includes('mycloud') || lower.includes('mcloud')) {
+    return 'https://vidplay.online/';
+  }
+  if (lower.includes('echovideo') || lower.includes('roburnt') || lower.includes('dpopdrop') || lower.includes('burntburst') || lower.includes('savedly')) {
+    return 'https://play.echovideo.ru/';
+  }
+  if (lower.includes('anineko')) {
+    return 'https://anineko.es/';
+  }
+  if (lower.includes('anivid')) {
+    return 'https://anivid.net/';
+  }
+  if (lower.includes('tiktokcdn') || lower.includes('tiktok') || lower.includes('snssdk')) {
+    return 'https://megaplay.buzz/';
+  }
+  if (lower.includes('hstream') || lower.includes('ane-h.xyz') || lower.includes('imoto-str')) {
+    return 'https://hstream.moe/';
+  }
+  if (lower.includes('hentaicity')) {
+    return 'https://www.hentaicity.com/';
+  }
+  if (fallbackRef && fallbackRef.startsWith('http') && !fallbackRef.includes('localhost')) {
+    try {
+      const u = new URL(fallbackRef);
+      return u.origin + '/';
+    } catch (_) {
+      return fallbackRef;
+    }
+  }
+  return 'https://megaplay.buzz/';
+}
 
 function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
   return class CapacitorHlsLoader extends DefaultLoader {
@@ -190,9 +289,9 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
 
     load(context, config, callbacks) {
       const url = context.url;
-      const isLocalhost = url.includes('localhost:8081') || url.includes('127.0.0.1:8081');
+      const isLocalhost = url.includes('localhost:8081') || url.includes('127.0.0.1:8081') || url.includes('_capacitor_file_') || url.startsWith('file://');
 
-      // Wrap callbacks to always strip obfuscated dummy image headers (e.g. MegaCloud 252-byte PNG wrapper)
+      // Sanitize callback to strip obfuscated dummy PNG headers
       const sanitizeCallbacks = (cb) => ({
         ...cb,
         onSuccess: (response, stats, ctx, networkDetails) => {
@@ -208,26 +307,17 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
         }
       });
 
-      if (!isNative || isLocalhost) {
+      // On desktop browser or local offline file playback, use standard browser XHR loader
+      if (!isNativePlatform() || isLocalhost) {
         return super.load(context, config, sanitizeCallbacks(callbacks));
       }
 
       this._aborted = false;
-
-      // Extract target Referer and Origin for referer-protected CDNs
-      let targetReferer = refererUrl;
-      if (embedUrl) {
-        try {
-          const parsedEmbed = new URL(embedUrl);
-          targetReferer = parsedEmbed.origin + '/';
-        } catch (e) {}
+      const t0 = performance.now();
+      if (this.stats) {
+        this.stats.loading.start = t0;
       }
 
-      let hostname = '';
-      try { hostname = new URL(url).hostname.toLowerCase(); } catch (_) {}
-
-      // Identify whether this request is a playlist (manifest, media/level playlist, audio/subtitle playlist)
-      // or a binary media segment (video TS/MP4 fragment).
       const isPlaylist = Boolean(
         !context.frag &&
         (
@@ -240,171 +330,159 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
         )
       );
 
-      // Protected hostnames that strictly enforce custom Referer and block browser XHR:
-      // CapacitorHttp handles all cross-origin streaming CDNs directly to bypass CORS
-      const isRefererProtected = Boolean(
-        hostname.includes('akirax') ||
-        hostname.includes('imgnex') ||
-        hostname.includes('norami') ||
-        hostname.includes('shiora') ||
-        hostname.includes('mikora') ||
-        hostname.includes('megap') ||
-        hostname.includes('nexabloom') ||
-        hostname.includes('tyrionx') ||
-        hostname.includes('streamzone') ||
-        hostname.includes('tcdn') ||
-        hostname.includes('bcdn') ||
-        hostname.includes('anihd') ||
-        hostname.includes('megacloud') ||
-        corsBlockedHostnames.has(hostname)
-      );
-
-      const fetchViaCapacitorHttp = () => {
-        if (this._aborted) return;
-        const t0 = performance.now();
-
-        (async () => {
-          try {
-            const reqHeaders = {
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
-              'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
-            };
-
-            if (targetReferer) {
-              if (isPlaylist) {
-                try {
-                  reqHeaders['Origin'] = new URL(targetReferer).origin;
-                } catch (e) {
-                  reqHeaders['Origin'] = targetReferer.replace(/\/$/, '');
-                }
-              }
-              reqHeaders['Referer'] = targetReferer;
-            } else if (isPlaylist) {
-              reqHeaders['Origin'] = 'https://anineko.es';
-              reqHeaders['Referer'] = 'https://anineko.es/';
-            }
-
-            if (context.headers) {
-              Object.assign(reqHeaders, context.headers);
-            }
-            if (context.rangeEnd) {
-              reqHeaders['Range'] = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
-            }
-
-            if (isPlaylist && embedUrl && isNative) {
-              try {
-                const targetHost = new URL(url).origin;
-                const cookies = await CapacitorCookies.getCookies({ url: targetHost });
-                if (cookies && Object.keys(cookies).length > 0) {
-                  const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-                  reqHeaders['Cookie'] = cookieStr;
-                }
-              } catch (_) {}
-            }
-
-            if (this._aborted) return;
-
-            const response = await CapacitorHttp.request({
-              url,
-              method: 'GET',
-              headers: reqHeaders,
-              responseType: isPlaylist ? 'text' : 'blob',
-            });
-
-            if (this._aborted) return;
-
-            if (!response.status || response.status < 200 || response.status >= 400) {
-              const code = response.status || 0;
-              callbacks.onError(
-                { code, text: `HTTP ${code}` },
-                context, response, this.stats
-              );
-              return;
-            }
-
-            const now = performance.now();
-            let data = response.data;
-
-            if (!isPlaylist) {
-              if (typeof data === 'string') {
-                data = base64ToArrayBuffer(data);
-              } else if (data instanceof Blob) {
-                data = await data.arrayBuffer();
-              }
-              // Strip obfuscated image headers before passing to Hls.js
-              data = stripObfuscatedHeader(data);
-            } else if (typeof data !== 'string') {
-              data = String(data || '');
-            }
-
-            const byteLen = (data && (data.byteLength || data.length)) || 0;
-            const elapsedSec = Math.max(0.001, (now - t0) / 1000);
-            const calculatedBw = Math.round((byteLen * 8) / elapsedSec);
-
-            if (this.stats) {
-              this.stats.loaded = byteLen;
-              this.stats.total = byteLen;
-              this.stats.bwEstimate = calculatedBw;
-              this.stats.loading.first = Math.max(now, this.stats.loading.start || t0);
-              this.stats.loading.end = now;
-              this.stats.aborted = false;
-            }
-
-            const stats = this.stats || {
-              aborted: false,
-              loaded: byteLen,
-              retry: 0,
-              total: byteLen,
-              chunkCount: 0,
-              bwEstimate: calculatedBw,
-              loading: { start: t0, first: t0, end: now },
-              parsing: { start: now, end: now },
-              buffering: { start: now, first: now, end: now },
-            };
-
-            callbacks.onSuccess({ data, url: response.url || url, code: response.status || 200 }, stats, context, response);
-          } catch (err) {
-            if (this._aborted) return;
-            console.error('[CapacitorHlsLoader] Exception during load:', err);
-            callbacks.onError({ code: 0, text: err.message || String(err) }, context, null, this.stats);
+      // Check In-Memory Master Playlist Cache for 0ms instant startup
+      if (isPlaylist) {
+        const cachedText = getCachedPlaylistText(url);
+        if (cachedText) {
+          const now = performance.now();
+          const byteLen = cachedText.length;
+          if (this.stats) {
+            this.stats.loaded = byteLen;
+            this.stats.total = byteLen;
+            this.stats.bwEstimate = 50000000;
+            this.stats.loading.start = t0;
+            this.stats.loading.first = now;
+            this.stats.loading.end = now;
+            this.stats.aborted = false;
           }
-        })();
-      };
-
-      // 1. Playlists (manifest/level) and strictly referer-protected hosts always use CapacitorHttp
-      if (isPlaylist || isRefererProtected) {
-        fetchViaCapacitorHttp();
-        return;
-      }
-
-      // 2. Open CDNs (TikTok CDN, StreamHG centaurus, Earnvids dramiyos): direct line-speed native browser XHR
-      const wrappedCallbacks = {
-        ...callbacks,
-        onSuccess: (response, stats, ctx, networkDetails) => {
-          if (this._aborted) return;
-          if (response && response.data) {
-            response.data = stripObfuscatedHeader(response.data);
-          }
-          callbacks.onSuccess(response, stats, ctx, networkDetails);
-        },
-        onError: (error, ctx, networkDetails) => {
-          if (this._aborted) return;
-          // If direct fetch is blocked by CORS (code 0) or Forbidden/Referer (code 403 / 4xx)
-          if (error && (error.code === 0 || error.code === 403 || (error.code >= 400 && error.code < 500)) && !this._aborted) {
-            if (hostname) corsBlockedHostnames.add(hostname);
-            fetchViaCapacitorHttp();
-          } else {
-            callbacks.onError(error, ctx, networkDetails);
-          }
+          const stats = this.stats || {
+            aborted: false,
+            loaded: byteLen,
+            retry: 0,
+            total: byteLen,
+            chunkCount: 0,
+            bwEstimate: 50000000,
+            loading: { start: t0, first: now, end: now },
+            parsing: { start: now, end: now },
+            buffering: { start: now, first: now, end: now },
+          };
+          queueMicrotask(() => {
+            if (!this._aborted) {
+              callbacks.onSuccess({ data: cachedText, url, code: 200 }, stats, context, null);
+            }
+          });
+          return;
         }
-      };
-      try {
-        return super.load(context, config, wrappedCallbacks);
-      } catch (e) {
-        if (hostname) corsBlockedHostnames.add(hostname);
-        fetchViaCapacitorHttp();
-        return;
       }
+
+      // ON NATIVE ANDROID: ALWAYS route via CapacitorHttp!
+      // Native WebView XHR sends 'Origin: https://localhost', triggering CDN 403 Forbidden.
+      // CapacitorHttp uses Android OS network stack with zero browser origin restrictions.
+      (async () => {
+        try {
+          const activeReferer = typeof refererUrl === 'function' ? refererUrl() : refererUrl;
+          const activeEmbed = typeof embedUrl === 'function' ? embedUrl() : embedUrl;
+          const fallbackRef = activeReferer || activeEmbed || '';
+          const effectiveReferer = getProperReferer(url, fallbackRef);
+
+          const reqHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+            'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Connection': 'keep-alive',
+          };
+
+          if (effectiveReferer) {
+            reqHeaders['Referer'] = effectiveReferer;
+            try {
+              reqHeaders['Origin'] = new URL(effectiveReferer).origin;
+            } catch (_) {
+              reqHeaders['Origin'] = effectiveReferer.replace(/\/$/, '');
+            }
+          }
+
+          if (context.headers) {
+            Object.assign(reqHeaders, context.headers);
+          }
+          if (context.rangeEnd) {
+            reqHeaders['Range'] = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
+          }
+
+          if (isPlaylist && embedUrl && isNativePlatform()) {
+            try {
+              const targetHost = new URL(url).origin;
+              const cookies = await CapacitorCookies.getCookies({ url: targetHost });
+              if (cookies && Object.keys(cookies).length > 0) {
+                reqHeaders['Cookie'] = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+              }
+            } catch (_) {}
+          }
+
+          if (this._aborted) return;
+
+          const response = await CapacitorHttp.request({
+            url,
+            method: 'GET',
+            headers: reqHeaders,
+            responseType: isPlaylist ? 'text' : 'blob',
+          });
+
+          if (this._aborted) return;
+
+          if (!response.status || response.status < 200 || response.status >= 400) {
+            const code = response.status || 0;
+            callbacks.onError(
+              { code, text: `HTTP ${code}` },
+              context, response, this.stats
+            );
+            return;
+          }
+
+          const tFirst = performance.now();
+          let data = response.data;
+
+          if (!isPlaylist) {
+            if (typeof data === 'string') {
+              data = base64ToArrayBuffer(data);
+            } else if (data instanceof Blob) {
+              data = await data.arrayBuffer();
+            }
+            // Strip obfuscated image headers before passing to Hls.js
+            data = stripObfuscatedHeader(data);
+          } else if (typeof data !== 'string') {
+            data = String(data || '');
+          }
+
+          const tEnd = performance.now();
+          const byteLen = (data && (data.byteLength || data.length)) || 0;
+          if (!isPlaylist && byteLen === 0) {
+            console.warn('[CapacitorHlsLoader] 0-byte media segment decoded for:', url);
+            callbacks.onError({ code: 0, text: 'Empty media segment' }, context, response, this.stats);
+            return;
+          }
+
+          const elapsedSec = Math.max(0.001, (tEnd - t0) / 1000);
+          const calculatedBw = Math.round((byteLen * 8) / elapsedSec);
+
+          if (this.stats) {
+            this.stats.loaded = byteLen;
+            this.stats.total = byteLen;
+            this.stats.bwEstimate = calculatedBw;
+            this.stats.loading.start = t0;
+            this.stats.loading.first = Math.max(t0 + 1, Math.min(tFirst, tEnd));
+            this.stats.loading.end = tEnd;
+            this.stats.aborted = false;
+          }
+
+          const stats = this.stats || {
+            aborted: false,
+            loaded: byteLen,
+            retry: 0,
+            total: byteLen,
+            chunkCount: 0,
+            bwEstimate: calculatedBw,
+            loading: { start: t0, first: Math.max(t0 + 1, Math.min(tFirst, tEnd)), end: tEnd },
+            parsing: { start: tEnd, end: tEnd },
+            buffering: { start: tEnd, first: tEnd, end: tEnd },
+          };
+
+          callbacks.onSuccess({ data, url: response.url || url, code: response.status || 200 }, stats, context, response);
+        } catch (err) {
+          if (this._aborted) return;
+          console.error('[CapacitorHlsLoader] Exception during load:', err);
+          callbacks.onError({ code: 0, text: err.message || String(err) }, context, null, this.stats);
+        }
+      })();
     }
   };
 }
@@ -512,6 +590,10 @@ export default function AniPlayer({
   const targetResumeTimeRef = useRef(0);
   const onSeekProgressRef = useRef(onSeekProgress);
   useEffect(() => { onSeekProgressRef.current = onSeekProgress; }, [onSeekProgress]);
+  const refererRef = useRef(referer);
+  useEffect(() => { refererRef.current = referer; }, [referer]);
+  const embedUrlRef = useRef(embedUrl);
+  useEffect(() => { embedUrlRef.current = embedUrl; }, [embedUrl]);
 
   // Synchronous, multi-event progress flusher
   const flushProgress = useCallback((explicitTime = null) => {
@@ -533,12 +615,16 @@ export default function AniPlayer({
   const [volume,    setVolume]    = useState(1);
   const [muted,     setMuted]     = useState(false);
   const [bright,    setBright]    = useState(1);
-  const [fs,        setFs]        = useState(isLocal || startInFs); // isLocal downloads always start in fullscreen landscape
+  const [fs,        setFs]        = useState(isLocal || startInFs);
   const [waiting,   setWaiting]   = useState(false);
   const [ctrlVis,   setCtrlVis]   = useState(true);
   const [qualities, setQualities] = useState([]);
   const [activeQ,   setActiveQ]   = useState(-1);
   const [playingResolution, setPlayingResolution] = useState('');
+  // Persistent quality lock: survives server switches + episode changes
+  // -1 = Auto (ABR), otherwise the height string e.g. '1080p'
+  const lockedQualityRef = useRef(localStorage.getItem('aniplay_preferred_quality') || 'Auto');
+  const [qualityLockLabel, setQualityLockLabel] = useState(lockedQualityRef.current);
   const [subs,      setSubs]      = useState(subtitles || []);
   const [activeSub, setActiveSub] = useState(-1);
   const [cues,      setCues]      = useState([]);
@@ -555,6 +641,8 @@ export default function AniPlayer({
   const [swipeVol,  setSwipeVol]  = useState(false);
   const [swipeBri,  setSwipeBri]  = useState(false);
   const [fitMode,   setFitMode]   = useState('contain');
+  const [fitToast,  setFitToast]  = useState(null);
+  const fitToastTimerRef = useRef(null);
   const [needsTap,  setNeedsTap]  = useState(false);  // autoplay blocked
   const [hlsErr,    setHlsErr]    = useState(null);   // fatal stream error
   const [hasStarted, setHasStarted] = useState(false); // first play event occurred
@@ -592,6 +680,11 @@ export default function AniPlayer({
   const prevSessionRef = useRef(currentSessionKey);
   const initialSeekTimeRef = useRef(initialSeekTime);
   useEffect(() => { initialSeekTimeRef.current = initialSeekTime; }, [initialSeekTime]);
+  useEffect(() => {
+    return () => {
+      if (fitToastTimerRef.current) clearTimeout(fitToastTimerRef.current);
+    };
+  }, []);
 
   const videoAdShownRef = useRef(false);
   const activeVideoAdRef = useRef(null);
@@ -637,13 +730,16 @@ export default function AniPlayer({
     }
   }, [initialSeekTime, log]);
 
-  // When switching servers, loading is true. Pause video immediately so old stream audio stops.
-  // When loading finishes, automatically resume playback so video starts instantly.
+  // When switching servers, loading is true. Clear any stale hlsErr from a previous server so error doesn't persist.
+  // Note: We do NOT pause v here because background server discovery in useAnimeStream passes loading=true,
+  // which would repeatedly pause an already mounted and playable stream!
+  // When loading finishes, automatically resume playback if needed.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     if (loading) {
-      if (!v.paused) v.pause();
+      // Always wipe stale error overlay when a new server/URL is loading
+      setHlsErr(null);
     } else if (!loading && !activeVideoAdRef.current) {
       if (v.paused && !needsTap) {
         v.play().then(() => setNeedsTap(false)).catch(err => {
@@ -788,12 +884,24 @@ export default function AniPlayer({
     let onPlayable = null;
     let onVideoErr = null;
 
-    // ── LOCAL FILE MODE: bypass HLS.js, use native video element directly ──
-    // content:// MediaStore URIs work natively in Capacitor's Android WebView
-    // but HLS.js cannot handle them (it would try to fetch them via XHR which fails).
-    if (isLocal) {
-      log('Local file mode: setting src directly on native video element');
+    // ── DIRECT VIDEO FILE MODE: bypass HLS.js, use native video element directly ──
+    // Direct MP4 / WebM / local files work natively with hardware acceleration.
+    // HLS.js only loads .m3u8 manifests and fails if given an MP4 stream.
+    const isDirectVideoFile = (
+      url.includes('.mp4') ||
+      url.includes('.webm') ||
+      url.includes('_capacitor_file_') ||
+      url.startsWith('file://') ||
+      url.startsWith('blob:') ||
+      (!url.includes('.m3u8') && isLocal)
+    );
+    if (isDirectVideoFile) {
+      log('Direct video file mode: setting src directly on native video element');
       v.src = url;
+      setQualities([{ id: 0, label: '720p' }]);
+      setPlayingResolution('720p');
+      setActiveQ(0);
+      setWaiting(false);
       v.load();
       if (targetResumeTimeRef.current > 2) {
         try {
@@ -802,7 +910,15 @@ export default function AniPlayer({
         } catch (_) {}
       }
       tryPlay();
+      const onDirectPlayable = () => {
+        setWaiting(false);
+        tryPlay();
+      };
+      v.addEventListener('loadeddata', onDirectPlayable);
+      v.addEventListener('canplay', onDirectPlayable);
       return () => {
+        v.removeEventListener('loadeddata', onDirectPlayable);
+        v.removeEventListener('canplay', onDirectPlayable);
         flushProgress();
         v.removeAttribute('src');
         v.load();
@@ -814,14 +930,14 @@ export default function AniPlayer({
       log(`Hls.js is supported. NetworkProfile: type=${netProfile.effectiveType}, downlink=${netProfile.downlink?.toFixed?.(2)}Mbps, rtt=${netProfile.rtt}ms, isSlow=${netProfile.isSlow}`);
       hls = new Hls({
         enableWorker: true,
-        startFragPrefetch: true,
+        startFragPrefetch: false, // ⚡ Netflix Fast-Start: allocate 100% bandwidth to Fragment 0 for instant frame render
         testBandwidth: false,
         capLevelToPlayerSize: true,
         lowLatencyMode: false, // Must be false for VOD to prevent video decoder starvation while audio plays
         progressive: false,    // Must be false on mobile WebViews to avoid partial TS chunk corruptions
         startPosition: (targetResumeTimeRef.current > 2 || initialSeekTimeRef.current > 2) ? Math.max(targetResumeTimeRef.current || 0, initialSeekTimeRef.current || 0) : -1,
         startLevel: -1,
-        abrEwmaDefaultEstimate: netProfile.initialEstimateBps,
+        abrEwmaDefaultEstimate: 1200000,
         abrBandWidthFactor: netProfile.isSlow ? 0.7 : 0.85,
         abrBandWidthUpFactor: netProfile.isSlow ? 0.5 : 0.7,
         maxBufferLength: netProfile.isSlow ? 20 : 35, // Solid golden buffer prevents A/V desync
@@ -844,9 +960,9 @@ export default function AniPlayer({
         maxStarvationDelay: 4,
         maxLoadingDelay: 4,
         autoStartLoad: true,
-        loader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
-        pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
-        fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+        loader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
+        pLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
+        fLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
       });
 
       hlsRef.current = hls;
@@ -871,39 +987,34 @@ export default function AniPlayer({
           setTimeout(() => {
             if (hlsRef.current) hls.startLoad();
           }, networkErrRetries * 800);
-        } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR && onStreamExpired) {
-          // Token expired or server unreachable after 5 retries. Request fresh URL or next server.
-          log('Fatal network error after 5 retries — requesting fresh stream URL or server failover...');
-          setWaiting(true);
-          setHlsErr(null);
-          hls.destroy();
-          hlsRef.current = null;
-          onStreamExpired();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrRetries < 3) {
           mediaErrRetries++;
           log(`Fatal media error, retrying recoverMediaError (${mediaErrRetries}/3)...`);
           hls.recoverMediaError();
-        } else if (onStreamExpired && (networkErrRetries >= 5 || mediaErrRetries >= 3)) {
-          log('Fatal unrecoverable error after retries — triggering automated server failover...');
-          setWaiting(true);
-          setHlsErr(null);
-          hls.destroy();
-          hlsRef.current = null;
-          onStreamExpired();
         } else {
-          log('Fatal HLS error unrecoverable. Displaying error overlay.');
+          log(`Fatal HLS error unrecoverable (${data.details}). Displaying error overlay.`);
+          // Pause the video so audio does NOT continue playing under the error overlay
+          const v = videoRef.current;
+          if (v && !v.paused) {
+            try { v.pause(); } catch (_) {}
+          }
           // Pass error type key so JSX can show the right contextual message
           const errKey = data.type === Hls.ErrorTypes.NETWORK_ERROR ? 'network'
             : data.type === Hls.ErrorTypes.MEDIA_ERROR ? 'media'
             : 'unknown';
-          setHlsErr(errKey);
+          setHlsErr({
+            type: errKey,
+            details: data.details || '',
+            error: data.error?.message || data.reason || '',
+          });
           setWaiting(false);
         }
       });
 
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        log('Media attached to Hls.js, loading source...');
-        hls.loadSource(url);
+        const sourceUrl = getEffectivePlayableUrl(url, refererRef.current);
+        log('Media attached to Hls.js, loading source: ' + sourceUrl.slice(0, 80));
+        hls.loadSource(sourceUrl);
       });
 
       let cleanPlayStarted = false;
@@ -920,65 +1031,116 @@ export default function AniPlayer({
       };
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
-        log(`Manifest parsed: found ${d.levels.length} quality levels`);
-        if (d.levels?.length) {
-          const parsedQualities = d.levels.map((l, i) => ({
-            id: i,
-            label: l.height ? `${l.height}p` : `Level ${i + 1}`
-          }));
-          setQualities(parsedQualities);
+        try {
+          log(`Manifest parsed: found ${d.levels.length} quality levels`);
+          if (d.levels?.length) {
+            const parsedQualities = d.levels.map((l, i) => ({
+              id: i,
+              label: l.height ? `${l.height}p` : `Level ${i + 1}`
+            }));
+            setQualities(parsedQualities);
 
-          // Netflix & YouTube Slow Network Optimization:
-          // If connection is 2G/3G, low downlink, high RTT, or data saver:
-          // start immediately at the lowest resolution so the tiny first fragment (<200KB)
-          // finishes downloading in <150ms with instant playback!
-          const activeNet = getNetworkProfile();
-          if (activeNet.isSlow && d.levels.length > 1) {
-            const lowest = findLowestQualityLevel(d.levels);
-            const lowestLabel = lowest.level?.height ? `${lowest.level.height}p` : `Level ${lowest.index + 1}`;
-            log(`[NetworkSpeed] Slow network detected (${activeNet.effectiveType}, ${activeNet.downlink?.toFixed?.(2)}Mbps, RTT=${activeNet.rtt}ms). Selecting lowest resolution ${lowestLabel} (level ${lowest.index}) for instant zero-buffer start.`);
-            hls.startLevel = lowest.index;
-            hls.nextLoadLevel = lowest.index;
-            setPlayingResolution(lowestLabel);
+            const activeNet = getNetworkProfile();
+            const savedQuality = lockedQualityRef.current;
+            const isQualityLocked = savedQuality && savedQuality !== 'Auto';
+
+            if (d.levels.length > 1) {
+              const ramCachedIdx = d.levels.findIndex(l => l.url && getCachedPlaylistText(l.url));
+
+              if (isQualityLocked) {
+                // User has a locked quality preference — apply it immediately
+                const preferredHeight = parseInt(savedQuality, 10);
+                let lockedIdx = d.levels.findIndex(l => l.height === preferredHeight);
+                if (lockedIdx === -1) {
+                  const lower = d.levels.filter(l => l.height && l.height <= preferredHeight).sort((a, b) => b.height - a.height);
+                  lockedIdx = lower.length > 0 ? d.levels.indexOf(lower[0]) : 0;
+                }
+                if (lockedIdx !== -1) {
+                  hls.startLevel = lockedIdx;
+                  hls.currentLevel = lockedIdx;
+                  const lvl = d.levels[lockedIdx];
+                  const lockedLabel = lvl?.height ? `${lvl.height}p` : `Level ${lockedIdx + 1}`;
+                  setPlayingResolution(lockedLabel);
+                  setActiveQ(lockedIdx);
+                  log(`[QualityLock] Locked to user preference ${savedQuality} → level ${lockedIdx} (${lockedLabel})`);
+                }
+              } else if (ramCachedIdx !== -1) {
+                hls.startLevel = ramCachedIdx;
+                const lvl = d.levels[ramCachedIdx];
+                const ramLabel = lvl?.height ? `${lvl.height}p` : `Level ${ramCachedIdx + 1}`;
+                setPlayingResolution(ramLabel);
+                log(`[PinpointRAM] Instant 0ms start: locked to pre-warmed RAM level ${ramLabel} (level ${ramCachedIdx})`);
+              } else if (activeNet.isSlow) {
+                const lowest = findLowestQualityLevel(d.levels);
+                const lowestLabel = lowest.level?.height ? `${lowest.level.height}p` : `Level ${lowest.index + 1}`;
+                log(`[NetworkSpeed] Slow network detected (${activeNet.effectiveType}). Selecting lowest resolution ${lowestLabel} for instant zero-buffer start.`);
+                hls.startLevel = lowest.index;
+                setPlayingResolution(lowestLabel);
+              } else {
+                const fastIdx = d.levels.findIndex(l => l.height && l.height <= 480 && l.height >= 360) !== -1
+                  ? d.levels.findIndex(l => l.height && l.height <= 480 && l.height >= 360)
+                  : d.levels.findIndex(l => l.height && l.height <= 720);
+                const targetIdx = fastIdx !== -1 ? fastIdx : 0;
+                hls.startLevel = targetIdx;
+                const lvl = d.levels[targetIdx];
+                const fastLabel = lvl?.height ? `${lvl.height}p` : `Level ${targetIdx + 1}`;
+                setPlayingResolution(fastLabel);
+                log(`[FastStart] Selected lightweight ${fastLabel} for sub-300ms initial frame render.`);
+              }
+            }
           }
+          startCleanPlayback();
+        } catch (e) {
+          log(`Error in MANIFEST_PARSED handler: ${e.message}`);
         }
-        tryPlay();
       });
 
       // Continuous EWMA network speed calibration from loaded video fragments
       hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
-        if (data?.stats?.total && data?.stats?.loading?.end && data?.stats?.loading?.start) {
-          const durMs = data.stats.loading.end - data.stats.loading.start;
-          recordNetworkSample(data.stats.total, durMs);
-        }
+        try {
+          if (data?.stats?.total && data?.stats?.loading?.end && data?.stats?.loading?.start) {
+            const durMs = data.stats.loading.end - data.stats.loading.start;
+            recordNetworkSample(data.stats.total, durMs);
+          }
+        } catch (_) {}
       });
 
       // Synchronize active playing resolution badge when HLS ABR switches levels
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-        if (hls.levels && hls.levels[data.level]) {
-          const lvl = hls.levels[data.level];
-          const resLabel = lvl.height ? `${lvl.height}p` : `Level ${data.level + 1}`;
-          log(`[HLS] Level switched to ${resLabel} (${Math.round((lvl.bitrate || 0) / 1000)} kbps)`);
-          setPlayingResolution(resLabel);
-        }
+        try {
+          if (hls.levels && hls.levels[data.level]) {
+            const lvl = hls.levels[data.level];
+            const resLabel = lvl.height ? `${lvl.height}p` : `Level ${data.level + 1}`;
+            log(`[HLS] Level switched to ${resLabel} (${Math.round((lvl.bitrate || 0) / 1000)} kbps)`);
+            setPlayingResolution(resLabel);
+          }
+        } catch (_) {}
       });
 
       // Smooth fast start: trigger play as soon as initial frames are decoded
       hls.on(Hls.Events.BUFFER_APPENDED, () => {
-        if (!cleanPlayStarted) {
-          startCleanPlayback();
-        }
-        if (!resumeSeekAppliedRef.current && v.duration > 0) {
-          const target = Math.max(targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : 0, initialSeekTime > 2 ? initialSeekTime : 0);
-          if (target > 2 && target < v.duration - 5 && Math.abs(v.currentTime - target) > 2) {
-            log(`[Resume] BUFFER_APPENDED seek: jumping to ${target.toFixed(1)}s`);
-            try {
-              v.currentTime = target;
-              resumeSeekAppliedRef.current = true;
-            } catch (_) {}
-          } else if (target > 2 && Math.abs(v.currentTime - target) <= 2) {
-            resumeSeekAppliedRef.current = true;
+        try {
+          // Re-enable fragment prefetching once playback buffer is active
+          if (hls && hls.config) {
+            hls.config.startFragPrefetch = true;
           }
+          if (!cleanPlayStarted) {
+            startCleanPlayback();
+          }
+          if (!resumeSeekAppliedRef.current && v.duration > 0) {
+            const target = Math.max(targetResumeTimeRef.current > 2 ? targetResumeTimeRef.current : 0, initialSeekTime > 2 ? initialSeekTime : 0);
+            if (target > 2 && target < v.duration - 5 && Math.abs(v.currentTime - target) > 2) {
+              log(`[Resume] BUFFER_APPENDED seek: jumping to ${target.toFixed(1)}s`);
+              try {
+                v.currentTime = target;
+                resumeSeekAppliedRef.current = true;
+              } catch (_) {}
+            } else if (target > 2 && Math.abs(v.currentTime - target) <= 2) {
+              resumeSeekAppliedRef.current = true;
+            }
+          }
+        } catch (e) {
+          log(`Error in BUFFER_APPENDED handler: ${e.message}`);
         }
       });
       hls.on(Hls.Events.FRAG_PARSED, () => {
@@ -990,14 +1152,6 @@ export default function AniPlayer({
       onPlayable = () => startCleanPlayback();
       onVideoErr = () => {
         log('HTML5 video element error event fired:', v.error?.code, v.error?.message);
-        if (!cleanPlayStarted && onStreamExpired) {
-          setTimeout(() => {
-            if (!cleanPlayStarted && onStreamExpired) {
-              log('Video failed before playback started — triggering server failover');
-              onStreamExpired();
-            }
-          }, 3000);
-        }
       };
       v.addEventListener('loadeddata', onPlayable, { once: true });
       v.addEventListener('canplay', onPlayable, { once: true });
@@ -1080,7 +1234,7 @@ export default function AniPlayer({
       }
       hlsRef.current = null;
     };
-  }, [url, serverName, referer, embedUrl]);
+  }, [url, serverName]);
 
 
   // Sync subtitle tracks when props change — merge server-specific + global source tracks
@@ -1102,15 +1256,33 @@ export default function AniPlayer({
       return '';
     };
 
+    const isForcedTrack = (label, file) => {
+      const raw = (label || '').toLowerCase();
+      const f = (file || '').toLowerCase();
+      return /forced/i.test(raw) || /forced[\._\-]/i.test(f);
+    };
+
+    const isSignsTrack = (label, file) => {
+      const raw = (label || '').toLowerCase();
+      const f = (file || '').toLowerCase();
+      return /sign|song|s&s|dubtitle/i.test(raw) || /signs?[\._\-]/i.test(f);
+    };
+
     const cleanLabel = (lbl, file) => {
       if (!lbl) return guessLangFromFile(file) || 'Unknown';
+      if (isSignsTrack(lbl, file)) return 'English (Signs & Songs)';
+      if (isForcedTrack(lbl, file)) return 'English (Forced)';
       let clean = lbl.replace(/\s*[-–—]?\s*\([^)]*\)/g, '').trim();
       return clean || lbl;
     };
 
     // Normalize language label for dedup: "eng", "English", "English)" → "English"
     const normalizeLanguage = (label, file) => {
-      const l = (label || '').toLowerCase().replace(/[^a-z]/g, '');
+      const raw = (label || '').toLowerCase();
+      const f = (file || '').toLowerCase();
+      if (isSignsTrack(raw, f)) return 'English (Signs & Songs)';
+      if (isForcedTrack(raw, f)) return 'English (Forced)';
+      const l = raw.replace(/[^a-z]/g, '');
       if (l.startsWith('eng')) return 'English';
       if (l.startsWith('jpn') || l.startsWith('jap')) return 'Japanese';
       if (l.startsWith('spa') || l.startsWith('esp')) return 'Spanish';
@@ -1151,7 +1323,9 @@ export default function AniPlayer({
 
     // ── Deduplicate by normalized language — keep primary + group same-language alternatives ──
     const byLanguage = new Map();
-    const allTracks = [...serverSubs, ...globalExtras];
+    const isDubAudio = serverName && (serverName.toLowerCase().includes('dub') || serverName.toLowerCase().includes('(dub)'));
+    // If playing DUB audio, prioritize globalExtras (subbed dialogue tracks) so they become the canonical primary English track
+    const allTracks = isDubAudio ? [...globalExtras, ...serverSubs] : [...serverSubs, ...globalExtras];
 
     for (const track of allTracks) {
       if (!track.file && !track.content) continue;
@@ -1165,19 +1339,30 @@ export default function AniPlayer({
         byLanguage.set(langKey, track);
       } else {
         const primary = byLanguage.get(langKey);
-        // Add as backup candidate for the same language
-        if (track.file && track.file !== primary.file && !primary.alternatives.some(a => a.file === track.file)) {
-          primary.alternatives.push({
-            file: track.file,
-            content: track.content,
-            referer: track.referer,
-            label: langKey,
-          });
-        }
-        if (Array.isArray(track.alternatives)) {
-          for (const alt of track.alternatives) {
-            if (alt.file && alt.file !== primary.file && !primary.alternatives.some(a => a.file === alt.file)) {
-              primary.alternatives.push(alt);
+        // If current primary has a forced/signs filename or label and this candidate is clean full English, SWAP THEM!
+        const primaryIsForced = isForcedTrack(primary.label, primary.file) || isSignsTrack(primary.label, primary.file);
+        const candidateIsClean = !isForcedTrack(track.label, track.file) && !isSignsTrack(track.label, track.file);
+        if (primaryIsForced && candidateIsClean) {
+          const oldAlts = primary.alternatives || [];
+          primary.alternatives = [];
+          track.alternatives = [primary, ...oldAlts];
+          track.label = langKey;
+          byLanguage.set(langKey, track);
+        } else {
+          // Add as backup candidate for the same language
+          if (track.file && track.file !== primary.file && !primary.alternatives.some(a => a.file === track.file)) {
+            primary.alternatives.push({
+              file: track.file,
+              content: track.content,
+              referer: track.referer,
+              label: langKey,
+            });
+          }
+          if (Array.isArray(track.alternatives)) {
+            for (const alt of track.alternatives) {
+              if (alt.file && alt.file !== primary.file && !primary.alternatives.some(a => a.file === alt.file)) {
+                primary.alternatives.push(alt);
+              }
             }
           }
         }
@@ -1201,20 +1386,34 @@ export default function AniPlayer({
 
     const merged = Array.from(byLanguage.values());
 
-    // Sort: English first (Default), then other languages alphabetically
+    // Sort: English (Dialogue) first, then English (Signs & Songs), then English (Forced), then other languages alphabetically
     merged.sort((a, b) => {
-      const aEng = a.label.toLowerCase().includes('eng');
-      const bEng = b.label.toLowerCase().includes('eng');
-      if (aEng && !bEng) return -1;
-      if (!aEng && bEng) return 1;
+      const aRaw = a.label.toLowerCase();
+      const bRaw = b.label.toLowerCase();
+      const aIsFullEng = aRaw === 'english';
+      const bIsFullEng = bRaw === 'english';
+      if (aIsFullEng && !bIsFullEng) return -1;
+      if (!aIsFullEng && bIsFullEng) return 1;
+      const aIsSigns = aRaw.includes('sign') || aRaw.includes('song');
+      const bIsSigns = bRaw.includes('sign') || bRaw.includes('song');
+      if (aIsSigns && !bIsSigns) return -1;
+      if (!aIsSigns && bIsSigns) return 1;
+      const aIsForced = aRaw.includes('forced');
+      const bIsForced = bRaw.includes('forced');
+      if (aIsForced && !bIsForced) return -1;
+      if (!aIsForced && bIsForced) return 1;
       return a.label.localeCompare(b.label);
     });
 
     setSubs(merged);
 
-    // Auto-select English or default track if available
+    // Auto-select English or default track if available (guarantee 100% full dialogue English!)
     if (merged.length > 0) {
-      const defaultTrack = merged.find(t => t.default && t.label.toLowerCase().includes('eng')) ||
+      const fullEngTrack = merged.find(t => t.label === 'English');
+      const anyNonForcedEng = merged.find(t => t.label.toLowerCase().includes('eng') && !t.label.toLowerCase().includes('forced') && !t.label.toLowerCase().includes('sign'));
+      const defaultTrack = fullEngTrack ||
+                           anyNonForcedEng ||
+                           merged.find(t => t.default && !t.label.toLowerCase().includes('forced') && !t.label.toLowerCase().includes('sign')) ||
                            merged.find(t => t.label.toLowerCase().includes('eng')) ||
                            merged.find(t => t.default) ||
                            merged[0];
@@ -1222,16 +1421,32 @@ export default function AniPlayer({
     } else {
       setActiveSub(-1);
     }
-  }, [subTracksJson, extraTracksJson, isHardSubServer]);
+  }, [subTracksJson, extraTracksJson, isHardSubServer, serverName, referer]);
 
+  const userManualQualityChangedRef = useRef(false);
   useEffect(() => {
-    if (hlsRef.current) {
-      hlsRef.current.currentLevel = activeQ;
-      if (activeQ >= 0 && qualities[activeQ]?.label) {
-        setPlayingResolution(qualities[activeQ].label);
+    if (!userManualQualityChangedRef.current) return;
+    const h = hlsRef.current;
+    if (!h) return;
+
+    if (activeQ >= 0 && qualities[activeQ]?.label) {
+      h.currentLevel = activeQ;
+      const label = qualities[activeQ].label;
+      setPlayingResolution(label);
+      lockedQualityRef.current = label;
+      setQualityLockLabel(label);
+      try { localStorage.setItem('aniplay_preferred_quality', label); } catch (_) {}
+      log(`[QualityLock] User locked quality to ${label} → level ${activeQ}`);
+    } else if (activeQ === -1) {
+      if (h.currentLevel !== -1) {
+        h.currentLevel = -1;
       }
+      lockedQualityRef.current = 'Auto';
+      setQualityLockLabel('Auto');
+      try { localStorage.setItem('aniplay_preferred_quality', 'Auto'); } catch (_) {}
+      log('[QualityLock] Reverted to Auto quality');
     }
-  }, [activeQ, qualities]);
+  }, [activeQ]);
   
   useEffect(() => { 
     // Sync Hls.js embedded tracks
@@ -1300,7 +1515,7 @@ export default function AniPlayer({
         }
 
         // Fallback: CapacitorHttp handles file:// and _capacitor_file_ paths better on Android
-        if (isNative) {
+        if (isNativePlatform()) {
           try {
             // Convert _capacitor_file_ URL back to file:// for CapacitorHttp
             let localPath = url;
@@ -1341,7 +1556,7 @@ export default function AniPlayer({
         }
       }
       // Handle proxy URL params (web/fallback path)
-      else if (isNative && !url.includes('_capacitor_file_') && !url.startsWith('file://')) {
+      else if (isNativePlatform() && !url.includes('_capacitor_file_') && !url.startsWith('file://')) {
         try {
           const parsed = new URL(url.startsWith('http') ? url : (window.location.origin + url));
           const innerUrl = parsed.searchParams.get('url');
@@ -1354,7 +1569,7 @@ export default function AniPlayer({
         } catch {}
       }
 
-      if (isNative && targetUrl.startsWith('http') && !targetUrl.includes('localhost')) {
+      if (isNativePlatform() && targetUrl.startsWith('http') && !targetUrl.includes('localhost')) {
         // Build referer candidate list with root origins + trailing slash (Cloudflare CDN requirement)
         const refererCandidates = [];
         if (targetReferer) {
@@ -1369,7 +1584,7 @@ export default function AniPlayer({
             refererCandidates.push(`${origin}/`);
           } catch {}
         }
-        if (targetUrl.includes('kryntal.top') || targetUrl.includes('megaplay') || targetUrl.includes('megacloud')) {
+        if (targetUrl.includes('kryntal.top') || targetUrl.includes('megaplay') || targetUrl.includes('megacloud') || targetUrl.includes('hiddenvertex') || targetUrl.includes('vertex') || targetUrl.includes('norami') || targetUrl.includes('tiktokcdn')) {
           refererCandidates.push('https://megaplay.buzz/');
         }
         if (targetUrl.includes('vidtube') || targetUrl.includes('vidplay')) {
@@ -1392,6 +1607,15 @@ export default function AniPlayer({
         }
         if (targetUrl.includes('anineko')) {
           refererCandidates.push('https://anineko.es/');
+        }
+        if (targetUrl.includes('silverorbit') || targetUrl.includes('nexabloom') || targetUrl.includes('streamzone')) {
+          refererCandidates.push('https://megaplay.buzz/');
+        }
+        if (targetUrl.includes('hstream') || targetUrl.includes('ane-h.xyz') || targetUrl.includes('imoto-str')) {
+          refererCandidates.push('https://hstream.moe/');
+        }
+        if (targetUrl.includes('hentaicity')) {
+          refererCandidates.push('https://www.hentaicity.com/');
         }
         try {
           const urlOrigin = new URL(targetUrl).origin;
@@ -1517,34 +1741,41 @@ export default function AniPlayer({
     // ── Main: try primary track, then retry ONLY with fallbacks for the SAME LANGUAGE ──
     (async () => {
       // 1. Try primary track
+      let primaryCues = [];
       try {
         const text = await loadSubtitleFromTrack(currentSubTrack);
-        const cueList = parseSubtitleText(text);
-        if (cueList.length > 0) {
-          log(`[Subtitle] Primary track for "${targetLang}" loaded with ${cueList.length} cues`);
-          setCues(cueList);
-          return;
-        }
-        log(`[Subtitle] Primary track for "${targetLang}" returned 0 cues, trying same-language fallbacks...`);
+        primaryCues = parseSubtitleText(text);
       } catch (err) {
         log(`[Subtitle] Primary track for "${targetLang}" failed: ${err.message}, trying same-language fallbacks...`);
       }
 
-      // 2. Retry chain: try ONLY candidates for the EXACT SAME LANGUAGE
+      // If the selected track is English dialogue, but returned very few cues (< 30)
+      // (indicating it might be a partial/sign track) and alternatives exist,
+      // probe same-language alternatives to find the full dialogue track!
+      let bestCues = primaryCues;
+      const isEnglish = targetLang.toLowerCase() === 'english';
       const sameLangAlternatives = currentSubTrack.alternatives || [];
-      for (const altTrack of sameLangAlternatives) {
-        if (!altTrack.file && !altTrack.content) continue;
-        try {
-          const text = await loadSubtitleFromTrack(altTrack);
-          const cueList = parseSubtitleText(text);
-          if (cueList.length > 0) {
-            log(`[Subtitle] Alternative track for "${targetLang}" succeeded with ${cueList.length} cues`);
-            setCues(cueList);
-            return;
-          }
-        } catch {
-          // continue to next alternative for this language
+
+      if ((bestCues.length === 0 || (isEnglish && bestCues.length < 30)) && sameLangAlternatives.length > 0) {
+        log(`[Subtitle] Track for "${targetLang}" had ${bestCues.length} cues — checking ${sameLangAlternatives.length} alternative(s)...`);
+        for (const altTrack of sameLangAlternatives) {
+          if (!altTrack.file && !altTrack.content) continue;
+          try {
+            const altText = await loadSubtitleFromTrack(altTrack);
+            const altCues = parseSubtitleText(altText);
+            if (altCues.length > bestCues.length) {
+              bestCues = altCues;
+              log(`[Subtitle] Alternative track had ${altCues.length} cues (better match)!`);
+              if (altCues.length >= 50) break; // Found full dialogue
+            }
+          } catch (_) {}
         }
+      }
+
+      if (bestCues.length > 0) {
+        log(`[Subtitle] Subtitle loaded for "${targetLang}" with ${bestCues.length} cues`);
+        setCues(bestCues);
+        return;
       }
 
       // 3. All tracks for this language exhausted — gracefully clear cues.
@@ -1642,9 +1873,16 @@ export default function AniPlayer({
     // Also trigger auto-hide from timeupdate when playing starts (covers autoplay case)
     let _lastPlaying = false;
     const onTimeUpdate = () => {
-      if (!v.paused && !_lastPlaying) {
-        _lastPlaying = true;
-        schedHide();
+      if (!v.paused) {
+        if (!_lastPlaying) {
+          _lastPlaying = true;
+          schedHide();
+        }
+        if (v.currentTime > 0) {
+          setWaiting(false);
+          setNeedsTap(false);
+          setHasStarted(true);
+        }
       } else if (v.paused) {
         _lastPlaying = false;
       }
@@ -1840,7 +2078,7 @@ export default function AniPlayer({
 
   /* ── Fullscreen events (Desktop Browser Only) ─────────────────── */
   useEffect(() => {
-    if (isNative) return; // Native mobile uses CSS + ScreenOrientation + ImmersiveMode, not DOM Fullscreen API
+    if (isNativePlatform() || (typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent))) return;
     const cb = () => setFs(!!(document.fullscreenElement || document.webkitFullscreenElement));
     document.addEventListener('fullscreenchange', cb);
     document.addEventListener('webkitfullscreenchange', cb);
@@ -1856,33 +2094,31 @@ export default function AniPlayer({
       onFullscreenChange(fs || isLocal);
     }
     const syncNativeFullscreen = async () => {
-      if (!isNative) return;
+      if (!isNativePlatform()) return;
       try {
         if (fs || isLocal) {
-          // Lock landscape + full immersive (hides both status bar AND nav bar)
+          // Lock landscape: MainActivity maps SCREEN_ORIENTATION_LANDSCAPE to SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+          // which allows free 180° rotation between landscape-left and landscape-right (like YouTube)
+          // and permanently prevents automatic switching to portrait.
           if (EmbedScraper?.setOrientation) {
             await EmbedScraper.setOrientation({ orientation: 'landscape' }).catch(() => {});
           }
           await ScreenOrientation.lock({ orientation: 'landscape' }).catch(() => {});
           if (EmbedScraper?.setImmersiveMode) {
-            await EmbedScraper.setImmersiveMode({ enabled: true });
+            await EmbedScraper.setImmersiveMode({ enabled: true }).catch(() => {});
           } else {
-            // Fallback: at least hide status bar
-            await StatusBar.hide();
+            await StatusBar.hide().catch(() => {});
           }
         } else {
-          // Force back to portrait first, then unlock orientation, and restore system bars
+          // On exit / portrait player: lock portrait and restore system UI
           if (EmbedScraper?.setOrientation) {
             await EmbedScraper.setOrientation({ orientation: 'portrait' }).catch(() => {});
           }
-          try {
-            await ScreenOrientation.lock({ orientation: 'portrait' });
-            await ScreenOrientation.unlock();
-          } catch {}
+          await ScreenOrientation.lock({ orientation: 'portrait' }).catch(() => {});
           if (EmbedScraper?.setImmersiveMode) {
-            await EmbedScraper.setImmersiveMode({ enabled: false });
+            await EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
           } else {
-            await StatusBar.show();
+            await StatusBar.show().catch(() => {});
           }
         }
       } catch (e) {
@@ -1892,7 +2128,16 @@ export default function AniPlayer({
     syncNativeFullscreen();
   }, [fs, isLocal]);
 
-  // Always restore system bars + unlock orientation on unmount
+  // Back button handling: if in fullscreen landscape, hardware back exits fullscreen back to portrait
+  useEffect(() => {
+    if (!fs || isLocal) return;
+    return registerBackButtonHandler(() => {
+      setFs(false);
+      return true; // handled: exited fullscreen
+    });
+  }, [fs, isLocal]);
+
+  // Always restore system bars + lock portrait orientation on unmount
   // SKIP this when unmounting due to an episode transition (keepFsOnEpChange.current === true)
   // so the next episode can immediately re-enter fullscreen without a portrait flash.
   useEffect(() => {
@@ -1901,10 +2146,11 @@ export default function AniPlayer({
       // Always reset screen brightness when player closes
       resetDeviceBrightness();
 
-      if (isNative && !(keepFsOnEpChange?.current)) {
-        ScreenOrientation.lock({ orientation: 'portrait' })
-          .then(() => ScreenOrientation.unlock())
-          .catch(() => {});
+      if (isNativePlatform() && !(keepFsOnEpChange?.current)) {
+        if (EmbedScraper?.setOrientation) {
+          EmbedScraper.setOrientation({ orientation: 'portrait' }).catch(() => {});
+        }
+        ScreenOrientation.lock({ orientation: 'portrait' }).catch(() => {});
         if (EmbedScraper?.setImmersiveMode) {
           EmbedScraper.setImmersiveMode({ enabled: false }).catch(() => {});
         } else {
@@ -1926,9 +2172,12 @@ export default function AniPlayer({
 
   const toggleFitMode = useCallback(() => {
     setFitMode(curr => {
-      if (curr === 'contain') return 'cover';
-      if (curr === 'cover') return 'fill';
-      return 'contain';
+      const next = curr === 'contain' ? 'cover' : curr === 'cover' ? 'fill' : 'contain';
+      const label = next === 'contain' ? 'Fit' : next === 'cover' ? 'Zoom' : 'Stretch';
+      setFitToast(label);
+      if (fitToastTimerRef.current) clearTimeout(fitToastTimerRef.current);
+      fitToastTimerRef.current = setTimeout(() => setFitToast(null), 1200);
+      return next;
     });
     showCtrl();
   }, [showCtrl]);
@@ -2255,26 +2504,40 @@ export default function AniPlayer({
         </div>
       )}
 
+      {/* ── Aspect Ratio Mode Toast ────────────────────────── */}
+      {fitToast && (
+        <div className="anip__fit-toast">
+          {fitToast === 'Fit' && <RectangleHorizontal size={14} />}
+          {fitToast === 'Zoom' && <ZoomIn size={14} />}
+          {fitToast === 'Stretch' && <MoveHorizontal size={14} />}
+          <span>{fitToast}</span>
+        </div>
+      )}
+
       {/* ── Fatal HLS error overlay ─────────────────────────────── */}
-      {hlsErr && (() => {
+      {/* NOTE: suppress if loading=true — URL is about to change, error will resolve */}
+      {hlsErr && !loading && (() => {
+        const errKey = (typeof hlsErr === 'object' && hlsErr.type) ? hlsErr.type : hlsErr;
+        const errDetails = typeof hlsErr === 'object' ? (hlsErr.details || hlsErr.error || '') : '';
         // Context-aware error messages
         const errMessages = {
           network: { icon: '📡', title: 'Connection Issue', body: 'Could not reach the stream. Check your connection or try a different server.' },
           media:   { icon: '⚠️', title: 'Decode Error',      body: 'This stream format isn\'t supported. Try switching to another server.' },
           unknown: { icon: '🎬', title: 'Stream Unavailable', body: 'This stream couldn\'t load. Select another server to continue watching.' },
         };
-        const msg = errMessages[hlsErr] || errMessages.unknown;
+        const msg = errMessages[errKey] || errMessages.unknown;
         const doRetry = () => {
           const v = videoRef.current;
           if (!v) return;
           setHlsErr(null);
           setNeedsTap(false);
           setWaiting(true);
+          setHasStarted(false);
           const oldHls = hlsRef.current;
           if (oldHls) { try { oldHls.destroy(); } catch {} hlsRef.current = null; }
           const newHls = new Hls({
             enableWorker: true,
-            startFragPrefetch: true,
+            startFragPrefetch: false,
             lowLatencyMode: false,
             progressive: false,
             startPosition: targetResumeTimeRef.current > 0 ? targetResumeTimeRef.current : -1,
@@ -2286,29 +2549,41 @@ export default function AniPlayer({
             maxMaxBufferLength: 50,
             maxBufferSize: 50 * 1000 * 1000,
             backBufferLength: 20,
-            manifestLoadingTimeOut: 8000,
-            manifestLoadingMaxRetry: 3,
-            manifestLoadingRetryDelay: 500,
-            levelLoadingTimeOut: 8000,
-            levelLoadingMaxRetry: 3,
-            levelLoadingRetryDelay: 500,
-            fragLoadingTimeOut: 12000,
-            fragLoadingMaxRetry: 3,
-            fragLoadingRetryDelay: 500,
+            manifestLoadingTimeOut: 15000,
+            manifestLoadingMaxRetry: 6,
+            manifestLoadingRetryDelay: 1200,
+            levelLoadingTimeOut: 15000,
+            levelLoadingMaxRetry: 6,
+            levelLoadingRetryDelay: 1200,
+            fragLoadingTimeOut: 20000,
+            fragLoadingMaxRetry: 6,
+            fragLoadingRetryDelay: 1200,
             highBufferWatchdogPeriod: 2,
             nudgeOffset: 0.1,
             nudgeMaxRetries: 10,
             autoStartLoad: true,
-            loader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
-            pLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
-            fLoader: isNative ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, referer, embedUrl) : Hls.DefaultConfig.loader,
+            loader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
+            pLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
+            fLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
           });
           hlsRef.current = newHls;
           newHls.attachMedia(v);
-          newHls.on(Hls.Events.MEDIA_ATTACHED, () => { newHls.loadSource(url); });
+          newHls.on(Hls.Events.MEDIA_ATTACHED, () => {
+            const sourceUrl = getEffectivePlayableUrl(url, refererRef.current);
+            newHls.loadSource(sourceUrl);
+          });
           newHls.on(Hls.Events.MANIFEST_PARSED, () => { setWaiting(false); v.play().catch(() => {}); });
           newHls.on(Hls.Events.ERROR, (_, d) => {
-            if (d.fatal) { setHlsErr('unknown'); setWaiting(false); }
+            if (d.fatal) {
+              // Pause video so audio doesn't play under the error overlay
+              try { if (v && !v.paused) v.pause(); } catch (_) {}
+              setHlsErr({
+                type: d.type === Hls.ErrorTypes.NETWORK_ERROR ? 'network' : d.type === Hls.ErrorTypes.MEDIA_ERROR ? 'media' : 'unknown',
+                details: d.details || '',
+                error: d.error?.message || d.reason || '',
+              });
+              setWaiting(false);
+            }
           });
         };
         return (
@@ -2319,6 +2594,11 @@ export default function AniPlayer({
                 {msg.title}
               </strong>
               {msg.body}
+              {errDetails && (
+                <span style={{ display: 'block', marginTop: 6, fontSize: 11, opacity: 0.5, fontFamily: 'monospace' }}>
+                  ({errDetails})
+                </span>
+              )}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 240, margin: '14px auto 0' }}>
               <button className="anip__error__retry" onClick={doRetry}>
@@ -2354,7 +2634,7 @@ export default function AniPlayer({
       })()}
 
       {/* ── buffering spinner / loading spinner ─────────────── */}
-      {(waiting || !hasStarted || needsTap || loading) && !hlsErr && !activeVideoAd && (
+      {(!playing || waiting) && (waiting || !hasStarted || needsTap || loading) && !hlsErr && !activeVideoAd && (
         <div className="anip__spinner">
           <div className="anip__spinner-ring" />
         </div>
@@ -2441,8 +2721,16 @@ export default function AniPlayer({
           {onBack ? (
             <button
               className="anip__btn anip__btn--back"
-              onClick={e => { e.stopPropagation(); flushProgress(); onBack(); }}
-              title="Exit Video"
+              onClick={e => {
+                e.stopPropagation();
+                if (fs && !isLocal) {
+                  setFs(false);
+                } else {
+                  flushProgress();
+                  onBack();
+                }
+              }}
+              title={fs && !isLocal ? "Exit Fullscreen" : "Exit Video"}
               style={{
                 width: 36,
                 height: 36,
@@ -2538,7 +2826,7 @@ export default function AniPlayer({
         <div className="anip__spacer" />
 
         {/* ── Center Controls (Prev, Play/Pause, Next) ──────── */}
-        {!(showQ || showSub || showSync || loading) && (
+        {!(showQ || showSub || showSpeed || showSync || loading || hlsErr) && (
           <div className="anip__center-ctrls" onClick={e => e.stopPropagation()}>
           {onEpisodeChange && (
             <button
@@ -2638,21 +2926,33 @@ export default function AniPlayer({
                   className={`anip__btn ${activeSub !== -1 ? 'anip__btn--active' : ''}`}
                   onClick={e => { e.stopPropagation(); setActivePanel(p => p === 'subtitles' ? null : 'subtitles'); schedHide(); }}
                   title="Subtitles"
+                  aria-label="Subtitles"
                 >
                   <Subtitles size={17} />
                 </button>
                 {showSub && (
-                  <div className="anip__menu">
+                  <div className="anip__menu anip__menu--subs" onClick={e => e.stopPropagation()}>
                     <p className="anip__menu-hd">Subtitles</p>
-                    {[{ id:-1, label:'Off' }, ...subs].map(s => (
-                      <button key={s.id}
-                        className={`anip__menu-item ${activeSub===s.id ? 'anip__menu-item--on':''}`}
+                    <button
+                      className={`anip__menu-item ${activeSub === -1 ? 'anip__menu-item--on' : ''}`}
+                      onClick={e => { e.stopPropagation(); setActiveSub(-1); setActivePanel(null); schedHide(); }}
+                    >
+                      {activeSub === -1 && <span className="anip__chk">✓</span>}
+                      Off
+                    </button>
+                    {subs.map(s => (
+                      <button
+                        key={s.id}
+                        className={`anip__menu-item ${activeSub === s.id ? 'anip__menu-item--on' : ''}`}
                         onClick={e => { e.stopPropagation(); setActiveSub(s.id); setActivePanel(null); schedHide(); }}
                       >
-                        {activeSub===s.id && <span className="anip__chk">✓</span>}{s.label}
+                        {activeSub === s.id && <span className="anip__chk">✓</span>}
+                        {s.label}
                       </button>
                     ))}
-                    {subs.length===0 && <p className="anip__menu-empty">No subtitles</p>}
+                    {subs.length === 0 && (
+                      <p className="anip__menu-empty">No subtitles</p>
+                    )}
                   </div>
                 )}
               </div>
@@ -2665,24 +2965,27 @@ export default function AniPlayer({
                 >
                   <Settings size={17} />
                   <span className="anip__badge-visible">
-                    {activeQ === -1 ? (playingResolution ? `Auto (${playingResolution})` : 'Auto') : (qualities[activeQ]?.label || 'Auto')}
+                    {activeQ === -1
+                      ? (playingResolution ? `Auto (${playingResolution})` : 'Auto')
+                      : `🔒 ${qualities[activeQ]?.label || qualityLockLabel || 'HD'}`}
                   </span>
                 </button>
                 {showQ && (
                   <div className="anip__menu">
-                    <p className="anip__menu-hd">Quality</p>
+                    <p className="anip__menu-hd">Quality {activeQ !== -1 && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 4 }}>🔒 Locked</span>}</p>
                     {[{ id: -1, label: playingResolution ? `Auto (${playingResolution})` : 'Auto' }, ...[...qualities].reverse()].map(q => (
                       <button key={q.id}
                         className={`anip__menu-item ${activeQ===q.id ? 'anip__menu-item--on':''}`}
-                        onClick={e => { e.stopPropagation(); setActiveQ(q.id); setActivePanel(null); schedHide(); }}
+                        onClick={e => { e.stopPropagation(); userManualQualityChangedRef.current = true; setActiveQ(q.id); setActivePanel(null); schedHide(); }}
                       >
-                        {activeQ===q.id && <span className="anip__chk">✓</span>}{q.label}
+                        {activeQ===q.id && <span className="anip__chk">✓</span>}{q.id === -1 ? q.label : (q.id >= 0 && activeQ !== -1 && qualities[activeQ]?.id === q.id ? `🔒 ${q.label}` : q.label)}
                       </button>
                     ))}
                     {qualities.length===0 && <p className="anip__menu-empty">No options</p>}
                   </div>
                 )}
               </div>
+
 
               {/* Playback Speed */}
               <div className="anip__menu-anchor">
@@ -2710,15 +3013,16 @@ export default function AniPlayer({
                 )}
               </div>
 
-              {/* Aspect Ratio Toggle */}
+              {/* Aspect Ratio Toggle (symbols instead of words) */}
               <button className="anip__btn"
                 onClick={e => { e.stopPropagation(); toggleFitMode(); }}
-                title="Aspect Ratio"
-                style={{ minWidth: '48px', justifyContent: 'center' }}
+                title={`Aspect Ratio: ${fitMode === 'contain' ? 'Fit' : fitMode === 'cover' ? 'Zoom' : 'Stretch'}`}
+                aria-label={`Aspect Ratio: ${fitMode === 'contain' ? 'Fit' : fitMode === 'cover' ? 'Zoom' : 'Stretch'}`}
+                style={{ justifyContent: 'center' }}
               >
-                <span className="anip__badge-visible" style={{ fontSize: '10px', textTransform: 'uppercase', opacity: 0.95 }}>
-                  {fitMode === 'contain' ? 'Fit' : fitMode === 'cover' ? 'Zoom' : 'Stretch'}
-                </span>
+                {fitMode === 'contain' && <RectangleHorizontal size={17} />}
+                {fitMode === 'cover' && <ZoomIn size={17} />}
+                {fitMode === 'fill' && <MoveHorizontal size={17} />}
               </button>
 
               {/* Fullscreen */}

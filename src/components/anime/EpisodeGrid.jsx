@@ -8,6 +8,7 @@ function EpisodeGrid({
   episodes = [],
   currentEp = 1,
   onSelectEp,
+  onPrefetchEp,
   watchedEps = new Set(),
   downloadedEps = new Set(),
   columns = 5,
@@ -151,6 +152,8 @@ function EpisodeGrid({
             <motion.button
               key={num}
               onClick={() => onSelectEp(num)}
+              onMouseEnter={() => onPrefetchEp?.(num)}
+              onTouchStart={() => onPrefetchEp?.(num)}
               whileTap={{ scale: 0.92 }}
               transition={{ type: 'spring', stiffness: 500, damping: 28 }}
               style={{

@@ -377,7 +377,7 @@ export async function getPopularThisSeason(page = 1, perPage = 15) {
 export async function searchAnime(search, page = 1, perPage = 20, genres = null, format = null, status = null, sort = 'POPULARITY_DESC') {
   const vars = { p: page, n: perPage };
   const queryParams = ['$p:Int', '$n:Int'];
-  const mediaParams = ['type:ANIME', `sort:${sort}`];
+  const mediaParams = ['type:ANIME', 'isAdult:false', `sort:${sort}`];
 
   if (search) {
     queryParams.push('$s:String');
@@ -399,7 +399,7 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
 
   const ANILIST_GENRES = new Set([
     'Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy',
-    'Hentai', 'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery',
+    'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery',
     'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life',
     'Sports', 'Supernatural', 'Thriller'
   ]);
@@ -489,6 +489,7 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
   const ttl = search ? TTL.NORMAL : TTL.STABLE;
   try {
     const d = await gql(q, vars, ttl);
+    const isClean = (m) => !m?.isAdult && !(Array.isArray(m?.genres) && m.genres.some(g => typeof g === 'string' && /hentai/i.test(g)));
 
     if (hasHarem) {
       const femaleMedia = d?.female?.media || [];
@@ -497,7 +498,7 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
       const seen = new Set();
       const unique = [];
       for (const m of merged) {
-        if (!seen.has(m.id)) {
+        if (!seen.has(m.id) && isClean(m)) {
           seen.add(m.id);
           unique.push(m);
         }
@@ -505,7 +506,7 @@ export async function searchAnime(search, page = 1, perPage = 20, genres = null,
       const hasNextPage = !!(d?.female?.pageInfo?.hasNextPage || d?.male?.pageInfo?.hasNextPage);
       return { rows: unique, hasNextPage };
     } else {
-      const rows = d?.Page?.media || [];
+      const rows = (d?.Page?.media || []).filter(isClean);
       const hasNextPage = d?.Page?.pageInfo?.hasNextPage ?? (rows.length >= perPage);
       return { rows, hasNextPage };
     }
@@ -532,7 +533,7 @@ export async function getAnimeDetail(id) {
         coverImage { large extraLarge color }
         bannerImage
         description(asHtml:false)
-        genres averageScore popularity episodes duration status format
+        genres averageScore popularity episodes duration status format isAdult
         startDate { year month day }
         endDate { year month day }
         studios(isMain:true){ nodes{ name } }
@@ -548,7 +549,7 @@ export async function getAnimeDetail(id) {
             mediaRecommendation{
               id title{romaji english}
               coverImage{large extraLarge color}
-              averageScore episodes format status
+              averageScore episodes format status isAdult
             }
           }
         }

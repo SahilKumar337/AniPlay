@@ -99,17 +99,21 @@ export default function Notifications() {
       const raw = localStorage.getItem('aniplay_local_notifications') || '[]';
       const list = JSON.parse(raw).map(item => ({ ...item, is_read: true }));
       localStorage.setItem('aniplay_local_notifications', JSON.stringify(list));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('aniplay_unread_notifications_updated'));
+      }
     } catch (_) {}
 
-    if (!user?.id) return;
-    try {
-      await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('target_user_id', user.id)
-        .eq('is_read', false);
-      refreshUnreadCount();
-    } catch (_) {}
+    if (user?.id) {
+      try {
+        await supabase
+          .from('notifications')
+          .update({ is_read: true })
+          .eq('target_user_id', user.id)
+          .eq('is_read', false);
+      } catch (_) {}
+    }
+    refreshUnreadCount();
   }, [user?.id, refreshUnreadCount]);
 
   useEffect(() => {
@@ -143,12 +147,15 @@ export default function Notifications() {
       const raw = localStorage.getItem('aniplay_local_notifications') || '[]';
       const list = JSON.parse(raw).filter(n => n.id !== id);
       localStorage.setItem('aniplay_local_notifications', JSON.stringify(list));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('aniplay_unread_notifications_updated'));
+      }
     } catch (_) {}
 
     try {
       await supabase.from('notifications').delete().eq('id', id);
-      refreshUnreadCount();
     } catch (_) {}
+    refreshUnreadCount();
   };
 
   const handleDeleteOne = (e, id) => {
@@ -164,19 +171,36 @@ export default function Notifications() {
   const clearAll = async () => {
     setNotifications([]);
     localStorage.removeItem('aniplay_local_notifications');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('aniplay_unread_notifications_updated'));
+    }
     try {
       if (user?.id) {
         await supabase.from('notifications').delete().eq('target_user_id', user.id);
       }
-      refreshUnreadCount();
     } catch (_) {}
+    refreshUnreadCount();
   };
 
   /* ── Tap notification ──────────────────────────────────────────────── */
   const handleItemClick = async (n) => {
     if (!n.is_read) {
       setNotifications(prev => prev.map(item => item.id === n.id ? { ...item, is_read: true } : item));
-      supabase.from('notifications').update({ is_read: true }).eq('id', n.id).then(() => refreshUnreadCount()).catch(() => {});
+
+      try {
+        const raw = localStorage.getItem('aniplay_local_notifications') || '[]';
+        const list = JSON.parse(raw).map(item => item.id === n.id ? { ...item, is_read: true } : item);
+        localStorage.setItem('aniplay_local_notifications', JSON.stringify(list));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('aniplay_unread_notifications_updated'));
+        }
+      } catch (_) {}
+
+      if (user?.id) {
+        supabase.from('notifications').update({ is_read: true }).eq('id', n.id).then(() => refreshUnreadCount()).catch(() => {});
+      } else {
+        refreshUnreadCount();
+      }
     }
 
     if (n.anime_id) {

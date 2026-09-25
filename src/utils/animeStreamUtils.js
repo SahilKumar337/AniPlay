@@ -2,7 +2,17 @@ import { fetchM3U8Playlist, getServerSortPriority } from '../api/stream.js';
 
 export const sortServers = (list) => {
   if (!Array.isArray(list)) return [];
-  return [...list].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name));
+  return [...list].sort((a, b) => {
+    // 1. Authoritative CDN & server priority (Vidstream #1, HD-1 #2, ..., WavesHD fallback)
+    const pA = getServerSortPriority(a.name);
+    const pB = getServerSortPriority(b.name);
+    if (pA !== pB) return pA - pB;
+
+    // 2. Tie-breaker only: Favor pre-resolved HLS streams
+    const aDirect = (a.isHLS && a.videoUrl && !a.videoUrl.includes('proxy/placeholder') && !a.videoUrl.includes('megaplay.buzz/stream/')) ? 0 : 1;
+    const bDirect = (b.isHLS && b.videoUrl && !b.videoUrl.includes('proxy/placeholder') && !b.videoUrl.includes('megaplay.buzz/stream/')) ? 0 : 1;
+    return aDirect - bDirect;
+  });
 };
 
 /**
@@ -14,7 +24,17 @@ export const sortServers = (list) => {
  */
 export function getAiredEpisodeCount(anime) {
   if (!anime) return 0;
-  if (anime.status === 'NOT_YET_RELEASED') return 0;
+
+  const currentYear = new Date().getFullYear();
+  const startYear = anime.startDate?.year;
+
+  if (anime.status === 'NOT_YET_RELEASED') {
+    // If start date is in the past, it's an AniList database anomaly (e.g. older unlisted OVA/hentai)
+    if (startYear && startYear <= currentYear) {
+      return anime.episodes || 1;
+    }
+    return 0;
+  }
 
   const isAiring = anime.status === 'RELEASING';
   const nextEp = anime.nextAiringEpisode?.episode;
@@ -25,7 +45,13 @@ export function getAiredEpisodeCount(anime) {
   if (isAiring && nextEp === 1) {
     return 0;
   }
-  return anime.episodes || 0;
+  // RELEASING with no nextAiringEpisode (AniList data gap for long-running anime or ongoing OVAs):
+  // Trust anime.episodes if present; otherwise return 1 so the UI never shows "0 episodes"
+  // for a show that is actively streaming content.
+  if (isAiring && !nextEp) {
+    return anime.episodes || 1;
+  }
+  return anime.episodes || (anime.status === 'FINISHED' ? 1 : 0);
 }
 
 export const isDownloadable = (srv) => {
@@ -60,7 +86,9 @@ export const isDownloadable = (srv) => {
     name.includes('earnvids') ||
     name.includes('otaku') ||
     name.includes('gogo') ||
-    name.includes('anitaku');
+    name.includes('anitaku') ||
+    name.includes('hstream') ||
+    name.includes('hentaicity');
 
   if (isSupportedProvider) return true;
 
@@ -78,21 +106,36 @@ export const isDownloadable = (srv) => {
   return isSupportedUrl;
 };
 
-export const enrichDubSubtitles = (list) => {
+export const enrichDubSubtitles = (list, extraSubs = []) => {
   if (!list || !list.length) return list;
 
-  // Find all subtitle tracks available across any server for this episode
+  // Find all subtitle tracks available across any server for this episode, or passed via extraSubs
   const allAvailableSubs = [];
   const seenUrls = new Set();
+
+  // Add extraSubs (e.g. from cached episode subtitles)
+  if (Array.isArray(extraSubs)) {
+    for (const sub of extraSubs) {
+      const url = sub.file || sub.url;
+      if (url && !seenUrls.has(url)) {
+        seenUrls.add(url);
+        allAvailableSubs.push(sub);
+      }
+    }
+  }
+
+  // Add subtitles from non-hardsub SUB servers
   for (const s of list) {
     const low = (s.name || '').toLowerCase();
+    const isDub = s.type === 'dub' || low.includes('dub');
     // Do not borrow subtitles from hardsub or waves servers
     if (low.includes('hardsub') || low.includes('hard') || low.includes('waves')) continue;
     if (s.subtitles?.length) {
       for (const sub of s.subtitles) {
-        if (sub.file && !seenUrls.has(sub.file)) {
-          seenUrls.add(sub.file);
-          allAvailableSubs.push(sub);
+        const url = sub.file || sub.url;
+        if (url && !seenUrls.has(url)) {
+          seenUrls.add(url);
+          allAvailableSubs.push({ ...sub, isFromSub: !isDub });
         }
       }
     }
@@ -101,17 +144,43 @@ export const enrichDubSubtitles = (list) => {
   if (allAvailableSubs.length === 0) return list;
 
   return list.map(s => {
-    // If this server already has subtitles, keep them
-    if (s.subtitles && s.subtitles.length > 0) return s;
-
     // Do NOT attach external subtitles to HardSub or WavesHD servers (they use burned-in subtitles)
     const low = (s.name || '').toLowerCase();
     if (low.includes('hardsub') || low.includes('hard') || low.includes('waves')) {
       return s;
     }
 
-    // Otherwise, attach all available subtitles from other servers for this episode
-    return { ...s, subtitles: allAvailableSubs };
+    const isDub = s.type === 'dub' || low.includes('dub');
+    if (isDub) {
+      // For DUB servers: always ensure full dialogue SUB subtitles are shared!
+      // Keep any existing dub tracks (like Signs & Songs) and merge full dialogue tracks.
+      const existing = Array.isArray(s.subtitles) ? [...s.subtitles] : [];
+      const cleanedExisting = existing.map(track => {
+        const lbl = (track.label || '').toLowerCase();
+        if (/sign|song|s&s/i.test(lbl)) {
+          return { ...track, label: 'English (Signs & Songs)' };
+        }
+        return track;
+      });
+      const existingUrls = new Set(cleanedExisting.map(t => t.file || t.url));
+      const mergedSubs = [...cleanedExisting];
+
+      for (const sub of allAvailableSubs) {
+        const url = sub.file || sub.url;
+        if (url && !existingUrls.has(url)) {
+          existingUrls.add(url);
+          mergedSubs.push(sub);
+        }
+      }
+      return { ...s, subtitles: mergedSubs };
+    }
+
+    // For SUB servers: if this server has no subtitles, populate with available subtitles
+    if (!s.subtitles || s.subtitles.length === 0) {
+      return { ...s, subtitles: allAvailableSubs };
+    }
+
+    return s;
   });
 };
 
@@ -120,18 +189,22 @@ export const enrichDubSubtitles = (list) => {
  * Deduplicates by normalized language label — so only ONE "English" track shows
  * up even when NekoHD, AniHD, and Waves all provide their own English VTT.
  * Server priority: AniHD > NekoHD > Waves > others (prefer higher-quality sources).
+ * SUB servers ALWAYS take precedence over DUB servers for dialogue tracks.
  */
 export const buildAllSubtitleTracks = (list) => {
   if (!list || !list.length) return [];
 
   // Server priority — lower number = preferred when same language exists on multiple servers
-  const getServerPriority = (serverName) => {
+  const getServerPriority = (serverName, isDub) => {
     const n = (serverName || '').toLowerCase();
-    if (n.includes('anihd')) return 1;
-    if (n.includes('neko')) return 2;
-    if (n.includes('waves')) return 3;
-    if (n.includes('anivid')) return 4;
-    return 5;
+    let base = 5;
+    if (n.includes('anihd')) base = 1;
+    else if (n.includes('neko')) base = 2;
+    else if (n.includes('waves')) base = 3;
+    else if (n.includes('anivid')) base = 4;
+    // CRITICAL: DUB servers should NOT take priority over SUB servers for full-dialogue subtitles!
+    if (isDub || n.includes('dub')) base += 20;
+    return base;
   };
 
   const guessLangFromFile = (file) => {
@@ -149,12 +222,32 @@ export const buildAllSubtitleTracks = (list) => {
     return '';
   };
 
+  const isForcedTrack = (label, file) => {
+    const raw = (label || '').toLowerCase();
+    const f = (file || '').toLowerCase();
+    return /forced/i.test(raw) || /forced[\._\-]/i.test(f);
+  };
+
+  const isSignsTrack = (label, file) => {
+    const raw = (label || '').toLowerCase();
+    const f = (file || '').toLowerCase();
+    return /sign|song|s&s|dubtitle/i.test(raw) || /signs?[\._\-]/i.test(f);
+  };
+
   // Normalize label → canonical language key for dedup
   const normalizeLabel = (label, file) => {
+    const raw = (label || '').toLowerCase();
+    const f = (file || '').toLowerCase();
+    if (isSignsTrack(raw, f)) {
+      return 'english (signs & songs)';
+    }
+    if (isForcedTrack(raw, f)) {
+      return 'english (forced)';
+    }
     if (!label) {
       return guessLangFromFile(file) || 'unknown';
     }
-    const clean = label.toLowerCase()
+    const clean = raw
       .replace(/\s*[\(\[].*?[\)\]]/g, '') // strip (CC), [SDH], etc.
       .replace(/\s*-\s*\w+$/, '')          // strip "- SDH", "- HI" suffixes
       .trim();
@@ -175,13 +268,15 @@ export const buildAllSubtitleTracks = (list) => {
 
   for (const srv of list) {
     if (!srv.subtitles?.length) continue;
-    const priority = getServerPriority(srv.name);
+    const isDub = srv.type === 'dub' || (srv.name || '').toLowerCase().includes('dub');
+    const priority = getServerPriority(srv.name, isDub);
 
     for (const sub of srv.subtitles) {
-      if (!sub.file) continue;
-      const lang = normalizeLabel(sub.label, sub.file);
+      const url = sub.file || sub.url;
+      if (!url) continue;
+      const lang = normalizeLabel(sub.label, url);
       if (!byLang[lang]) byLang[lang] = [];
-      byLang[lang].push({ sub, priority, serverName: srv.name });
+      byLang[lang].push({ sub: { ...sub, file: url }, priority, serverName: srv.name });
     }
   }
 
@@ -189,29 +284,47 @@ export const buildAllSubtitleTracks = (list) => {
   const tracks = [];
   let idCounter = 1000;
 
-  // Define display order: English first, then alphabetical
-  const langOrder = (lang) => lang === 'english' ? '0' : lang;
+  // Define display order: English dialogue first, then Signs & Songs, then Forced, then alphabetical
+  const langOrder = (lang) => {
+    if (lang === 'english') return '0';
+    if (lang === 'english (signs & songs)') return '1';
+    if (lang === 'english (forced)') return '2';
+    return lang;
+  };
   const sortedLangs = Object.keys(byLang).sort((a, b) =>
     langOrder(a).localeCompare(langOrder(b)));
 
   for (const lang of sortedLangs) {
     const candidates = byLang[lang];
-    // Sort by server priority, then pick the first (best) one
-    candidates.sort((a, b) => a.priority - b.priority);
+    // Sort by: prefer non-forced/non-signs tracks for dialogue, then server priority
+    candidates.sort((a, b) => {
+      const aIsForced = isForcedTrack(a.sub.label, a.sub.file) || isSignsTrack(a.sub.label, a.sub.file);
+      const bIsForced = isForcedTrack(b.sub.label, b.sub.file) || isSignsTrack(b.sub.label, b.sub.file);
+      if (!aIsForced && bIsForced) return -1;
+      if (aIsForced && !bIsForced) return 1;
+      return a.priority - b.priority;
+    });
     const best = candidates[0];
     const sub = best.sub;
 
     // Build a clean human-readable label: capitalize properly
-    const displayLabel = sub.label
+    let displayLabel = sub.label
       ? sub.label.replace(/\b\w/g, c => c.toUpperCase())
       : lang.replace(/\b\w/g, c => c.toUpperCase());
+    if (lang === 'english') {
+      displayLabel = 'English';
+    } else if (lang === 'english (signs & songs)') {
+      displayLabel = 'English (Signs & Songs)';
+    } else if (lang === 'english (forced)') {
+      displayLabel = 'English (Forced)';
+    }
 
     tracks.push({
       id: idCounter++,
       label: displayLabel,
       file: sub.file,
       referer: sub.referer || '',
-      default: !!sub.default,
+      default: lang === 'english' ? true : (lang.includes('forced') ? false : !!sub.default),
       alternatives: candidates.map(c => ({
         file: c.sub.file,
         referer: c.sub.referer || '',

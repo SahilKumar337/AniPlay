@@ -127,11 +127,9 @@ export default function VideoAdOverlay({ ad, onComplete, style: customStyle }) {
       console.warn('[VideoAdOverlay] Ad video error, checking fallback stream:', e);
       if (ad?.fallbackUrl && videoSrc !== ad.fallbackUrl) {
         setVideoSrc(ad.fallbackUrl);
-      } else if (videoSrc !== '/ads/sample_ad.mp4') {
-        setVideoSrc('/ads/sample_ad.mp4');
       } else {
-        console.warn('[VideoAdOverlay] All fallback video streams failed, auto-completing ad');
-        setTimeout(() => onComplete?.(), 1200);
+        console.warn('[VideoAdOverlay] Ad video unavailable, auto-completing ad');
+        setTimeout(() => onComplete?.(), 600);
       }
     };
 

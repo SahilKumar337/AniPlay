@@ -36,10 +36,19 @@ function _metaSave(list) {
   }
 }
 
-function _metaAdd(animeId, animeTitle, cover, episode, track) {
+function _metaAdd(animeId, animeTitle, cover, episode, track, streamUrl = '', referer = '', subtitles = []) {
   const id = `${animeId}_${episode}_${track}`;
   const list = _metaLoad().filter(x => x.id !== id); // remove old entry for same episode
-  list.push({ id, t: animeTitle, c: cover, e: String(episode), k: track });
+  list.push({
+    id,
+    t: animeTitle,
+    c: cover,
+    e: String(episode),
+    k: track,
+    u: streamUrl || '',
+    r: referer || '',
+    s: Array.isArray(subtitles) ? subtitles : []
+  });
   _metaSave(list);
 }
 
@@ -71,6 +80,9 @@ class DownloadManager {
           cover:      m.c || '',
           episode:    m.e || m.id.split('_')[1],
           track:      m.k || m.id.split('_')[2] || 'sub',
+          streamUrl:  m.u || '',
+          referer:    m.r || '',
+          subtitles:  m.s || []
         });
       }
     } catch (e) {
@@ -161,28 +173,43 @@ class DownloadManager {
     const taskId     = `${animeId}_${episode}_${track}`;
 
     if (!isNative || !OfflineDownloader) {
-      // WEB MOCK DOWNLOAD
+      // WEB DOWNLOAD: Persist stream metadata for instant playback in Download Center
       let progress = 0;
       this.activeProgress[taskId] = 0;
-      this.pendingMeta[taskId] = { animeId, animeTitle, cover, episode: String(episode), track };
+      this.pendingMeta[taskId] = { animeId, animeTitle, cover, episode: String(episode), track, streamUrl: srvUrl, referer, subtitles };
       this.notify({ taskId, progress: 0, status: 'downloading' });
       
+      // If direct MP4 file, trigger real browser download
+      if (typeof window !== 'undefined' && srvUrl && srvUrl.includes('.mp4')) {
+        try {
+          const a = document.createElement('a');
+          a.href = srvUrl;
+          a.download = getEpisodeFilename(animeTitle, episode, track);
+          a.target = '_blank';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } catch (_) {}
+      }
+
       const interval = setInterval(() => {
-        progress += 20;
+        progress += 25;
         if (progress >= 100) {
           clearInterval(interval);
           delete this.activeProgress[taskId];
           this.completedList = this.completedList.filter(x => x.taskId !== taskId);
           this.completedList.unshift({
             taskId, status: 'completed', progress: 100,
-            animeId, animeTitle, cover, episode: String(episode), track
+            animeId, animeTitle, cover, episode: String(episode), track,
+            streamUrl: srvUrl, referer, subtitles
           });
+          _metaAdd(animeId, animeTitle, cover, episode, track, srvUrl, referer, subtitles);
           this.notify({ taskId, progress: 100, status: 'completed' });
         } else {
           this.activeProgress[taskId] = progress;
           this.notify({ taskId, progress, status: 'downloading' });
         }
-      }, 400);
+      }, 250);
       
       return { status: 'started' };
     }
@@ -247,6 +274,9 @@ class DownloadManager {
         track:      meta.track      || parts[2] || 'sub',
         status:     'downloading',
         progress,
+        streamUrl:  meta.streamUrl  || '',
+        referer:    meta.referer    || '',
+        subtitles:  meta.subtitles  || [],
         timestamp:  Date.now()
       });
     }
@@ -266,6 +296,9 @@ class DownloadManager {
         progress:   item.progress,
         error:      item.error,
         remuxError: item.remuxError,
+        streamUrl:  item.streamUrl  || '',
+        referer:    item.referer    || '',
+        subtitles:  item.subtitles  || [],
         timestamp:  Date.now()
       });
     }
@@ -273,12 +306,49 @@ class DownloadManager {
     return list;
   }
 
+  // Save stream metadata for playback
+  saveStreamMetadata(animeId, animeTitle, cover, episode, track, streamUrl, referer = '', subtitles = []) {
+    _metaAdd(animeId, animeTitle, cover, episode, track, streamUrl, referer, subtitles);
+    const taskId = `${animeId}_${episode}_${track}`;
+    const found = this.completedList.find(x => x.taskId === taskId);
+    if (found) {
+      found.streamUrl = streamUrl;
+      found.referer = referer;
+      found.subtitles = subtitles;
+    }
+  }
+
   // Query MediaStore for the local file path, then convert to a WebView-accessible HTTP URL
   // using Capacitor's built-in local file server (supports byte-range requests for seeking).
+  // In web browser mode, returns the saved stream URL for seamless playback in Download Center.
   async getLocalFileUri(animeTitle, episode, track = 'sub') {
     if (!isNative || !OfflineDownloader) {
-      console.log('[DownloadManager] getLocalFileUri: not available in browser');
-      return { videoUri: null, subtitleUri: null };
+      const epStr = String(episode);
+      const match = this.completedList.find(x =>
+        (x.animeTitle === animeTitle || x.animeId === animeTitle) &&
+        String(x.episode) === epStr &&
+        (x.track || 'sub') === track
+      ) || _metaLoad().find(x =>
+        (x.t === animeTitle || x.id.startsWith(animeTitle + '_')) &&
+        String(x.e) === epStr &&
+        (x.k || 'sub') === track
+      );
+
+      if (match) {
+        const streamUrl = match.streamUrl || match.u || null;
+        const subtitles = match.subtitles || match.s || [];
+        const subtitleUri = subtitles[0]?.url || subtitles[0]?.file || null;
+        const referer = match.referer || match.r || '';
+        return {
+          videoUri: streamUrl,
+          subtitleUri,
+          subtitleContent: null,
+          subtitles,
+          referer,
+          isStream: true
+        };
+      }
+      return { videoUri: null, subtitleUri: null, subtitleContent: null };
     }
     const displayName = getEpisodeFilename(animeTitle, episode, track);
     try {

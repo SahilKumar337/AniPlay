@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { getAniNekoServers, getCachedServers, resolvePlaceholderServer, prefetchNextEpisode, getServerSortPriority, resolveSingleServer } from '../api/stream';
+import { getAniNekoServers, getCachedServers, resolvePlaceholderServer, prefetchNextEpisode, getServerSortPriority, resolveSingleServer, isDirectStreamUrl, getEpisodeSubtitles, saveEpisodeSubtitles, checkIsAdultAnime } from '../api/stream';
 import { scrapeEmbedNative, scrapeEmbedDirectly } from '../api/embedScraper';
 import { enrichDubSubtitles, buildAllSubtitleTracks, sortServers, getAiredEpisodeCount } from '../utils/animeStreamUtils';
 
@@ -35,6 +35,8 @@ export function useAnimeStream({
   const audioTrackRef = useRef(audioTrack);
   const userSelectedServerRef = useRef(false);
   const userSelectedTrackRef = useRef(false);
+  const inFlightServerRef = useRef(null);
+  const inFlightSubSubsRef = useRef(null);
   const isScrapingRef = useRef(false);
   const fetchStartTimeRef = useRef(Date.now());
 
@@ -45,6 +47,97 @@ export function useAnimeStream({
   const subServers = servers.filter(s => s.type === 'sub');
   const dubServers = servers.filter(s => s.type === 'dub');
 
+  // Resolves SUB server in background when watching DUB to share rich dialogue subtitles
+  const resolveSubSubtitlesForDub = useCallback(async (currentAnime, currentEp) => {
+    if (!currentAnime || !currentEp) return;
+    const animeId = currentAnime?.id || currentAnime?.idMal || currentAnime?.title?.romaji || 'anime';
+    const fetchKey = `${animeId}_${currentEp}`;
+
+    // 1. Check if we already have episode subtitles in persistent cache
+    const cachedSubs = getEpisodeSubtitles(animeId, currentEp);
+    if (cachedSubs && cachedSubs.length > 0) {
+      const enriched = enrichDubSubtitles(serversRef.current, cachedSubs);
+      setServers(enriched);
+      serversRef.current = enriched;
+      const tracks = buildAllSubtitleTracks(enriched);
+      setAllSubtitleTracks(tracks);
+      setActiveServer(prev => {
+        if (!prev) return prev;
+        const currentSubs = prev.subtitles || [];
+        const seenUrls = new Set(currentSubs.map(s => s.file || s.url));
+        const combined = [...currentSubs];
+        for (const cs of cachedSubs) {
+          const f = cs.file || cs.url;
+          if (f && !seenUrls.has(f)) {
+            seenUrls.add(f);
+            combined.push(cs);
+          }
+        }
+        return { ...prev, subtitles: combined };
+      });
+      return;
+    }
+
+    if (inFlightSubSubsRef.current === fetchKey) return;
+    inFlightSubSubsRef.current = fetchKey;
+
+    try {
+      // Find candidate SUB servers to extract dialogue subtitles from
+      const subList = (serversRef.current || []).filter(s => {
+        const type = s.type || 'sub';
+        const name = (s.name || '').toLowerCase();
+        return type === 'sub' && !name.includes('hardsub') && !name.includes('hard') && !name.includes('waves');
+      });
+
+      if (!subList.length) return;
+
+      // Prioritize Vidstream > HD-1 > HD-2 > MegaPlay > others
+      const sortedSubs = [...subList].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name));
+      const targetSub = sortedSubs[0];
+
+      console.log(`[useAnimeStream] Resolving sub server "${targetSub.name}" in background to share subtitles with DUB...`);
+      const resolved = await resolveSingleServer(targetSub, currentAnime, currentEp);
+
+      if (lastFetchedRef.current !== `${currentAnime.id}_${currentEp}`) return;
+
+      if (resolved?.subtitles && resolved.subtitles.length > 0) {
+        saveEpisodeSubtitles(animeId, currentEp, resolved.subtitles);
+        const updatedList = serversRef.current.map(s => {
+          if (s.name === targetSub.name && (s.type || 'sub') === 'sub') {
+            return { ...s, ...resolved };
+          }
+          return s;
+        });
+        const enriched = enrichDubSubtitles(updatedList, resolved.subtitles);
+        setServers(enriched);
+        serversRef.current = enriched;
+        const tracks = buildAllSubtitleTracks(enriched);
+        setAllSubtitleTracks(tracks);
+
+        // Inject into currently active playing server so AniPlayer immediately gets the subtitles!
+        setActiveServer(prev => {
+          if (!prev) return prev;
+          const currentSubs = prev.subtitles || [];
+          const seenUrls = new Set(currentSubs.map(s => s.file || s.url));
+          const combined = [...currentSubs];
+          for (const rs of resolved.subtitles) {
+            const f = rs.file || rs.url;
+            if (f && !seenUrls.has(f)) {
+              seenUrls.add(f);
+              combined.push(rs);
+            }
+          }
+          return { ...prev, subtitles: combined };
+        });
+        console.log(`[useAnimeStream] Successfully shared ${resolved.subtitles.length} sub subtitles with DUB!`);
+      }
+    } catch (e) {
+      console.warn('[useAnimeStream] Failed background sub subtitle resolution:', e.message);
+    } finally {
+      inFlightSubSubsRef.current = null;
+    }
+  }, []);
+
   // selectServer: reads serversRef.current as fallback — stable callback, no array dep
   const selectServer = useCallback(async (srv, srvList, isManual = false) => {
     if (!srv) return;
@@ -52,6 +145,7 @@ export function useAnimeStream({
       userSelectedServerRef.current = true;
       userSelectedTrackRef.current = true;
     }
+    inFlightServerRef.current = `${srv.name}_${srv.type || 'sub'}`;
     currentPriorityRef.current = getServerSortPriority(srv.name);
     setActiveServer(srv);
     setActiveName(srv.name || '');
@@ -63,44 +157,18 @@ export function useAnimeStream({
     setStreamErr(null);
     setExtracting(false);
 
-    const listToUse = srvList || serversRef.current || [];
-    const sameTypeServers = srv.type === 'dub'
-      ? listToUse.filter(s => s.type === 'dub')
-      : listToUse.filter(s => s.type === 'sub');
+    const isDub = srv.type === 'dub' || (srv.name || '').toLowerCase().includes('dub');
+    if (isDub) {
+      resolveSubSubtitlesForDub(anime, epParam);
+    }
 
-    const currentIndex = sameTypeServers.findIndex(s => s.name === srv.name && s.type === srv.type);
+    const listToUse = (srvList && srvList.length > 0) ? srvList : (serversRef.current || []);
 
     const handleScrapeError = () => {
-      // Re-read latest servers from ref to get all servers discovered so far
-      const currentFullList = serversRef.current.length > 0 ? serversRef.current : listToUse;
-      const currentTrackServers = srv.type === 'dub'
-        ? currentFullList.filter(s => s.type === 'dub')
-        : currentFullList.filter(s => s.type === 'sub');
-
-      const currentIdx = currentTrackServers.findIndex(s => s.name === srv.name && s.type === srv.type);
-
-      // If another server candidate exists, automatically failover to it
-      if (currentIdx !== -1 && currentIdx < currentTrackServers.length - 1) {
-        const nextSrv = currentTrackServers[currentIdx + 1];
-        console.log(`[useAnimeStream] Server "${srv.name}" failed, auto-failing over to "${nextSrv.name}"`);
-        selectServer(nextSrv, currentFullList, false);
-        return;
-      }
-
-      // If scrapers are still actively discovering servers in the background, keep waiting!
-      if (isScrapingRef.current) {
-        console.log('[useAnimeStream] Background scrapers still active, waiting for more servers...');
-        return;
-      }
-
-      // Professional timeout guard: never show retry button prematurely before 10 seconds of searching
-      const elapsed = Date.now() - fetchStartTimeRef.current;
-      const remainingWait = Math.max(0, 10000 - elapsed);
-      setTimeout(() => {
-        if (!activeUrlRef.current) {
-          setStreamErr('Unable to load stream. Please tap retry or select another server.');
-        }
-      }, remainingWait);
+      setExtracting(false);
+      setLoadStream(false);
+      inFlightServerRef.current = null;
+      setStreamErr(`Unable to load stream for "${srv.name}". Please tap retry or select another server.`);
     };
 
     // Placeholder server
@@ -130,7 +198,7 @@ export function useAnimeStream({
     }
 
     // Unresolved / embed server — lazy resolution on demand
-    const isUnresolved = !srv.isHLS;
+    const isUnresolved = !srv.isHLS || !isDirectStreamUrl(srv.videoUrl);
     if (isUnresolved) {
       setActiveName(srv.name);
       setActiveType(srv.type || 'sub');
@@ -144,7 +212,7 @@ export function useAnimeStream({
 
         setExtracting(false);
 
-        if (resolved?.videoUrl && (resolved.isHLS || resolved.videoUrl.startsWith('http'))) {
+        if (resolved?.videoUrl && isDirectStreamUrl(resolved.videoUrl)) {
           const finalSubs = (resolved.subtitles && resolved.subtitles.length > 0) ? resolved.subtitles : (srv.subtitles || []);
           const updatedSrv = { ...srv, ...resolved, isHLS: true, subtitles: finalSubs };
 
@@ -154,9 +222,10 @@ export function useAnimeStream({
           currentPriorityRef.current = getServerSortPriority(srv.name);
           setActiveUrl(resolved.videoUrl);
           activeUrlRef.current = resolved.videoUrl;
-          setIsActiveHLS(Boolean(resolved.isHLS));
+          setIsActiveHLS(true);
           setLoadStream(false);
           setExtracting(false);
+          inFlightServerRef.current = null;
 
           // Always merge into the latest live serversRef so servers discovered in parallel are NEVER wiped out
           const baseList = serversRef.current.length > 0 ? serversRef.current : listToUse;
@@ -166,12 +235,17 @@ export function useAnimeStream({
             }
             return s;
           });
-          const enriched = enrichDubSubtitles(updatedList);
+          const cachedSubs = getEpisodeSubtitles(anime?.id, epParam);
+          const enriched = enrichDubSubtitles(updatedList, cachedSubs);
           setServers(enriched);
           serversRef.current = enriched;
           setAllSubtitleTracks(buildAllSubtitleTracks(enriched));
+          if (isDub) {
+            resolveSubSubtitlesForDub(anime, epParam);
+          }
           return;
         } else {
+          console.warn(`[useAnimeStream] Lazy resolution failed for server ${srv.name}`);
           handleScrapeError();
           return;
         }
@@ -184,7 +258,7 @@ export function useAnimeStream({
     }
 
     // Direct HLS / MP4 server
-    if (srv.videoUrl) {
+    if (srv.videoUrl && isDirectStreamUrl(srv.videoUrl)) {
       setActiveServer(srv);          // ← CRITICAL: provides referer+embedUrl to AniPlayer's HLS loader
       setActiveName(srv.name);
       setActiveType(srv.type || 'sub');
@@ -193,15 +267,34 @@ export function useAnimeStream({
       setIsActiveHLS(Boolean(srv.isHLS));
       setLoadStream(false);
       setExtracting(false);
+      inFlightServerRef.current = null;
+      if (isDub) {
+        resolveSubSubtitlesForDub(anime, epParam);
+      }
+    } else {
+      console.warn(`[useAnimeStream] Server ${srv.name} has non-direct URL (${srv.videoUrl})`);
+      handleScrapeError();
     }
-  }, [anime, epParam]); // ← no 'servers' dep — uses serversRef.current instead
+  }, [anime, epParam, resolveSubSubtitlesForDub]); // ← stable callback
 
   const fetchStream = useCallback(async () => {
     if (!anime || !epParam) return;
     const fetchKey = `${anime.id}_${epParam}`;
+    const isAdult = checkIsAdultAnime(anime);
+    if (isAdult) {
+      setStreamErr('Adult (18+) content is currently disabled in the app.');
+      setLoadStream(false);
+      isScrapingRef.current = false;
+      return;
+    }
 
     // ⚡ Unreleased Guard: Prevent scraping anime that has not been released yet!
-    if (anime.status === 'NOT_YET_RELEASED' || (getAiredEpisodeCount(anime) === 0 && !anime.nextAiringEpisode)) {
+    const currentYear = new Date().getFullYear();
+    const trulyNotReleased = (
+      (anime.status === 'NOT_YET_RELEASED' && (!anime.startDate?.year || anime.startDate.year > currentYear)) ||
+      (getAiredEpisodeCount(anime) === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING' && (!anime.startDate?.year || anime.startDate.year > currentYear))
+    );
+    if (trulyNotReleased) {
       setStreamErr('This anime has not been released yet.');
       setLoadStream(false);
       isScrapingRef.current = false;
@@ -209,7 +302,7 @@ export function useAnimeStream({
     }
 
     // ⚡ Airing Guard: Prevent scraping un-aired future episodes!
-    const isAiring = anime.status === 'RELEASING';
+    const isAiring = !isAdult && anime.status === 'RELEASING';
     const nextEp = anime.nextAiringEpisode?.episode;
     if (isAiring && nextEp && Number(epParam) >= nextEp) {
       const s = anime.nextAiringEpisode.timeUntilAiring || 0;
@@ -266,12 +359,17 @@ export function useAnimeStream({
       if (srvList.length) {
         // ── Cache hit: instant path ──
         const sorted = sortServers(srvList);
-        const enriched = enrichDubSubtitles(sorted);
+        const cachedSubs = getEpisodeSubtitles(anime?.id, epParam);
+        const enriched = enrichDubSubtitles(sorted, cachedSubs);
         setServers(enriched);
         serversRef.current = enriched;
         setAllSubtitleTracks(buildAllSubtitleTracks(enriched));
 
         const track = audioTrackRef.current || 'sub';
+        if (track === 'dub') {
+          resolveSubSubtitlesForDub(anime, epParam);
+        }
+
         const trackServers = enriched.filter(s => s.type === track);
         let chosen = trackServers.length > 0 ? trackServers[0] : null;
         if (!chosen && enriched.length > 0) {
@@ -302,35 +400,53 @@ export function useAnimeStream({
             const idx = merged.findIndex(x => x.name === ps.name && x.type === ps.type);
             if (idx === -1) {
               merged.push(ps);
-            } else if (ps.isHLS && !merged[idx].isHLS) {
+            } else if (ps.isHLS && isDirectStreamUrl(ps.videoUrl) && !merged[idx].isHLS) {
               merged[idx] = { ...merged[idx], ...ps };
             }
           });
           const sorted = sortServers(merged);
-          const enriched = enrichDubSubtitles(sorted);
+          const cachedSubs = getEpisodeSubtitles(anime?.id, epParam);
+          const enriched = enrichDubSubtitles(sorted, cachedSubs);
           setServers(enriched);
           serversRef.current = enriched;
           setAllSubtitleTracks(buildAllSubtitleTracks(enriched));
           setLoadStream(false);
+
+          if (audioTrackRef.current === 'dub') {
+            resolveSubSubtitlesForDub(anime, epParam);
+          }
 
           // If user has manually picked a server, NEVER override their choice!
           if (userSelectedServerRef.current) return;
 
           // Strictly respect the active audio track — NEVER auto-switch between sub and dub!
           const track = audioTrackRef.current || 'sub';
-          const trackServers = enriched.filter(s => s.type === track);
+          let trackServers = enriched.filter(s => s.type === track);
+          if (!trackServers.length && isAdult) {
+            // Adult anime exclusively features Japanese audio with English subtitles.
+            // If user previously had DUB selected, fallback to available SUB servers immediately.
+            trackServers = enriched;
+          }
           if (!trackServers.length) {
             // No servers for current track arrived yet from this scraper — wait for others
             return;
           }
           const topServer = trackServers[0];
+          const topName = (topServer.name || '').toLowerCase();
+          const isVidstream = topName.includes('vidstream');
 
-          // Eager start: if nothing has been selected yet, start with topServer immediately!
-          if (!eagerSelectionDone) {
+          // Eager start: if nothing has been selected yet, start with ANY available server
+          // (including Waves). We no longer block on Waves — get video playing ASAP!
+          if (!eagerSelectionDone && !userSelectedServerRef.current) {
             eagerSelectionDone = true;
-            // Fire-and-forget: start embed extraction immediately
-            // while other scrapers are still running in parallel
             selectServer(topServer, enriched, false).catch(() => {});
+          } else if (!userSelectedServerRef.current && isVidstream) {
+            // If a lower-priority server (e.g. Waves) was eagerly selected before Vidstream arrived,
+            // automatically upgrade to Vidstream (user's preferred default server)!
+            if (!activeUrlRef.current || currentPriorityRef.current > 1.2) {
+              console.log('[useAnimeStream] Upgrading to preferred default server: Vidstream');
+              selectServer(topServer, enriched, false).catch(() => {});
+            }
           }
         };
 
@@ -365,20 +481,27 @@ export function useAnimeStream({
           }
           return s;
         });
-        const finalEnriched = enrichDubSubtitles(mergedFinal);
+        const cachedSubs = getEpisodeSubtitles(anime?.id, epParam);
+        const finalEnriched = enrichDubSubtitles(mergedFinal, cachedSubs);
         setServers(finalEnriched);
         serversRef.current = finalEnriched;
         setAllSubtitleTracks(buildAllSubtitleTracks(finalEnriched));
 
-        // If no server has produced a playable stream yet, try highest priority from full list
-        if (!activeUrlRef.current && !userSelectedServerRef.current) {
+        if (audioTrackRef.current === 'dub') {
+          resolveSubSubtitlesForDub(anime, epParam);
+        }
+
+        if (!userSelectedServerRef.current && (!activeUrlRef.current || currentPriorityRef.current > 1.2) && !inFlightServerRef.current) {
           const track = audioTrackRef.current || 'sub';
-          const trackServers = finalEnriched.filter(s => s.type === track);
+          let trackServers = finalEnriched.filter(s => s.type === track);
+          if (!trackServers.length && isAdult) {
+            trackServers = finalEnriched;
+          }
           let chosen = trackServers.length > 0 ? trackServers[0] : null;
           if (!chosen && finalEnriched.length > 0) {
             chosen = finalEnriched[0];
           }
-          if (chosen) {
+          if (chosen && chosen.name !== activeName) {
             if (chosen.type && chosen.type !== audioTrackRef.current) {
               setAudioTrack(chosen.type);
               audioTrackRef.current = chosen.type;
@@ -396,6 +519,12 @@ export function useAnimeStream({
       }, 30000);
     } catch (err) {
       console.error('[useAnimeStream] Error:', err);
+      if (err?.message && (err.message.includes('ADULT_MODE_DISABLED') || err.message.includes('ADULT_CONTENT_DISABLED'))) {
+        setStreamErr('Adult (18+) content is currently disabled in the app.');
+        setLoadStream(false);
+        isScrapingRef.current = false;
+        return;
+      }
       const elapsed = Date.now() - fetchStartTimeRef.current;
       const remainingWait = Math.max(0, 10000 - elapsed);
       setTimeout(() => {
@@ -409,7 +538,14 @@ export function useAnimeStream({
         setLoadStream(false);
       }
     }
-  }, [anime, epParam, selectServer]); // ← no 'servers' or 'audioTrack' dep — uses refs
+  }, [anime, epParam, selectServer, resolveSubSubtitlesForDub]); // ← no 'servers' or 'audioTrack' dep — uses refs
+
+  // When switching to DUB track, ensure sub dialogue subtitles are fetched & shared
+  useEffect(() => {
+    if (audioTrack === 'dub' && anime && epParam) {
+      resolveSubSubtitlesForDub(anime, epParam);
+    }
+  }, [audioTrack, anime, epParam, resolveSubSubtitlesForDub]);
 
   useEffect(() => {
     if (playParam && epParam && anime) {

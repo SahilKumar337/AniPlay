@@ -468,22 +468,35 @@
 .anip__menu-anchor { position: relative; }
 .anip__menu {
   position: absolute;
-  bottom: calc(100% + 10px);
+  bottom: calc(100% + 8px);
   right: 0;
-  min-width: 150px;
-  max-height: 240px;
+  min-width: 125px;
+  max-height: 210px;
   overflow-y: auto;
-  background: rgba(8,8,12,0.97);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 14px;
-  padding: 8px 6px;
-  box-shadow: 0 16px 48px rgba(0,0,0,0.75);
+  background: rgba(12, 12, 18, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 6px 4px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
   z-index: 99;
-  animation: anip-menu-pop 0.18s cubic-bezier(0.34,1.56,0.64,1);
+  animation: anip-menu-pop 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.anip__menu::-webkit-scrollbar {
+  width: 4px;
+}
+.anip__menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+.anip__menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
 }
 @keyframes anip-menu-pop {
-  0%   { opacity: 0; transform: translateY(10px) scale(0.88); }
-  60%  { opacity: 1; transform: translateY(-2px) scale(1.02); }
+  0%   { opacity: 0; transform: translateY(8px) scale(0.92); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 .anip__menu-hd {
@@ -491,10 +504,10 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 1.2px;
-  color: rgba(255,255,255,0.38);
-  padding: 4px 12px 8px;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 3px 8px 6px;
   margin: 0;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   margin-bottom: 4px;
 }
 .anip__menu-item {
@@ -503,25 +516,37 @@
   width: 100%;
   background: none;
   border: none;
-  color: rgba(255,255,255,0.8);
-  padding: 10px 12px;
-  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 7px 10px;
+  font-size: 12.5px;
   font-weight: 500;
-  border-radius: 9px;
+  border-radius: 8px;
   cursor: pointer;
   text-align: left;
   transition: background 0.12s, color 0.12s;
   touch-action: manipulation;
 }
-.anip__menu-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
-.anip__menu-item--on   { color: #e50914; font-weight: 700; }
-.anip__chk             { color: #e50914; margin-right: 6px; font-weight: 900; }
+.anip__menu-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.anip__menu-item--on   { background: rgba(139, 92, 246, 0.18); color: var(--accent, #a855f7); font-weight: 700; }
+.anip__chk             { color: var(--accent, #a855f7); margin-right: 6px; font-weight: 900; }
 .anip__menu-empty {
   font-size: 12px;
-  color: rgba(255,255,255,0.32);
+  color: rgba(255, 255, 255, 0.32);
   text-align: center;
-  padding: 10px 12px;
+  padding: 8px 10px;
   margin: 0;
+}
+
+/* ── Subtitles Popup Menu (matches Speed/Quality UI) ──────── */
+.anip__menu--subs {
+  min-width: 140px;
+  max-width: 220px;
+  max-height: 220px;
+}
+.anip__menu--subs .anip__menu-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -857,6 +882,32 @@
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.15);
   animation: anip-toast-in 0.25s ease-out;
+}
+
+/* Aspect Ratio mode toast */
+.anip__fit-toast {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(14, 14, 22, 0.88);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  animation: anip-toast-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes anip-toast-in {

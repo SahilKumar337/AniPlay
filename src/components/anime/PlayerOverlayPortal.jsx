@@ -1,11 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Play, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import AniPlayer from '../AniPlayer';
 import IframePlayer from '../IframePlayer';
 import LoadingWheel from '../ui/LoadingWheel';
 import { getTitle } from '../../api/anilist';
-import { getServerSortPriority } from '../../api/stream';
+import { getServerSortPriority, invalidateServerStreamCache } from '../../api/stream';
 
 const EP_PAGE_SIZE = 100; // Number of episodes per page in the list
 
@@ -45,8 +45,12 @@ export default function PlayerOverlayPortal({
   handleScrapeError,
   initialSeekTime = 0,
   onSeekProgress = null,
+  onPrefetchEp = null,
+  onAutoFailoverServer = null,
 }) {
   const title = getTitle(anime);
+
+
 
   // Windowed episode list: show EP_PAGE_SIZE episodes at a time, centered around current
   const epPage = useMemo(() => {
@@ -100,9 +104,20 @@ export default function PlayerOverlayPortal({
           </div>
         ) : streamErr && !activeUrl ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20, overflowY: 'auto' }}>
-            <AlertCircle size={32} color={streamErr.includes('not aired') ? '#eab308' : '#e50914'} />
+            <AlertCircle size={32} color={streamErr.includes('Adult Mode') ? '#f43f5e' : (streamErr.includes('not aired') ? '#eab308' : '#e50914')} />
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 280, lineHeight: 1.5 }}>{streamErr}</p>
-            {!streamErr.includes('not aired') ? (
+            {streamErr.includes('Adult Mode') ? (
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  if (onBack) onBack();
+                  window.location.hash = '#/profile?open=settings';
+                }}
+                style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6, background: '#f43f5e', border: 'none' }}
+              >
+                Go to Settings
+              </button>
+            ) : !streamErr.includes('not aired') ? (
               <button className="btn btn-primary" onClick={onRetryFetch} style={{ padding: '6px 16px', borderRadius: 20, fontSize: 12, marginTop: 6 }}>
                 ↺ Retry
               </button>
@@ -150,9 +165,9 @@ export default function PlayerOverlayPortal({
                 onStreamExpired={() => {
                   const fallbackServer = servers.find(s => s.name !== activeServer?.name && s.type === (activeServer?.type || 'sub'));
                   if (fallbackServer) {
-                    onSelectServer(fallbackServer, servers);
+                    onSelectServer(fallbackServer, servers, true);
                   } else if (activeServer) {
-                    onSelectServer(activeServer, servers);
+                    onSelectServer(activeServer, servers, true);
                   }
                 }}
               />
@@ -348,6 +363,8 @@ export default function PlayerOverlayPortal({
                   <div
                     key={n}
                     onClick={() => onEpisodeChange(n)}
+                    onMouseEnter={() => onPrefetchEp?.(n)}
+                    onTouchStart={() => onPrefetchEp?.(n)}
                     style={{
                       display: 'flex',
                       alignItems: 'center',

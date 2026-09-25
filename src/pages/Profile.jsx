@@ -5,7 +5,7 @@ import {
   Save, Check, X, AlertTriangle, Cloud, CloudLightning,
   Play, SkipForward, Server, Moon, Palette, LayoutGrid,
   Type, Sliders, Captions, Download, Upload,
-  Settings, ChevronDown, Camera, Globe, Bell, RefreshCw, Sparkles,
+  Settings, ChevronDown, Camera, Bell, RefreshCw, Sparkles, ShieldAlert,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -291,6 +291,7 @@ function SettingsCard({ title, emoji, children, zIndex = 1 }) {
 /* ── Full Settings Panel ─────────────────────────────────────────────────── */
 function SettingsPanel({ onBack }) {
   const { settings, updateSettings, watchlist, favorites, progress } = useApp();
+  const [showAdultModal, setShowAdultModal] = useState(false);
 
   useEffect(() => {
     const cleanup = registerBackButtonHandler(() => {
@@ -453,24 +454,13 @@ function SettingsPanel({ onBack }) {
           <SettingRow icon={Play} label="Autoplay Next Episode" sub="Auto-navigate to next episode when current ends" iconColor="#818cf8">
             <Toggle value={settings.autoplay} onChange={v => updateSettings({ autoplay: v })} />
           </SettingRow>
-          <SettingRow icon={Server} label="Preferred Server" sub="Stream source priority when multiple are available" iconColor="#60a5fa">
+          <SettingRow icon={Server} label="Preferred Server" sub="Stream source priority when multiple are available" iconColor="#60a5fa" last>
             <Dropdown value={settings.preferredServer} onChange={v => updateSettings({ preferredServer: v })}
               options={[
                 { value: "auto",     label: "Auto (Best)" },
                 { value: "neko",     label: "NekoHD" },
                 { value: "waveshd",  label: "WavesHD" },
                 { value: "anihd",    label: "AniHD" },
-              ]} />
-          </SettingRow>
-          <SettingRow icon={Globe} label="Preferred Dub Language" sub="Dub audio preference for GogoAnime streams" iconColor="#fb7185" last>
-            <Dropdown value={settings.preferredLanguage || 'english'} onChange={v => updateSettings({ preferredLanguage: v })}
-              options={[
-                { value: "english", label: "English" },
-                { value: "hindi", label: "Hindi" },
-                { value: "german", label: "German" },
-                { value: "french", label: "French" },
-                { value: "italian", label: "Italian" },
-                { value: "spanish", label: "Spanish" }
               ]} />
           </SettingRow>
         </SettingsCard>
@@ -630,6 +620,85 @@ function SettingsPanel({ onBack }) {
             </div>
           </SettingRow>
         </SettingsCard>
+
+        {/* 🔞 Adult Content (18+) - Temporarily disabled */}
+        {false && (
+          <SettingsCard title="Adult Content (18+)" emoji="🔞" zIndex={6}>
+            <SettingRow
+              icon={ShieldAlert}
+              label="18+ Adult Mode"
+              sub="Unlock Hentai & adult anime streaming servers"
+              iconColor="#f43f5e"
+              last
+            >
+              <Toggle
+                value={!!settings.adultMode}
+                onChange={v => {
+                  if (v) {
+                    setShowAdultModal(true);
+                  } else {
+                    updateSettings({ adultMode: false });
+                    try {
+                      localStorage.setItem('anilab_adult_mode', 'false');
+                    } catch (_) {}
+                  }
+                }}
+              />
+            </SettingRow>
+          </SettingsCard>
+        )}
+
+        {/* 🔞 Age Verification Modal */}
+        {showAdultModal && (
+          <Modal title="18+ Age Confirmation" onClose={() => setShowAdultModal(false)}>
+            <div style={{ textAlign: "center", padding: "10px 0 10px" }}>
+              <div style={{
+                width: 60, height: 60, borderRadius: "50%",
+                background: "rgba(244,63,94,0.12)", border: "1.5px solid rgba(244,63,94,0.3)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                margin: "0 auto 14px", fontSize: 26
+              }}>
+                🔞
+              </div>
+              <h3 style={{ fontSize: 16, fontWeight: 800, margin: "0 0 8px", color: "#fff" }}>
+                Adult (18+) Content Confirmation
+              </h3>
+              <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5, margin: "0 0 20px" }}>
+                This setting unlocks explicit adult (18+) anime and dedicated Hentai streaming servers.
+                You must be at least 18 years of age or the age of legal majority in your jurisdiction to view this material.
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  onClick={() => setShowAdultModal(false)}
+                  style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 12,
+                    background: "rgba(255,255,255,0.06)", border: "1px solid var(--border)",
+                    color: "var(--text-secondary)", fontWeight: 700, fontSize: 13, cursor: "pointer"
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    updateSettings({ adultMode: true });
+                    try {
+                      localStorage.setItem('anilab_adult_mode', 'true');
+                    } catch (_) {}
+                    setShowAdultModal(false);
+                  }}
+                  style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 12,
+                    background: "linear-gradient(135deg, #f43f5e, #e11d48)", border: "none",
+                    color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer",
+                    boxShadow: "0 4px 18px rgba(244,63,94,0.4)"
+                  }}
+                >
+                  I am 18 or Older
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
       </div>
     </div>
   );

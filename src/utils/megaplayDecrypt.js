@@ -130,8 +130,7 @@ export async function resolveMegaPlayStream(sourcesJson) {
   }
 
   if (rawFile && typeof rawFile === 'string' && (rawFile.includes('.m3u8') || rawFile.includes('.mp4'))) {
-    const signedUrl = await signMegaPlayCdnToken(rawFile);
-    return signedUrl;
+    return await signMegaPlayCdnToken(rawFile);
   }
 
   return null;

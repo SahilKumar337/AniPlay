@@ -395,6 +395,32 @@ export async function postCloudComment(animeId, username, content, parentId = nu
 
   if (error) throw error;
   invalidateCommentCache(animeId);
+
+  // If this is a reply to another comment, notify the parent comment's author
+  if (parentId) {
+    try {
+      const { data: parentComment } = await supabase
+        .from('comments')
+        .select('user_id, username, content, anime_id')
+        .eq('id', parentId)
+        .maybeSingle();
+
+      if (parentComment?.user_id && parentComment.user_id !== user?.id) {
+        const actorName = username || user?.user_metadata?.username || user?.user_metadata?.name || 'Someone';
+        await supabase.from('notifications').insert([{
+          target_user_id: parentComment.user_id,
+          actor_name: actorName,
+          type: 'reply',
+          comment_preview: content.slice(0, 100),
+          anime_id: String(animeId),
+          is_read: false,
+        }]);
+      }
+    } catch (notifErr) {
+      console.warn('[Comments] Failed to create reply notification:', notifErr.message);
+    }
+  }
+
   return data;
 }
 
@@ -427,6 +453,29 @@ export async function toggleCommentLike(commentId, isLiking) {
       user_id:    user?.id   || null,
       device_id:  deviceId,
     }]).then(() => {}).catch(() => {}); // fire-and-forget
+
+    // Notify the comment author that someone liked their comment
+    try {
+      const { data: targetComment } = await supabase
+        .from('comments')
+        .select('user_id, content, anime_id')
+        .eq('id', commentId)
+        .maybeSingle();
+
+      if (targetComment?.user_id && targetComment.user_id !== user?.id) {
+        const actorName = user?.user_metadata?.username || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Someone';
+        await supabase.from('notifications').insert([{
+          target_user_id: targetComment.user_id,
+          actor_name: actorName,
+          type: 'like',
+          comment_preview: (targetComment.content || 'your comment').slice(0, 100),
+          anime_id: String(targetComment.anime_id),
+          is_read: false,
+        }]);
+      }
+    } catch (notifErr) {
+      console.warn('[Comments] Failed to create like notification:', notifErr.message);
+    }
 
     // Atomic increment of likes_count
     const { error } = await supabase.rpc('increment_comment_likes', { comment_id_param: commentId });

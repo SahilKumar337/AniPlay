@@ -109,7 +109,7 @@ export default function HeroBanner({ animes = [] }) {
   const score   = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : null;
   const genres  = (anime.genres || []).slice(0, 2);
   const desc    = (anime.description || '').replace(/<[^>]*>/g, '').trim();
-  const isNotReleased = anime?.status === 'NOT_YET_RELEASED' || (anime?.episodes === 0 && !anime?.nextAiringEpisode) || (anime?.status === 'RELEASING' && anime?.nextAiringEpisode?.episode === 1);
+  const isNotReleased = anime?.status === 'NOT_YET_RELEASED' || (anime?.episodes === 0 && !anime?.nextAiringEpisode && anime?.status !== 'RELEASING');
 
   // Initial ambient src
   const initialAmbient = getHeroBannerImage(animes[0]);

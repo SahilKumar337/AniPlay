@@ -25,40 +25,48 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
   const [removing, setRemoving] = useState(false);
   const title = getTitle(item.anime);
   const cover = getCover(item.anime);
-  const totalEps = getAiredEpisodeCount(item.anime) || item.anime.episodes || 24;
+  const airedCount = getAiredEpisodeCount(item.anime);
+  // For airing anime with no nextAiringEpisode stored, use the episodes field if present.
+  // Fall back to null (not 24) — we'd rather show "EP 5" than "EP 5 / 24" with a wrong number.
+  const totalEps = airedCount > 0 ? airedCount : (item.anime.episodes || null);
   const currentEp = item.ep || item.episode || 1;
 
   // Within-episode progress: use seekPosition/duration if available (Netflix-style)
-  // Fallback: episode/total (series completion bar)
   const seekPos = item.seekPosition ?? null;
   const duration = item.duration ?? null;
-  const hasSeekData = seekPos != null && duration != null && duration > 0;
+  const hasSeekData = seekPos != null && duration != null && duration > 0 && seekPos > 2;
   const progressPct = hasSeekData
     ? Math.min((seekPos / duration) * 100, 100)
-    : Math.min((currentEp / totalEps) * 100, 100);
+    : 0;
 
   const isCached = cover ? imageCache.has(cover) : false;
   const [imgLoaded, setImgLoaded] = useState(isCached);
 
   const handleRemove = (e) => {
     e.stopPropagation();
+    if (removing) return;
     setRemoving(true);
-    setTimeout(() => onRemove(item.anime.id), 400);
+    setTimeout(() => onRemove(item.anime.id), 260);
   };
 
   return (
     <div
-      className="card-entrance"
+      className={removing ? undefined : "card-entrance"}
       style={{
         flexShrink: 0,
-        animationDelay: `${Math.min(idx * 15, 90)}ms`,
-        minWidth: removing ? 0 : 130,
-        width: 130,
+        animationDelay: removing ? undefined : `${Math.min(idx * 15, 90)}ms`,
+        width: removing ? 0 : 130,
+        minWidth: 0,
         maxWidth: removing ? 0 : 130,
+        marginRight: removing ? -10 : 0,
         opacity: removing ? 0 : 1,
-        transform: removing ? 'scale(0.8) translateY(16px) rotate(-3deg)' : 'none',
+        transform: removing ? 'scale(0.86) translateY(6px)' : 'none',
         overflow: removing ? 'hidden' : 'visible',
-        transition: 'transform 0.42s cubic-bezier(0.34, 1.25, 0.64, 1), opacity 0.42s ease, max-width 0.42s ease',
+        pointerEvents: removing ? 'none' : 'auto',
+        willChange: removing ? 'transform, opacity, width, margin-right' : 'auto',
+        transition: removing
+          ? 'transform 0.22s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.18s ease-out, width 0.26s cubic-bezier(0.25, 1, 0.5, 1), min-width 0.26s cubic-bezier(0.25, 1, 0.5, 1), max-width 0.26s cubic-bezier(0.25, 1, 0.5, 1), margin-right 0.26s cubic-bezier(0.25, 1, 0.5, 1)'
+          : 'none',
       }}
     >
       <div
@@ -101,7 +109,7 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
             fontSize: 10, color: 'rgba(255,255,255,0.7)', fontWeight: 600,
             display: 'block', marginBottom: 5,
           }}>
-            EP {currentEp}{totalEps && totalEps !== 24 ? ` / ${totalEps}` : ''}
+            EP {currentEp}{totalEps && totalEps > 1 ? ` / ${totalEps}` : ''}
             {hasSeekData && (
               <span style={{ opacity: 0.6, fontWeight: 500 }}>
                 {' · '}{Math.round((duration - seekPos) / 60)}m left
@@ -132,16 +140,21 @@ function ContinueWatchingItem({ item, idx, onRemove, navigate }) {
           </div>
         </div>
 
-        {/* Remove button — always visible on mobile */}
+        {/* Remove button with fluid micro-feedback */}
         <button
+          className="cw-remove-btn"
           onClick={handleRemove}
+          aria-label="Remove from continue watching"
           style={{
             position: 'absolute', top: 6, right: 6, zIndex: 5,
             width: 22, height: 22, borderRadius: '50%',
-            background: 'rgba(0,0,0,0.7)', border: '0.5px solid rgba(255,255,255,0.25)',
+            background: removing ? 'rgba(239, 68, 68, 0.9)' : 'rgba(0,0,0,0.7)',
+            border: '0.5px solid rgba(255,255,255,0.25)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             cursor: 'pointer', padding: 0,
             backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+            transform: removing ? 'scale(0.8)' : 'scale(1)',
+            transition: 'transform 0.15s ease, background 0.15s ease',
           }}
         ><X size={11} color="#fff" /></button>
       </div>
@@ -322,9 +335,9 @@ export default function Home() {
   // Trigger native phone notifications for newly released episode alerts
   useEffect(() => {
     if (airing?.length > 0) {
-      checkAndTriggerEpisodeAlerts(airing, watchlist);
+      checkAndTriggerEpisodeAlerts(airing, watchlist, progress);
     }
-  }, [airing, watchlist]);
+  }, [airing, watchlist, progress]);
 
   useEffect(() => {
     let live = true;
@@ -425,6 +438,20 @@ export default function Home() {
 
     return () => { live = false; clearTimeout(timer); };
   }, [retryCount]);
+
+  // Native 0ms navigation: prefetch AnimePage chunk during idle so card clicks mount instantly
+  useEffect(() => {
+    const idlePrefetch = () => {
+      import('./AnimePage').catch(() => {});
+    };
+    if (typeof window !== 'undefined') {
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(idlePrefetch, { timeout: 2000 });
+      } else {
+        setTimeout(idlePrefetch, 1000);
+      }
+    }
+  }, []);
 
   // Graceful fallback to offline seed catalog if live network is down
   const displayTrending = trending.length > 0 ? trending : (offlineCatalog?.trending || []);

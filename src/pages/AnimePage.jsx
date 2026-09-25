@@ -5,8 +5,9 @@ import { useApp } from '../context/AppContext';
 import { useAnimeDetail } from '../hooks/useAnimeDetail';
 import { useAnimeStream } from '../hooks/useAnimeStream';
 import { useAnimeDownload } from '../hooks/useAnimeDownload';
-import { getAniNekoServers, getCachedServers } from '../api/stream';
+import { getAniNekoServers, getCachedServers, resolveSingleServer, prefetchM3U8AndFirstSegment, checkIsAdultAnime } from '../api/stream';
 import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
+import { discoverAdultEpisodeCount } from '../api/adultScraper';
 import { registerBackButtonHandler } from '../utils/backButton';
 import AnimeHeroSection from '../components/anime/AnimeHeroSection';
 import EpisodeGrid from '../components/anime/EpisodeGrid';
@@ -15,9 +16,10 @@ import PlayerOverlayPortal from '../components/anime/PlayerOverlayPortal';
 import DownloadListModal from '../components/anime/DownloadListModal';
 import DownloadServerSheet from '../components/anime/DownloadServerSheet';
 import DownloadQualityModal from '../components/anime/DownloadQualityModal';
-import AnimeCard from '../components/AnimeCard';
+import { isNativePlatform } from '../components/AniPlayer';
 import LoadingWheel from '../components/ui/LoadingWheel';
 import NativeAdCard from '../components/ads/NativeAdCard';
+import AnimeCard from '../components/AnimeCard';
 import { AlertCircle } from 'lucide-react';
 import VideoAdOverlay from '../components/ads/VideoAdOverlay';
 import adEngine from '../services/adEngine';
@@ -44,17 +46,41 @@ export default function AnimePage() {
   const [fsActive, setFsActive] = useState(false);
   const [epTransitionFs, setEpTransitionFs] = useState(false);
 
+  // Reset tab to 'episodes' whenever the anime ID changes (navigating from More like this)
+  const prevIdRef = useRef(id);
+  if (prevIdRef.current !== id) {
+    prevIdRef.current = id;
+    // Synchronously reset tab before render — no useEffect needed
+    // (React batches this with the render triggered by the id param change)
+  }
+  useEffect(() => { setTab('episodes'); }, [id]);
+
   const fsActiveRef = useRef(false);
   const keepFsRef = useRef(false);
 
   // 1. Data hooks
   const { anime, loading, error } = useAnimeDetail(id);
 
+  const [discoveredAdultEps, setDiscoveredAdultEps] = useState(() => {
+    if (!id) return 0;
+    if (String(id) === '2697') return 2;
+    try {
+      return Number(localStorage.getItem(`adult_ep_count_${id}`)) || 0;
+    } catch (_) { return 0; }
+  });
+
+  const isAdultAnime = checkIsAdultAnime(anime);
+
+  useEffect(() => {
+    // Adult anime episode discovery paused while adult content is disabled
+  }, [anime, isAdultAnime]);
+
+  const currentYear = new Date().getFullYear();
   const isNotYetReleased = Boolean(
     anime && (
-      anime.status === 'NOT_YET_RELEASED' ||
-      (getAiredEpisodeCount(anime) === 0 && !anime.nextAiringEpisode) ||
-      (anime.status === 'RELEASING' && anime.nextAiringEpisode?.episode === 1)
+      (anime.status === 'NOT_YET_RELEASED' && (!anime.startDate?.year || anime.startDate.year > currentYear)) ||
+      // Only block playback if zero episodes have aired AND there is no upcoming airing schedule AND release year isn't past.
+      (getAiredEpisodeCount(anime) === 0 && !anime.nextAiringEpisode && anime.status !== 'RELEASING' && (!anime.startDate?.year || anime.startDate.year > currentYear))
     )
   );
 
@@ -71,7 +97,7 @@ export default function AnimePage() {
   const prog = anime ? getEpisodeProgress(anime.id) : null;
   const resumeEp = prog?.episode ? Math.min(prog.episode, Math.max(totalEps, 1)) : 1;
 
-  const recs = useMemo(() => anime?.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean) || [], [anime]);
+  const recs = useMemo(() => anime?.recommendations?.nodes?.map(n => n.mediaRecommendation).filter(Boolean).filter(r => !r.isAdult && !(Array.isArray(r.genres) && r.genres.some(g => /hentai/i.test(g)))) || [], [anime]);
   const chars = useMemo(() => (anime?.characters?.edges || []).map(e => ({ ...e.node, voiceActors: e.voiceActors || [] })), [anime]);
 
   const {
@@ -152,14 +178,25 @@ export default function AnimePage() {
     if (!anime || !resumeEp || isNotYetReleased) return;
     const ep = resumeEp || 1;
     const cached = getCachedServers(anime, ep);
-    if (cached && Array.isArray(cached) && cached.length > 0) {
-      setAnimeDubAvailable(cached.some(s => s.type === 'dub'));
+    if (cached?.servers?.length > 0) {
+      setAnimeDubAvailable(cached.servers.some(s => s.type === 'dub'));
       return;
     }
     let cancelled = false;
-    getAniNekoServers(anime, ep, null, false).then(res => {
+    getAniNekoServers(anime, ep, null, false).then(async res => {
       if (!cancelled && res?.servers?.length > 0) {
         setAnimeDubAvailable(res.servers.some(s => s.type === 'dub'));
+        // ⚡ Netflix Speculative Pre-Resolution: Pre-resolve top server in background
+        // so when user taps Play or Resume, the stream URL, playlist & Fragment 0 are ALREADY in RAM!
+        const trk = audioTrack || 'sub';
+        const top = res.servers.find(s => s.type === trk) || res.servers[0];
+        if (top) {
+          resolveSingleServer(top, anime, ep).then(streamResult => {
+            if (streamResult?.videoUrl) {
+              prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
+            }
+          }).catch(() => {});
+        }
       }
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -317,6 +354,24 @@ export default function AnimePage() {
     selectServer(srv, servers, true);
   }, [anime, epParam, selectServer, servers, setEpisodeProgress, getEpisodeProgress]);
 
+  // Automatic failover (e.g. from onStreamExpired) — NOT a manual user choice,
+  // so the new server is still allowed to auto-failover if it also fails.
+  const handleAutoFailoverServer = useCallback((srv) => {
+    const currentProgress = (anime && epParam) ? getEpisodeProgress(anime.id, epParam) : null;
+    const currentPos = playbackTimeRef.current > 2
+      ? playbackTimeRef.current
+      : (currentProgress?.seekPosition > 2 ? currentProgress.seekPosition : 0);
+
+    if (currentPos > 2) {
+      serverSwitchSeekRef.current = currentPos;
+      setServerSwitchSeek(currentPos);
+      if (anime && epParam) {
+        setEpisodeProgress(anime.id, epParam, currentPos, durationRef.current);
+      }
+    }
+    selectServer(srv, servers, true);
+  }, [anime, epParam, selectServer, servers, setEpisodeProgress, getEpisodeProgress]);
+
   const handleAudioTrackChange = useCallback((trk) => {
     localStorage.setItem('anilab_preferred_track', trk);
     const currentProgress = (anime && epParam) ? getEpisodeProgress(anime.id, epParam) : null;
@@ -390,8 +445,62 @@ export default function AnimePage() {
     setSearchParams(nextParams, { replace: true });
   }, [anime, epParam, setEpisodeProgress, setSearchParams, isDirectPlay]);
 
+  // ⚡ Speculative Pre-Resolution & Instant Frame Injection on Touch/Hover:
+  // Pre-warms the stream URL, M3U8 playlists, and Fragment 0 in RAM during the 100-200ms finger tap / hover window!
+  const prefetchingEpsRef = useRef(new Set());
+  const handlePrefetchEp = useCallback((newEp) => {
+    if (!anime || !newEp || isNotYetReleased) return;
+    const epNum = Number(newEp);
+    if (prefetchingEpsRef.current.has(epNum)) return;
+    prefetchingEpsRef.current.add(epNum);
+
+    const trk = audioTrack || 'sub';
+    const cached = getCachedServers(anime, epNum);
+    if (cached?.servers?.length > 0) {
+      const top = cached.servers.find(s => s.type === trk) || cached.servers[0];
+      if (top) {
+        resolveSingleServer(top, anime, epNum).then(streamResult => {
+          if (streamResult?.videoUrl) {
+            prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
+          }
+        }).catch(() => {});
+      }
+    } else {
+      getAniNekoServers(anime, epNum, null, false).then(res => {
+        const top = res?.servers?.find(s => s.type === trk) || res?.servers?.[0];
+        if (top) {
+          resolveSingleServer(top, anime, epNum).then(streamResult => {
+            if (streamResult?.videoUrl) {
+              prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
+            }
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+  }, [anime, isNotYetReleased, audioTrack]);
+
   // Direct Play Mode (e.g. from Continue Watching): render only player portal without mounting the anime info page
   if (isDirectPlay && playParam && epParam) {
+    if (isAdultAnime) {
+      return (
+        <div className="page" style={{ position: 'fixed', inset: 0, background: '#0a0a0c', zIndex: 999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+          <div style={{ fontSize: 52, marginBottom: 16 }}>🔞</div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', margin: '0 0 8px' }}>
+            Adult Content Disabled
+          </h2>
+          <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 360, lineHeight: 1.5, margin: '0 0 24px' }}>
+            Adult (18+) / Hentai content is currently disabled in the app.
+          </p>
+          <button
+            className="btn btn-primary"
+            onClick={handleExitPlayer}
+            style={{ padding: '10px 24px', borderRadius: 12, fontWeight: 700 }}
+          >
+            Go Back
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="page" style={{ position: 'fixed', inset: 0, background: '#000', zIndex: 999, overflow: 'hidden' }}>
         <PlayerOverlayPortal
@@ -411,9 +520,11 @@ export default function AnimePage() {
           audioTrack={audioTrack}
           onAudioTrackChange={handleAudioTrackChange}
           onSelectServer={handleSelectServer}
+          onAutoFailoverServer={handleAutoFailoverServer}
           onRetryFetch={fetchStream}
           onBack={handleExitPlayer}
           onEpisodeChange={handleEpisodeSelect}
+          onPrefetchEp={handlePrefetchEp}
           allSubtitleTracks={allSubtitleTracks}
           fsActive={fsActive}
           setFsActive={setFsActive}
@@ -482,8 +593,40 @@ export default function AnimePage() {
     );
   }
 
-  if (loading && !anime && !playParam) {
+  // Show skeleton when:
+  // 1. Still loading and no data yet
+  // 2. We have anime data but it belongs to a DIFFERENT id ("More like this" navigation)
+  //    — prevents old anime details from flashing before new data arrives
+  const isStaleData = !!(anime && String(anime.id) !== String(id));
+  if (((loading && !anime) || isStaleData) && !playParam) {
     return <DetailSkeleton />;
+  }
+
+  if (isAdultAnime) {
+    return (
+      <div className="page" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', padding: 24, textAlign: 'center' }}>
+        <div style={{ fontSize: 52, marginBottom: 16 }}>🔞</div>
+        <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', margin: '0 0 8px' }}>
+          Adult Content Disabled
+        </h2>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 360, lineHeight: 1.5, margin: '0 0 24px' }}>
+          Adult (18+) / Hentai content is currently disabled in the app.
+        </p>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            if (window.history.state && window.history.state.idx > 0) {
+              navigate(-1);
+            } else {
+              navigate('/', { replace: true });
+            }
+          }}
+          style={{ padding: '10px 24px', borderRadius: 12, fontWeight: 700 }}
+        >
+          Go Back
+        </button>
+      </div>
+    );
   }
 
   if (error && !playParam) {
@@ -606,6 +749,7 @@ export default function AnimePage() {
                 episodes={allEps.map(n => ({ number: n }))}
                 currentEp={epParam || resumeEp}
                 onSelectEp={handleEpisodeSelect}
+                onPrefetchEp={handlePrefetchEp}
                 watchedEps={new Set(prog?.episode ? Array.from({ length: prog.episode - 1 }, (_, i) => i + 1) : [])}
                 downloadedEps={(() => {
                   const s = new Set();
@@ -719,9 +863,11 @@ export default function AnimePage() {
           audioTrack={audioTrack}
           onAudioTrackChange={handleAudioTrackChange}
           onSelectServer={handleSelectServer}
+          onAutoFailoverServer={handleAutoFailoverServer}
           onRetryFetch={fetchStream}
           onBack={handleExitPlayer}
           onEpisodeChange={handleEpisodeSelect}
+          onPrefetchEp={handlePrefetchEp}
           allSubtitleTracks={allSubtitleTracks}
           fsActive={fsActive}
           setFsActive={setFsActive}
@@ -793,31 +939,67 @@ export default function AnimePage() {
 
 function DetailSkeleton() {
   return (
-    <div className="page" style={{ position: 'relative', minHeight: '100vh', background: 'var(--bg-primary)' }}>
-      <div style={{
-        height: 320,
-        position: 'relative',
-        background: 'radial-gradient(ellipse at center, rgba(139, 92, 246, 0.12) 0%, rgba(5, 5, 8, 0.95) 75%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-      }}>
-        <LoadingWheel size={46} text="Loading anime details..." />
+    <div className="page" style={{ position: 'relative', minHeight: '100vh', background: 'var(--bg-primary)', overflowX: 'hidden' }}>
+      {/* Hero banner skeleton */}
+      <div style={{ position: 'relative', height: 340, overflow: 'hidden' }}>
+        {/* Background gradient shimmer */}
+        <div className="skeleton" style={{ position: 'absolute', inset: 0, borderRadius: 0 }} />
+        {/* Gradient overlay */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(180deg, rgba(5,5,8,0) 30%, rgba(5,5,8,0.85) 70%, var(--bg-primary) 100%)',
+          zIndex: 1,
+        }} />
+        {/* Poster card shimmer */}
+        <div style={{
+          position: 'absolute', bottom: 20, left: 18, zIndex: 2,
+          width: 110, height: 154,
+        }}>
+          <div className="skeleton" style={{ width: '100%', height: '100%', borderRadius: 12 }} />
+        </div>
+        {/* Title block beside poster */}
+        <div style={{
+          position: 'absolute', bottom: 24, left: 144, right: 18, zIndex: 2,
+          display: 'flex', flexDirection: 'column', gap: 8,
+        }}>
+          <div className="skeleton" style={{ height: 10, width: 60, borderRadius: 6 }} />
+          <div className="skeleton" style={{ height: 22, width: '85%', borderRadius: 8 }} />
+          <div className="skeleton" style={{ height: 22, width: '60%', borderRadius: 8 }} />
+          {/* Genre pill row */}
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            {[52, 64, 48].map((w, i) => (
+              <div key={i} className="skeleton" style={{ height: 20, width: w, borderRadius: 20 }} />
+            ))}
+          </div>
+        </div>
       </div>
-      <div style={{ padding: '16px' }}>
-        <div className="skeleton" style={{ height: 28, width: '70%', borderRadius: 8, marginBottom: 14 }} />
-        <div className="skeleton" style={{ height: 14, width: '45%', borderRadius: 6, marginBottom: 20 }} />
-        <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-          <div className="skeleton" style={{ flex: 1, height: 46, borderRadius: 14 }} />
-          <div className="skeleton" style={{ flex: 1, height: 46, borderRadius: 14 }} />
-        </div>
-        <div className="skeleton" style={{ height: 80, borderRadius: 12, marginBottom: 24 }} />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
-          {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="skeleton" style={{ height: 42, borderRadius: 10 }} />
-          ))}
-        </div>
+
+      {/* Action buttons */}
+      <div style={{ padding: '14px 18px 0', display: 'flex', gap: 10 }}>
+        <div className="skeleton" style={{ flex: 1, height: 48, borderRadius: 14 }} />
+        <div className="skeleton" style={{ width: 48, height: 48, borderRadius: 14, flexShrink: 0 }} />
+        <div className="skeleton" style={{ width: 48, height: 48, borderRadius: 14, flexShrink: 0 }} />
+      </div>
+
+      {/* Description block */}
+      <div style={{ padding: '18px 18px 0' }}>
+        <div className="skeleton" style={{ height: 13, width: '95%', borderRadius: 6, marginBottom: 8 }} />
+        <div className="skeleton" style={{ height: 13, width: '88%', borderRadius: 6, marginBottom: 8 }} />
+        <div className="skeleton" style={{ height: 13, width: '72%', borderRadius: 6, marginBottom: 20 }} />
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ padding: '0 18px', display: 'flex', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 12 }}>
+        {[80, 120, 100, 100].map((w, i) => (
+          <div key={i} className="skeleton" style={{ height: 14, width: w, borderRadius: 6 }} />
+        ))}
+      </div>
+
+      {/* Episode grid */}
+      <div style={{ padding: '16px 18px 0', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+        {Array.from({ length: 15 }).map((_, i) => (
+          <div key={i} className="skeleton" style={{ height: 42, borderRadius: 10 }} />
+        ))}
       </div>
     </div>
   );

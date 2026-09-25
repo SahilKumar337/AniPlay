@@ -30,7 +30,7 @@ function buildDateTabs() {
 
 export default function Schedule() {
   const navigate = useNavigate();
-  const { addToWatchlist, removeFromWatchlist, isInWatchlist } = useApp();
+  const { addToWatchlist, removeFromWatchlist, isInWatchlist, unreadCount } = useApp();
   const [schedule, setSchedule] = useState([]);
   const [loading, setLoading] = useState(true);
   const [scrolled, setScrolled] = useState(false);
@@ -158,8 +158,16 @@ export default function Schedule() {
               onClick={() => navigate('/notifications')}
               id="schedule-bell"
               aria-label="Notifications"
+              style={{ position: 'relative' }}
             >
               <Bell size={18} />
+              {unreadCount > 0 && (
+                <span style={{
+                  position: 'absolute', top: 3, right: 3, width: 8, height: 8,
+                  borderRadius: '50%', background: '#e50914', boxShadow: '0 0 8px #e50914',
+                  border: '1.5px solid var(--bg-primary)'
+                }} />
+              )}
             </button>
             <button
               className="floating-btn"

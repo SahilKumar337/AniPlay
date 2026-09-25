@@ -3,16 +3,33 @@
   "appName": "AniPlay",
   "webDir": "dist",
   "android": {
-    "allowMixedContent": false,
+    "allowMixedContent": true,
     "captureInput": true,
-    "webContentsDebuggingEnabled": false
+    "webContentsDebuggingEnabled": false,
+    "initialFocus": false
   },
 
   "server": {
     "allowNavigation": [
+      "*",
+      "*.megaplay.buzz",
+      "*.akirax.buzz",
+      "*.shiora.top",
+      "*.shiora.site",
+      "*.quavex.top",
+      "*.megap.top",
+      "*.norami.site",
+      "*.norami.top",
+      "*.imgnex.com",
+      "*.mikora.top",
+      "*.vyrnex.top",
+      "*.tiktokcdn.com",
+      "*.echovideo.ru",
+      "*.echovideo.to",
+      "*.dpopdrop89.store",
+      "*.roburnt10.store",
       "anilab-backend.onrender.com",
       "*.burntburst45.store",
-      "*.echovideo.ru",
       "aniwaves.ru",
       "animepahe.pw",
       "anineko.to",
@@ -33,7 +50,9 @@
       "*.dramiyos.site",
       "*.playmogo.site",
       "graphql.anilist.co",
-      "anilist.co"
+      "anilist.co",
+      "*.silverorbit.top",
+      "fetch.nexabloom.top"
     ]
   },
   "plugins": {
@@ -44,6 +63,13 @@
       "autoUpdate": false,
       "statsUrl": "",
       "privateKey": ""
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_name",
+      "iconColor": "#7C3AED"
     }
   }
 }
