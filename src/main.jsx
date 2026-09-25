@@ -16,7 +16,7 @@ const withTimeout = (promise, ms = 3000) =>
 
 withTimeout(CapacitorUpdater.notifyAppReady()).catch(() => {});
 
-import offlineCatalog from './data/offlineCatalog.json' with { type: 'json' };
+import offlineCatalog from './data/offlineCatalog.json';
 
 // Global safety guard for unhandled async promise rejections (e.g. transient network sync errors)
 // Prevents fatal red-screen error overlays in production/native webview.
