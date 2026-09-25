@@ -183,10 +183,10 @@
     </p>
 
     <!-- Primary Action: Direct Download -->
-    <a id="downloadBtn" href="https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk" class="btn-download">
+    <button id="downloadBtn" onclick="startDownload()" class="btn-download">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Download APK (68.3 MB)
-    </a>
+    </button>
 
     <!-- Secondary: GitHub Release Page -->
     <a href="https://github.com/SahilKumar337/AniPlay/releases/tag/v1.6.0" class="btn-secondary">
@@ -207,24 +207,34 @@
 
     <div class="status-msg" id="statusMsg">
       <div class="spinner"></div>
-      <span>Starting download automatically...</span>
+      <span>Starting download in background...</span>
     </div>
   </div>
 
+  <iframe id="dlFrame" style="display:none;width:0;height:0;border:0;"></iframe>
+
   <script>
-    // Automatically trigger download after 1 second
-    setTimeout(function() {
-      try {
-        var btn = document.getElementById('downloadBtn');
-        if (btn) {
-          btn.click();
-        }
-      } catch (e) {}
+    var APK_URL = "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk";
+    var hasStarted = false;
+
+    function startDownload() {
+      var frame = document.getElementById('dlFrame');
+      if (frame) {
+        frame.src = APK_URL;
+      }
       var status = document.getElementById('statusMsg');
       if (status) {
-        status.innerHTML = '<span>If the download did not start, tap the purple button above.</span>';
+        status.innerHTML = '<span style="color:#4ade80;font-weight:700;">✓ Download started! Check your notification bar above.</span>';
       }
-    }, 1200);
+      hasStarted = true;
+    }
+
+    // Auto-trigger via invisible iframe after 1 second — page stays 100% visible, never turns black!
+    setTimeout(function() {
+      if (!hasStarted) {
+        startDownload();
+      }
+    }, 1000);
   </script>
 </body>
 </html>
