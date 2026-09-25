@@ -615,7 +615,8 @@ export default function App() {
 
   // ── In-app Update: download in-app with live progress, then trigger native Android install ──
   const handleUpdateNow = async () => {
-    if (!updateInfo?.apkUrl) return;
+    const downloadUrl = updateInfo?.directApkUrl || updateInfo?.apkUrl;
+    if (!downloadUrl) return;
 
     if (Capacitor.isNativePlatform()) {
       try {
@@ -641,7 +642,7 @@ export default function App() {
           APKUpdater.openExternalUrl({ url: releasePage });
         });
 
-        await APKUpdater.downloadAndInstall({ url: updateInfo.apkUrl });
+        await APKUpdater.downloadAndInstall({ url: downloadUrl });
         return;
       } catch (err) {
         console.warn('[Updater] In-app download failed, falling back:', err);

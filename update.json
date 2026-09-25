@@ -1,7 +1,8 @@
 {
   "latestVersion": "1.6.0",
   "versionCode": 60,
-  "apkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk",
+  "apkUrl": "https://anilab-nu.vercel.app/update.html",
+  "directApkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk",
   "releasePageUrl": "https://github.com/SahilKumar337/AniPlay/releases/tag/v1.6.0",
   "forceUpdate": false,
   "changelog": "AniPlay v1.6.0 \u2014 Mega Release (Realtime Comment Alerts, Airing Push Engine, Multi-Part Matcher & Glass UI)",
