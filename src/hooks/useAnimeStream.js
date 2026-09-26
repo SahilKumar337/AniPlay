@@ -171,6 +171,21 @@ export function useAnimeStream({
       setStreamErr(`Unable to load stream for "${srv.name}". Please tap retry or select another server.`);
     };
 
+    const tryNextServerOrFail = () => {
+      srv._failed = true;
+      const targetType = srv.type || 'sub';
+      const remainingServers = listToUse.filter(s =>
+        (s.type || 'sub') === targetType &&
+        s.name !== srv.name &&
+        !s._failed
+      );
+      if (remainingServers.length > 0) {
+        console.log(`[useAnimeStream] Server "${srv.name}" failed, auto-failing over to "${remainingServers[0].name}"...`);
+        return selectServer(remainingServers[0], listToUse, isManual);
+      }
+      handleScrapeError();
+    };
+
     // Placeholder server
     const isPlaceholder = srv.videoUrl && srv.videoUrl.includes('proxy/placeholder');
     if (isPlaceholder) {
@@ -192,7 +207,7 @@ export function useAnimeStream({
         return;
       } catch (err) {
         setExtracting(false);
-        handleScrapeError();
+        tryNextServerOrFail();
         return;
       }
     }
@@ -214,7 +229,7 @@ export function useAnimeStream({
 
         if (resolved?.videoUrl && isDirectStreamUrl(resolved.videoUrl)) {
           const finalSubs = (resolved.subtitles && resolved.subtitles.length > 0) ? resolved.subtitles : (srv.subtitles || []);
-          const updatedSrv = { ...srv, ...resolved, isHLS: true, subtitles: finalSubs };
+          const updatedSrv = { ...srv, ...resolved, isHLS: Boolean(resolved.isHLS), subtitles: finalSubs };
 
           setActiveServer(updatedSrv);
           setActiveName(srv.name);
@@ -222,7 +237,7 @@ export function useAnimeStream({
           currentPriorityRef.current = getServerSortPriority(srv.name);
           setActiveUrl(resolved.videoUrl);
           activeUrlRef.current = resolved.videoUrl;
-          setIsActiveHLS(true);
+          setIsActiveHLS(Boolean(resolved.isHLS));
           setLoadStream(false);
           setExtracting(false);
           inFlightServerRef.current = null;
@@ -245,14 +260,14 @@ export function useAnimeStream({
           }
           return;
         } else {
-          console.warn(`[useAnimeStream] Lazy resolution failed for server ${srv.name}`);
-          handleScrapeError();
+          console.warn(`[useAnimeStream] Lazy resolution failed for server ${srv.name}. Trying next server...`);
+          tryNextServerOrFail();
           return;
         }
       } catch (err) {
         console.warn(`[useAnimeStream] Lazy resolution error for ${srv.name}:`, err.message);
         setExtracting(false);
-        handleScrapeError();
+        tryNextServerOrFail();
         return;
       }
     }
@@ -272,8 +287,8 @@ export function useAnimeStream({
         resolveSubSubtitlesForDub(anime, epParam);
       }
     } else {
-      console.warn(`[useAnimeStream] Server ${srv.name} has non-direct URL (${srv.videoUrl})`);
-      handleScrapeError();
+      console.warn(`[useAnimeStream] Server ${srv.name} has non-direct URL (${srv.videoUrl}). Trying next server...`);
+      tryNextServerOrFail();
     }
   }, [anime, epParam, resolveSubSubtitlesForDub]); // ← stable callback
 

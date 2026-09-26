@@ -189,31 +189,59 @@ export async function scrapeEmbedDirectly(embedUrl, referer) {
     // Run universal unpacker & scan
     const directM3u8 = unpackUniversalJS(html);
     if (directM3u8) {
+      let finalStreamUrl = directM3u8;
+      let isHLS = directM3u8.includes('.m3u8');
+
+      // If 1anime.site/stream/<id>, resolve the 302 redirect to the direct .mp4 URL
+      if (directM3u8.includes('1anime.site/stream/') || directM3u8.includes('/stream/')) {
+        try {
+          if (Capacitor.isNativePlatform()) {
+            const headResp = await CapacitorHttp.request({
+              url: directM3u8,
+              method: 'HEAD',
+              headers: { 'Referer': embedUrl || referer || (origin + '/') },
+              connectTimeout: 4000,
+              readTimeout: 4000
+            });
+            const loc = headResp?.headers?.Location || headResp?.headers?.location;
+            if (loc) finalStreamUrl = loc;
+          } else {
+            const headResp = await fetch(directM3u8, {
+              method: 'HEAD',
+              redirect: 'manual',
+              headers: { 'Referer': embedUrl || referer || (origin + '/') }
+            });
+            const loc = headResp.headers.get('location');
+            if (loc) finalStreamUrl = loc;
+          }
+          isHLS = finalStreamUrl.includes('.m3u8');
+        } catch (_) {}
+      }
+
       // Only guess the subtitle sidecar path for CDNs known to serve it.
-    // Nexabloom / Streamzone family: kryntal, norami, imgnex, shiora, mikora, akirax, dokicloud.
-    // For all other CDNs (otakuhg, otakuvid, echovideo) this path 404s — skip the guess.
-    const NEXABLOOM_CDN = /kryntal|norami|imgnex|shiora|mikora|akirax|dokicloud/i;
-    let subs = [];
-    if (NEXABLOOM_CDN.test(directM3u8) &&
-        (directM3u8.includes('/master.m3u8') || directM3u8.includes('/index.m3u8'))) {
-      subs.push({
-        id: 0,
-        label: 'English',
-        file: directM3u8.replace(/\/(?:master|index)\.m3u8.*$/, '/subtitles/track_0_eng.vtt'),
-        referer: referer || (origin + '/'),
-        default: true
-      });
-    }
-      const isHLS = directM3u8.includes('.m3u8');
+      // Nexabloom / Streamzone family: kryntal, norami, imgnex, shiora, mikora, akirax, dokicloud.
+      // For all other CDNs (otakuhg, otakuvid, echovideo) this path 404s — skip the guess.
+      const NEXABLOOM_CDN = /kryntal|norami|imgnex|shiora|mikora|akirax|dokicloud/i;
+      let subs = [];
+      if (NEXABLOOM_CDN.test(finalStreamUrl) &&
+          (finalStreamUrl.includes('/master.m3u8') || finalStreamUrl.includes('/index.m3u8'))) {
+        subs.push({
+          id: 0,
+          label: 'English',
+          file: finalStreamUrl.replace(/\/(?:master|index)\.m3u8.*$/, '/subtitles/track_0_eng.vtt'),
+          referer: referer || (origin + '/'),
+          default: true
+        });
+      }
       return {
-        url: directM3u8,
-        streamUrl: directM3u8,
-        videoUrl: directM3u8,
+        url: finalStreamUrl,
+        streamUrl: finalStreamUrl,
+        videoUrl: finalStreamUrl,
         isHLS,
         referer: embedUrl || referer || (origin + '/'),
         subtitles: subs,
-        toString() { return directM3u8; },
-        valueOf() { return directM3u8; }
+        toString() { return finalStreamUrl; },
+        valueOf() { return finalStreamUrl; }
       };
     }
 

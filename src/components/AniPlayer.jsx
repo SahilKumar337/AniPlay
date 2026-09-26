@@ -247,6 +247,9 @@ function getProperReferer(urlStr, fallbackRef) {
   if (lower.includes('anineko')) {
     return 'https://anineko.es/';
   }
+  if (lower.includes('1anime')) {
+    return 'https://my.1anime.site/';
+  }
   if (lower.includes('anivid')) {
     return 'https://anivid.net/';
   }
@@ -914,11 +917,22 @@ export default function AniPlayer({
         setWaiting(false);
         tryPlay();
       };
+      const onDirectError = () => {
+        log('Direct video file error: ' + (v.error?.message || 'unknown error'));
+        setHlsErr({
+          type: 'network',
+          details: v.error?.message || 'Direct video playback failed',
+          error: v.error?.message || 'Video playback error',
+        });
+        setWaiting(false);
+      };
       v.addEventListener('loadeddata', onDirectPlayable);
       v.addEventListener('canplay', onDirectPlayable);
+      v.addEventListener('error', onDirectError);
       return () => {
         v.removeEventListener('loadeddata', onDirectPlayable);
         v.removeEventListener('canplay', onDirectPlayable);
+        v.removeEventListener('error', onDirectError);
         flushProgress();
         v.removeAttribute('src');
         v.load();
