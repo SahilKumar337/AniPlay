@@ -826,9 +826,6 @@ export default function AniPlayer({
     setActivePanel(null); // close all menus when URL/server changes
     setStuckCount(0);
 
-    v.removeAttribute('src');
-    v.load();
-
     const tryPlay = () => {
       // Check if an in-stream video ad should play before starting episode
       if (!videoAdShownRef.current && !isLocal && adEngine.isAdsEnabled() && adEngine.shouldShowVideoAd()) {
@@ -915,10 +912,23 @@ export default function AniPlayer({
       tryPlay();
       const onDirectPlayable = () => {
         setWaiting(false);
+        setHlsErr(null);
         tryPlay();
       };
       const onDirectError = () => {
+        // If the video already has loaded metadata or duration, or is actively ready,
+        // this error is spurious (e.g. from previous source unload) — ignore it!
+        if (v.duration > 0 && v.readyState >= 1) {
+          log('[AniPlayer] Ignoring spurious direct video error — video already has duration:', v.duration);
+          return;
+        }
         log('Direct video file error: ' + (v.error?.message || 'unknown error'));
+        // If direct video fails, auto-failover to next server immediately without trapping user
+        if (onStreamExpired) {
+          log('[AniPlayer] Direct video failed, triggering automatic failover via onStreamExpired()...');
+          onStreamExpired();
+          return;
+        }
         setHlsErr({
           type: 'network',
           details: v.error?.message || 'Direct video playback failed',
@@ -926,16 +936,18 @@ export default function AniPlayer({
         });
         setWaiting(false);
       };
+      v.addEventListener('loadedmetadata', onDirectPlayable);
       v.addEventListener('loadeddata', onDirectPlayable);
       v.addEventListener('canplay', onDirectPlayable);
+      v.addEventListener('playing', onDirectPlayable);
       v.addEventListener('error', onDirectError);
       return () => {
+        v.removeEventListener('loadedmetadata', onDirectPlayable);
         v.removeEventListener('loadeddata', onDirectPlayable);
         v.removeEventListener('canplay', onDirectPlayable);
+        v.removeEventListener('playing', onDirectPlayable);
         v.removeEventListener('error', onDirectError);
         flushProgress();
-        v.removeAttribute('src');
-        v.load();
       };
     }
 
@@ -2549,6 +2561,22 @@ export default function AniPlayer({
           setHasStarted(false);
           const oldHls = hlsRef.current;
           if (oldHls) { try { oldHls.destroy(); } catch {} hlsRef.current = null; }
+
+          const isDirect = (
+            url.includes('.mp4') ||
+            url.includes('.webm') ||
+            url.includes('_capacitor_file_') ||
+            url.startsWith('file://') ||
+            url.startsWith('blob:') ||
+            (!url.includes('.m3u8') && !url.includes('/api/iframe-proxy') && !url.includes('proxy/iframe'))
+          );
+          if (isDirect) {
+            v.src = url;
+            v.load();
+            v.play().then(() => setWaiting(false)).catch(() => setWaiting(false));
+            return;
+          }
+
           const newHls = new Hls({
             enableWorker: true,
             startFragPrefetch: false,

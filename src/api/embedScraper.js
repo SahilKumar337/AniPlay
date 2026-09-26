@@ -198,21 +198,26 @@ export async function scrapeEmbedDirectly(embedUrl, referer) {
           if (Capacitor.isNativePlatform()) {
             const headResp = await CapacitorHttp.request({
               url: directM3u8,
-              method: 'HEAD',
-              headers: { 'Referer': embedUrl || referer || (origin + '/') },
+              method: 'GET',
+              headers: { 
+                'Referer': embedUrl || referer || (origin + '/'),
+                'Range': 'bytes=0-10'
+              },
               connectTimeout: 4000,
               readTimeout: 4000
             });
-            const loc = headResp?.headers?.Location || headResp?.headers?.location;
-            if (loc) finalStreamUrl = loc;
+            const loc = headResp?.url || headResp?.headers?.Location || headResp?.headers?.location;
+            if (loc && typeof loc === 'string' && loc.startsWith('http')) finalStreamUrl = loc;
           } else {
             const headResp = await fetch(directM3u8, {
-              method: 'HEAD',
-              redirect: 'manual',
-              headers: { 'Referer': embedUrl || referer || (origin + '/') }
+              method: 'GET',
+              headers: { 
+                'Referer': embedUrl || referer || (origin + '/'),
+                'Range': 'bytes=0-10'
+              }
             });
-            const loc = headResp.headers.get('location');
-            if (loc) finalStreamUrl = loc;
+            const loc = headResp.url || headResp.headers.get('location');
+            if (loc && typeof loc === 'string' && loc.startsWith('http')) finalStreamUrl = loc;
           }
           isHLS = finalStreamUrl.includes('.m3u8');
         } catch (_) {}

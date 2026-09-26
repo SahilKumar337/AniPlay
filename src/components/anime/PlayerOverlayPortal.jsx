@@ -5,7 +5,7 @@ import AniPlayer from '../AniPlayer';
 import IframePlayer from '../IframePlayer';
 import LoadingWheel from '../ui/LoadingWheel';
 import { getTitle } from '../../api/anilist';
-import { getServerSortPriority, invalidateServerStreamCache } from '../../api/stream';
+import { getServerSortPriority, invalidateServerStreamCache, isDirectStreamUrl } from '../../api/stream';
 
 const EP_PAGE_SIZE = 100; // Number of episodes per page in the list
 
@@ -135,7 +135,7 @@ export default function PlayerOverlayPortal({
           // ── ALWAYS keep AniPlayer mounted once we have a URL, even during server switching.
           // Unmounting causes ScreenOrientation/ImmersiveMode teardown → portrait flash.
           // Instead we keep the player alive and show a translucent overlay while loading.
-          activeUrl && isActiveHLS ? (
+          activeUrl && (isActiveHLS || isDirectStreamUrl(activeUrl)) ? (
             <>
               <AniPlayer
                 url={activeUrl}
@@ -174,7 +174,7 @@ export default function PlayerOverlayPortal({
               {/* No overlay — AniPlayer silently loads the new episode in background.
                   The old episode frame stays visible until the new stream is ready. */}
             </>
-          ) : activeUrl && !isActiveHLS ? (
+          ) : activeUrl && !isActiveHLS && !isDirectStreamUrl(activeUrl) ? (
             <IframePlayer
               src={activeUrl}
               onBack={onBack}
