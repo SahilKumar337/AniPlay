@@ -195,70 +195,47 @@ function stripObfuscatedHeader(data) {
   return data;
 }
 
-// ⚡ Ultra-fast single-pass Base64-to-ArrayBuffer decoder with precomputed lookup table.
-// Eliminates heavy regex scanning, atob() string allocations, and millions of charCodeAt calls.
-const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-const B64_LOOKUP = new Uint8Array(256);
-for (let i = 0; i < 256; i++) B64_LOOKUP[i] = 255;
-for (let i = 0; i < B64_CHARS.length; i++) B64_LOOKUP[B64_CHARS.charCodeAt(i)] = i;
-B64_LOOKUP[45] = 62; // '-' (URL-safe)
-B64_LOOKUP[95] = 63; // '_' (URL-safe)
+// ⚡ High-Performance Base64-to-ArrayBuffer Decoder
+// Uses native V8 C++ (Uint8Array.fromBase64) or Chromium's async C++ DataURL engine
+// Decodes off the main UI thread with ZERO CPU blocking or dropped frames.
+async function base64ToArrayBuffer(b64) {
+  if (!b64) return new ArrayBuffer(0);
+  if (b64 instanceof ArrayBuffer) return b64;
+  if (ArrayBuffer.isView(b64)) return b64.buffer.slice(b64.byteOffset, b64.byteOffset + b64.byteLength);
+  if (b64 instanceof Blob) return await b64.arrayBuffer();
 
-function base64ToArrayBuffer(base64) {
-  if (!base64) return new ArrayBuffer(0);
-  if (base64 instanceof ArrayBuffer) return base64;
-  if (ArrayBuffer.isView(base64)) return base64.buffer.slice(base64.byteOffset, base64.byteOffset + base64.byteLength);
-
-  const str = typeof base64 === 'string' ? base64 : String(base64);
-  const len = str.length;
-  if (len === 0) return new ArrayBuffer(0);
-
-  let start = 0;
-  const commaIdx = str.indexOf(',', 0);
+  let str = typeof b64 === 'string' ? b64 : String(b64);
+  const commaIdx = str.indexOf(',');
   if (commaIdx !== -1 && commaIdx < 100) {
-    start = commaIdx + 1;
+    str = str.slice(commaIdx + 1);
+  }
+  if (!str) return new ArrayBuffer(0);
+
+  // 1. Native V8 SIMD Base64 decoder (Chrome 128+)
+  if (typeof Uint8Array.fromBase64 === 'function') {
+    try {
+      return Uint8Array.fromBase64(str).buffer;
+    } catch (_) {}
   }
 
-  // Pre-calculate valid Base64 character count
-  let validLen = 0;
-  for (let i = start; i < len; i++) {
-    const code = str.charCodeAt(i);
-    if (B64_LOOKUP[code] < 64) validLen++;
+  // 2. Native Chromium C++ async DataURL decoder.
+  // In Chromium/Android WebView, fetch("data:...") runs in Chromium's C++ network/data-URL
+  // background thread pool. V8 resolves the ArrayBuffer directly without freezing JavaScript!
+  try {
+    const res = await fetch(`data:application/octet-stream;base64,${str}`);
+    return await res.arrayBuffer();
+  } catch (err) {
+    console.warn('[base64ToArrayBuffer] Native fetch fallback:', err);
   }
 
-  if (validLen === 0) return new ArrayBuffer(0);
-
-  // 4 base64 chars -> 3 bytes
-  const byteLen = Math.floor((validLen * 3) / 4);
-  const bytes = new Uint8Array(byteLen);
-
-  let p = 0;
-  let b0 = 0, b1 = 0, b2 = 0;
-  let stage = 0;
-
-  for (let i = start; i < len; i++) {
-    const code = str.charCodeAt(i);
-    const val = B64_LOOKUP[code];
-    if (val > 63) continue; // skip newlines, whitespace, padding ('='), or invalid chars
-
-    if (stage === 0) {
-      b0 = val;
-      stage = 1;
-    } else if (stage === 1) {
-      b1 = val;
-      bytes[p++] = (b0 << 2) | (b1 >> 4);
-      stage = 2;
-    } else if (stage === 2) {
-      b2 = val;
-      bytes[p++] = ((b1 & 15) << 4) | (b2 >> 2);
-      stage = 3;
-    } else if (stage === 3) {
-      bytes[p++] = ((b2 & 3) << 6) | val;
-      stage = 0;
-    }
+  // 3. Fallback: Fast native C++ atob conversion
+  const bin = atob(str);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = bin.charCodeAt(i);
   }
-
-  return p === byteLen ? bytes.buffer : bytes.buffer.slice(0, p);
+  return bytes.buffer;
 }
 
 // Proper referer resolver matching native OfflineDownloader
@@ -363,12 +340,178 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
         }
       });
 
-      // ⚡ YOUTUBE-LEVEL STREAM LOADER:
-      // On Native Android, StreamInterceptor intercepts all XHR/Fetch requests at the WebView layer
-      // on a background thread and pipes the raw binary bytes directly into Chromium's C++ network stack.
-      // This means super.load() uses standard native XMLHttpRequest with raw ArrayBuffer.
-      // Zero Base64 strings, zero JSON serialization, zero main-thread freezing!
-      return super.load(context, config, sanitizeCallbacks(callbacks));
+      // On desktop browser or local offline file playback, use standard browser XHR loader
+      if (!isNativePlatform() || isLocalhost) {
+        return super.load(context, config, sanitizeCallbacks(callbacks));
+      }
+
+      this._aborted = false;
+      const t0 = performance.now();
+      if (this.stats) {
+        this.stats.loading.start = t0;
+      }
+
+      const isPlaylist = Boolean(
+        !context.frag &&
+        (
+          context.type === 'manifest' ||
+          context.type === 'level' ||
+          context.type === 'audioTrack' ||
+          context.type === 'subtitleTrack' ||
+          context.responseType !== 'arraybuffer' ||
+          url.includes('.m3u8')
+        )
+      );
+
+      // Check In-Memory Master Playlist Cache for 0ms instant startup
+      if (isPlaylist) {
+        const cachedText = getCachedPlaylistText(url);
+        if (cachedText) {
+          const now = performance.now();
+          const byteLen = cachedText.length;
+          if (this.stats) {
+            this.stats.loaded = byteLen;
+            this.stats.total = byteLen;
+            this.stats.bwEstimate = 50000000;
+            this.stats.loading.start = t0;
+            this.stats.loading.first = now;
+            this.stats.loading.end = now;
+            this.stats.aborted = false;
+          }
+          const stats = this.stats || {
+            aborted: false,
+            loaded: byteLen,
+            retry: 0,
+            total: byteLen,
+            chunkCount: 0,
+            bwEstimate: 50000000,
+            loading: { start: t0, first: now, end: now },
+            parsing: { start: now, end: now },
+            buffering: { start: now, first: now, end: now },
+          };
+          queueMicrotask(() => {
+            if (!this._aborted) {
+              callbacks.onSuccess({ data: cachedText, url, code: 200 }, stats, context, null);
+            }
+          });
+          return;
+        }
+      }
+
+      // ON NATIVE ANDROID: Route via CapacitorHttp for unrestricted CORS & proper Referer headers
+      (async () => {
+        try {
+          const activeReferer = typeof refererUrl === 'function' ? refererUrl() : refererUrl;
+          const activeEmbed = typeof embedUrl === 'function' ? embedUrl() : embedUrl;
+          const fallbackRef = activeReferer || activeEmbed || '';
+          const effectiveReferer = getProperReferer(url, fallbackRef);
+
+          const reqHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+            'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Connection': 'keep-alive',
+          };
+
+          if (effectiveReferer) {
+            reqHeaders['Referer'] = effectiveReferer;
+            try {
+              reqHeaders['Origin'] = new URL(effectiveReferer).origin;
+            } catch (_) {
+              reqHeaders['Origin'] = effectiveReferer.replace(/\/$/, '');
+            }
+          }
+
+          if (context.headers) {
+            Object.assign(reqHeaders, context.headers);
+          }
+          if (context.rangeEnd) {
+            reqHeaders['Range'] = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
+          }
+
+          if (isPlaylist && embedUrl && isNativePlatform()) {
+            try {
+              const targetHost = new URL(url).origin;
+              const cookies = await CapacitorCookies.getCookies({ url: targetHost });
+              if (cookies && Object.keys(cookies).length > 0) {
+                reqHeaders['Cookie'] = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+              }
+            } catch (_) {}
+          }
+
+          if (this._aborted) return;
+
+          const response = await CapacitorHttp.request({
+            url,
+            method: 'GET',
+            headers: reqHeaders,
+            responseType: isPlaylist ? 'text' : 'blob',
+            connectTimeout: isPlaylist ? 8000 : 12000,
+            readTimeout: isPlaylist ? 8000 : 15000,
+          });
+
+          if (this._aborted) return;
+
+          if (!response.status || response.status < 200 || response.status >= 400) {
+            const code = response.status || 0;
+            callbacks.onError(
+              { code, text: `HTTP ${code}` },
+              context, response, this.stats
+            );
+            return;
+          }
+
+          const tFirst = performance.now();
+          let data = response.data;
+
+          if (!isPlaylist) {
+            data = await base64ToArrayBuffer(data);
+            // Strip obfuscated image headers before passing to Hls.js
+            data = stripObfuscatedHeader(data);
+          } else if (typeof data !== 'string') {
+            data = String(data || '');
+          }
+
+          const tEnd = performance.now();
+          const byteLen = (data && (data.byteLength || data.length)) || 0;
+          if (!isPlaylist && byteLen === 0) {
+            console.warn('[CapacitorHlsLoader] 0-byte media segment decoded for:', url);
+            callbacks.onError({ code: 0, text: 'Empty media segment' }, context, response, this.stats);
+            return;
+          }
+
+          const elapsedSec = Math.max(0.001, (tEnd - t0) / 1000);
+          const calculatedBw = Math.round((byteLen * 8) / elapsedSec);
+
+          if (this.stats) {
+            this.stats.loaded = byteLen;
+            this.stats.total = byteLen;
+            this.stats.bwEstimate = calculatedBw;
+            this.stats.loading.start = t0;
+            this.stats.loading.first = Math.max(t0 + 1, Math.min(tFirst, tEnd));
+            this.stats.loading.end = tEnd;
+            this.stats.aborted = false;
+          }
+
+          const stats = this.stats || {
+            aborted: false,
+            loaded: byteLen,
+            retry: 0,
+            total: byteLen,
+            chunkCount: 0,
+            bwEstimate: calculatedBw,
+            loading: { start: t0, first: Math.max(t0 + 1, Math.min(tFirst, tEnd)), end: tEnd },
+            parsing: { start: tEnd, end: tEnd },
+            buffering: { start: tEnd, first: tEnd, end: tEnd },
+          };
+
+          callbacks.onSuccess({ data, url: response.url || url, code: response.status || 200 }, stats, context, response);
+        } catch (err) {
+          if (this._aborted) return;
+          console.error('[CapacitorHlsLoader] Exception during load:', err);
+          callbacks.onError({ code: 0, text: err.message || String(err) }, context, null, this.stats);
+        }
+      })();
     }
   };
 }
@@ -842,7 +985,7 @@ export default function AniPlayer({
       log(`Hls.js is supported. NetworkProfile: type=${netProfile.effectiveType}, downlink=${netProfile.downlink?.toFixed?.(2)}Mbps, rtt=${netProfile.rtt}ms, isSlow=${netProfile.isSlow}`);
       hls = new Hls({
         enableWorker: true,
-        startFragPrefetch: true, // ⚡ YouTube Architecture: pre-fetch next segment immediately for zero-freeze transitions
+        startFragPrefetch: false, // Mobile optimized: sequential fragment downloads prevent bandwidth thrashing
         testBandwidth: false,
         capLevelToPlayerSize: true,
         lowLatencyMode: false, // VOD mode ensures robust audio/video sync
@@ -852,10 +995,10 @@ export default function AniPlayer({
         abrEwmaDefaultEstimate: 1500000,
         abrBandWidthFactor: netProfile.isSlow ? 0.75 : 0.85,
         abrBandWidthUpFactor: netProfile.isSlow ? 0.5 : 0.65,
-        maxBufferLength: 60, // YouTube forward buffer cushion (60 seconds)
-        maxMaxBufferLength: 120, // YouTube max forward cushion (120 seconds)
-        maxBufferSize: 100 * 1000 * 1000, // 100 MB buffer
-        backBufferLength: 30, // 30s back buffer for smooth rewinding
+        maxBufferLength: 30, // 30s forward buffer cushion: smooth playback without memory bloat
+        maxMaxBufferLength: 60, // 60s max forward cushion
+        maxBufferSize: 60 * 1000 * 1000, // 60 MB buffer
+        backBufferLength: 15, // 15s back buffer: promptly clean up consumed chunks from memory
         maxBufferHole: 0.8, // Smoothly jump small timestamp gaps without stalling
         manifestLoadingTimeOut: 15000,
         manifestLoadingMaxRetry: 6,
@@ -875,16 +1018,6 @@ export default function AniPlayer({
         loader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
         pLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
         fLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
-        xhrSetup: (xhr, reqUrl) => {
-          const activeRef = typeof refererRef.current === 'function' ? refererRef.current() : (refererRef.current || referer || '');
-          const activeEmb = typeof embedUrlRef.current === 'function' ? embedUrlRef.current() : (embedUrlRef.current || embedUrl || '');
-          const reqRef = getProperReferer(reqUrl, activeRef || activeEmb || 'https://megaplay.buzz/');
-          if (reqRef) {
-            try {
-              xhr.setRequestHeader('X-AniPlay-Referer', reqRef);
-            } catch (_) {}
-          }
-        },
       });
 
       hlsRef.current = hls;

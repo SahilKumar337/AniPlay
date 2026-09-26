@@ -87,18 +87,7 @@ public class MainActivity extends BridgeActivity {
                 }
             });
 
-            // ⚡ YouTube-Level StreamInterceptor: Intercept video segments and playlists on background threads
-            // Eliminates Base64 serialization, JSON parsing, and main-thread freezing.
-            getBridge().setWebViewClient(new BridgeWebViewClient(getBridge()) {
-                @Override
-                public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                    WebResourceResponse intercepted = StreamInterceptor.intercept(request);
-                    if (intercepted != null) {
-                        return intercepted;
-                    }
-                    return super.shouldInterceptRequest(view, request);
-                }
-            });
+
 
             // Inject CSS variables for all insets so React layout can account for system bars
             ViewCompat.setOnApplyWindowInsetsListener(getBridge().getWebView(), (v, insets) -> {
