@@ -105,6 +105,26 @@ function sanitizeSubtitleHtml(raw) {
   return text;
 }
 
+// ⚡ O(log N) Binary Search for active subtitle cue (replaces expensive O(N) array scans on every render frame)
+function findActiveCue(cues, targetTime, subDelay = 0) {
+  if (!Array.isArray(cues) || cues.length === 0) return null;
+  const t = targetTime - subDelay;
+  let low = 0;
+  let high = cues.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const cue = cues[mid];
+    if (t < cue.startTime) {
+      high = mid - 1;
+    } else if (t > cue.endTime) {
+      low = mid + 1;
+    } else {
+      return cue;
+    }
+  }
+  return null;
+}
+
 
 /* ─── Way 4: CapacitorHttp hls.js loader ──────────────────────
 
@@ -175,37 +195,70 @@ function stripObfuscatedHeader(data) {
   return data;
 }
 
+// ⚡ Ultra-fast single-pass Base64-to-ArrayBuffer decoder with precomputed lookup table.
+// Eliminates heavy regex scanning, atob() string allocations, and millions of charCodeAt calls.
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const B64_LOOKUP = new Uint8Array(256);
+for (let i = 0; i < 256; i++) B64_LOOKUP[i] = 255;
+for (let i = 0; i < B64_CHARS.length; i++) B64_LOOKUP[B64_CHARS.charCodeAt(i)] = i;
+B64_LOOKUP[45] = 62; // '-' (URL-safe)
+B64_LOOKUP[95] = 63; // '_' (URL-safe)
+
 function base64ToArrayBuffer(base64) {
   if (!base64) return new ArrayBuffer(0);
   if (base64 instanceof ArrayBuffer) return base64;
   if (ArrayBuffer.isView(base64)) return base64.buffer.slice(base64.byteOffset, base64.byteOffset + base64.byteLength);
-  let clean = typeof base64 === 'string' ? base64 : String(base64);
-  const commaIdx = clean.indexOf(',');
+
+  const str = typeof base64 === 'string' ? base64 : String(base64);
+  const len = str.length;
+  if (len === 0) return new ArrayBuffer(0);
+
+  let start = 0;
+  const commaIdx = str.indexOf(',', 0);
   if (commaIdx !== -1 && commaIdx < 100) {
-    clean = clean.slice(commaIdx + 1);
+    start = commaIdx + 1;
   }
-  // Strip whitespace / newlines from Capacitor Base64.DEFAULT
-  if (clean.includes('\n') || clean.includes('\r') || clean.includes(' ') || clean.includes('\t')) {
-    clean = clean.replace(/[\r\n\s\t]/g, '');
+
+  // Pre-calculate valid Base64 character count
+  let validLen = 0;
+  for (let i = start; i < len; i++) {
+    const code = str.charCodeAt(i);
+    if (B64_LOOKUP[code] < 64) validLen++;
   }
-  if (!clean) return new ArrayBuffer(0);
 
-  const rem = clean.length % 4;
-  if (rem === 2) clean += '==';
-  else if (rem === 3) clean += '=';
+  if (validLen === 0) return new ArrayBuffer(0);
 
-  try {
-    const binary_string = window.atob(clean);
-    const len = binary_string.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binary_string.charCodeAt(i);
+  // 4 base64 chars -> 3 bytes
+  const byteLen = Math.floor((validLen * 3) / 4);
+  const bytes = new Uint8Array(byteLen);
+
+  let p = 0;
+  let b0 = 0, b1 = 0, b2 = 0;
+  let stage = 0;
+
+  for (let i = start; i < len; i++) {
+    const code = str.charCodeAt(i);
+    const val = B64_LOOKUP[code];
+    if (val > 63) continue; // skip newlines, whitespace, padding ('='), or invalid chars
+
+    if (stage === 0) {
+      b0 = val;
+      stage = 1;
+    } else if (stage === 1) {
+      b1 = val;
+      bytes[p++] = (b0 << 2) | (b1 >> 4);
+      stage = 2;
+    } else if (stage === 2) {
+      b2 = val;
+      bytes[p++] = ((b1 & 15) << 4) | (b2 >> 2);
+      stage = 3;
+    } else if (stage === 3) {
+      bytes[p++] = ((b2 & 3) << 6) | val;
+      stage = 0;
     }
-    return bytes.buffer;
-  } catch (e) {
-    console.error('[base64ToArrayBuffer] atob failed:', e.message, 'clean len:', clean.length);
-    return new ArrayBuffer(0);
   }
+
+  return p === byteLen ? bytes.buffer : bytes.buffer.slice(0, p);
 }
 
 // Proper referer resolver matching native OfflineDownloader
@@ -418,6 +471,8 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
             method: 'GET',
             headers: reqHeaders,
             responseType: isPlaylist ? 'text' : 'blob',
+            connectTimeout: isPlaylist ? 8000 : 12000,
+            readTimeout: isPlaylist ? 8000 : 15000,
           });
 
           if (this._aborted) return;
@@ -556,6 +611,7 @@ export default function AniPlayer({
   title,
   serverName = '',
   isHardSub = false,
+  isHLS = false,            // When true, always use HLS.js (even for CDN URLs without .m3u8)
   subtitles,
   extraSubtitles,
   referer,
@@ -599,14 +655,14 @@ export default function AniPlayer({
   useEffect(() => { embedUrlRef.current = embedUrl; }, [embedUrl]);
 
   // Synchronous, multi-event progress flusher
-  const flushProgress = useCallback((explicitTime = null) => {
+  const flushProgress = useCallback((explicitTime = null, forceSync = false) => {
     const v = videoRef.current;
     const ct = (explicitTime !== null && explicitTime !== undefined)
       ? explicitTime
       : (v && v.currentTime > 0 ? v.currentTime : lastKnownTimeRef.current);
     const dur = (v && v.duration > 0) ? v.duration : lastKnownDurRef.current;
     if (ct > 2 && onSeekProgressRef.current) {
-      onSeekProgressRef.current(ct, dur);
+      onSeekProgressRef.current(ct, dur, forceSync);
     }
   }, []);
 
@@ -887,7 +943,9 @@ export default function AniPlayer({
     // ── DIRECT VIDEO FILE MODE: bypass HLS.js, use native video element directly ──
     // Direct MP4 / WebM / local files work natively with hardware acceleration.
     // HLS.js only loads .m3u8 manifests and fails if given an MP4 stream.
-    const isDirectVideoFile = (
+    // CRITICAL: If the parent explicitly marks this stream as HLS (isHLS=true), ALWAYS use HLS.js
+    // even if the URL doesn't contain '.m3u8' — many CDN/tokenized HLS URLs omit the extension!
+    const isDirectVideoFile = !isHLS && (
       url.includes('.mp4') ||
       url.includes('.webm') ||
       url.includes('_capacitor_file_') ||
@@ -956,31 +1014,31 @@ export default function AniPlayer({
       log(`Hls.js is supported. NetworkProfile: type=${netProfile.effectiveType}, downlink=${netProfile.downlink?.toFixed?.(2)}Mbps, rtt=${netProfile.rtt}ms, isSlow=${netProfile.isSlow}`);
       hls = new Hls({
         enableWorker: true,
-        startFragPrefetch: false, // ⚡ Netflix Fast-Start: allocate 100% bandwidth to Fragment 0 for instant frame render
+        startFragPrefetch: true, // ⚡ YouTube Architecture: pre-fetch next segment immediately for zero-freeze transitions
         testBandwidth: false,
         capLevelToPlayerSize: true,
-        lowLatencyMode: false, // Must be false for VOD to prevent video decoder starvation while audio plays
-        progressive: false,    // Must be false on mobile WebViews to avoid partial TS chunk corruptions
+        lowLatencyMode: false, // VOD mode ensures robust audio/video sync
+        progressive: false,
         startPosition: (targetResumeTimeRef.current > 2 || initialSeekTimeRef.current > 2) ? Math.max(targetResumeTimeRef.current || 0, initialSeekTimeRef.current || 0) : -1,
         startLevel: -1,
-        abrEwmaDefaultEstimate: 1200000,
-        abrBandWidthFactor: netProfile.isSlow ? 0.7 : 0.85,
-        abrBandWidthUpFactor: netProfile.isSlow ? 0.5 : 0.7,
-        maxBufferLength: netProfile.isSlow ? 20 : 35, // Solid golden buffer prevents A/V desync
-        maxMaxBufferLength: netProfile.isSlow ? 40 : 70,
-        maxBufferSize: netProfile.isSlow ? 40 * 1000 * 1000 : 80 * 1000 * 1000,
-        backBufferLength: 25,
-        maxBufferHole: 0.5,
+        abrEwmaDefaultEstimate: 1500000,
+        abrBandWidthFactor: netProfile.isSlow ? 0.75 : 0.85,
+        abrBandWidthUpFactor: netProfile.isSlow ? 0.5 : 0.65,
+        maxBufferLength: 60, // YouTube forward buffer cushion (60 seconds)
+        maxMaxBufferLength: 120, // YouTube max forward cushion (120 seconds)
+        maxBufferSize: 100 * 1000 * 1000, // 100 MB buffer
+        backBufferLength: 30, // 30s back buffer for smooth rewinding
+        maxBufferHole: 0.8, // Smoothly jump small timestamp gaps without stalling
         manifestLoadingTimeOut: 15000,
         manifestLoadingMaxRetry: 6,
-        manifestLoadingRetryDelay: 1200,
+        manifestLoadingRetryDelay: 1000,
         levelLoadingTimeOut: 15000,
         levelLoadingMaxRetry: 6,
-        levelLoadingRetryDelay: 1200,
+        levelLoadingRetryDelay: 1000,
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 1200,
-        highBufferWatchdogPeriod: 2,
+        fragLoadingRetryDelay: 1000,
+        highBufferWatchdogPeriod: 3,
         nudgeOffset: 0.1,
         nudgeMaxRetries: 10,
         maxStarvationDelay: 4,
@@ -994,12 +1052,7 @@ export default function AniPlayer({
       hlsRef.current = hls;
 
       hls.on(Hls.Events.BUFFER_STALLED, () => {
-        log('[HLS] Buffer stalled event received — nudging playback to resume video...');
-        try {
-          if (v && !v.paused) {
-            v.currentTime = v.currentTime + 0.05;
-          }
-        } catch (_) {}
+        log('[HLS] Buffer stalled event received — waiting for buffer to fill naturally');
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
@@ -1260,7 +1313,7 @@ export default function AniPlayer({
       }
       hlsRef.current = null;
     };
-  }, [url, serverName]);
+  }, [url, serverName, isHLS]);
 
 
   // Sync subtitle tracks when props change — merge server-specific + global source tracks
@@ -1830,7 +1883,7 @@ export default function AniPlayer({
         lastKnownDurRef.current = v.duration;
       }
       if (e.type === 'pause') {
-        flushProgress(ct);
+        flushProgress(ct, true);
       }
 
       // Safety net: if video started playing from 0:00 but a resume target exists, seek immediately
@@ -1914,49 +1967,6 @@ export default function AniPlayer({
       }
     };
 
-    // ⚡ Silent Video Freeze Watchdog:
-    // Detects when audio is playing (currentTime advances) but the video frame presentation is frozen (0 new frames rendered).
-    let lastCheckTime = 0;
-    let lastRenderedFrames = -1;
-    let freezeStreak = 0;
-    let lastNudgeTime = 0;
-
-    const freezeWatchdogId = setInterval(() => {
-      if (!v || v.paused || v.ended || v.seeking || v.readyState < 3) {
-        freezeStreak = 0;
-        return;
-      }
-      const ct = v.currentTime;
-      const timeAdvanced = Math.abs(ct - lastCheckTime) >= 0.8;
-      
-      const quality = typeof v.getVideoPlaybackQuality === 'function' ? v.getVideoPlaybackQuality() : null;
-      const currentFrames = quality ? quality.totalVideoFrames : -1;
-
-      if (timeAdvanced) {
-        lastCheckTime = ct;
-        if (quality && currentFrames >= 0 && currentFrames === lastRenderedFrames) {
-          // Sound is playing (currentTime advanced by 0.8s+), BUT 0 new video frames were rendered!
-          freezeStreak++;
-          const now = Date.now();
-          if (freezeStreak >= 2 && now - lastNudgeTime > 4000) {
-            lastNudgeTime = now;
-            freezeStreak = 0;
-            log('[Watchdog] Silent video freeze detected (audio playing with 0 video frames). Nudging decoder pipeline...');
-            try {
-              // Micro-nudge forces the Android hardware decoder to flush its stalled buffer and re-sync
-              v.currentTime = ct + 0.05;
-              if (hlsRef.current) {
-                hlsRef.current.recoverMediaError();
-              }
-            } catch (_) {}
-          }
-        } else {
-          lastRenderedFrames = currentFrames;
-          freezeStreak = 0;
-        }
-      }
-    }, 1000);
-
     v.addEventListener('play',            sync);
     v.addEventListener('pause',           sync);
     v.addEventListener('timeupdate',      sync);
@@ -1967,7 +1977,6 @@ export default function AniPlayer({
     v.addEventListener('canplay',         onPlay);
     v.addEventListener('ended',           onEnded);
     return () => {
-      clearInterval(freezeWatchdogId);
       v.removeEventListener('play',           sync);
       v.removeEventListener('pause',          sync);
       v.removeEventListener('timeupdate',     sync);
@@ -2049,17 +2058,17 @@ export default function AniPlayer({
       const dur = v.duration;
       // Don't save in first 2s (avoids resetting to 0) or last 15s (episode considered completed)
       if (ct < 2 || ct > dur - 15) return;
-      flushProgress(ct);
-    }, 4000); // every 4 seconds for tight synchronization
+      flushProgress(ct, false);
+    }, 4000); // local memory check every 4 seconds
 
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        flushProgress();
+        flushProgress(null, true);
       }
     };
 
     const onPageHide = () => {
-      flushProgress();
+      flushProgress(null, true);
     };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -2071,7 +2080,7 @@ export default function AniPlayer({
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('beforeunload', onPageHide);
-      flushProgress();
+      flushProgress(null, true);
     };
   }, [url, flushProgress]);
 
@@ -2449,9 +2458,9 @@ export default function AniPlayer({
   const pct    = duration ? (curTime  / duration) * 100 : 0;
   const bufPct = duration ? (buffered / duration) * 100 : 0;
   const VolIco = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
-  const activeCue = !shouldSuppressOverlay && Array.isArray(cues) && cues.length > 0 ? cues.find(c => curTime >= (c.startTime + subDelay) && curTime <= (c.endTime + subDelay)) : null;
+  const activeCue = !shouldSuppressOverlay ? findActiveCue(cues, curTime, subDelay) : null;
   const cueHtml = !shouldSuppressOverlay
-    ? (activeCue ? sanitizeSubtitleHtml(activeCue.text) : (embeddedCueText ? sanitizeSubtitleHtml(embeddedCueText) : ''))
+    ? (activeCue ? (activeCue.html || (activeCue.html = sanitizeSubtitleHtml(activeCue.text))) : (embeddedCueText ? sanitizeSubtitleHtml(embeddedCueText) : ''))
     : '';
 
 

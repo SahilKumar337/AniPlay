@@ -81,6 +81,7 @@ export function AppProvider({ children }) {
   const watchlistRef      = useRef({});
   const favoritesRef      = useRef({});
   const progressRef       = useRef({});
+  const lastProgressSyncTimeRef = useRef({});
   const settingsRef       = useRef(DEFAULT_SETTINGS);
   const recentlyViewedRef = useRef([]);
   const userRef           = useRef(null);  // stable user access for [] callbacks
@@ -942,7 +943,7 @@ export function AppProvider({ children }) {
 
   const isFavorite = useCallback((animeId) => Boolean(favorites[animeId]), [favorites]);
 
-  const setEpisodeProgress = useCallback((animeId, epOrObj, seekPosition = null, duration = null) => {
+  const setEpisodeProgress = useCallback((animeId, epOrObj, seekPosition = null, duration = null, forceSync = false) => {
     const rawEp = typeof epOrObj === 'object' && epOrObj !== null ? epOrObj.episode : epOrObj;
     const episode = typeof rawEp === 'object' && rawEp !== null ? (rawEp.episode || 1) : (Number(rawEp) || 1);
     const timestamp = (typeof epOrObj === 'object' && epOrObj !== null && epOrObj.timestamp) || Date.now();
@@ -970,7 +971,7 @@ export function AppProvider({ children }) {
       episodes: updatedEpisodes,
     };
 
-    // Synchronous fast-cache write for immediate instant resume
+    // Synchronous fast-cache write for immediate instant resume (always 0ms)
     try {
       if (seek != null) {
         localStorage.setItem(`aniplay_resume_${animeId}_${episode}`, String(seek));
@@ -982,13 +983,21 @@ export function AppProvider({ children }) {
       [animeId]: nextEntry,
     };
 
-    setProgress(prev => ({
-      ...prev,
-      [animeId]: nextEntry,
-    }));
+    // Throttle React state re-rendering and cloud push during active playback
+    // (Prevents full-app render thrashing and network POST spam while video is playing)
+    const now = Date.now();
+    const lastSync = lastProgressSyncTimeRef.current[animeId] || 0;
+    const shouldSync = forceSync || (now - lastSync >= 15000) || (prevEntry.episode !== episode);
 
-    pushAnimeToCloudRef.current?.(animeId, { episode, timestamp });
-    triggerDebouncedSyncRef.current?.();
+    if (shouldSync) {
+      lastProgressSyncTimeRef.current[animeId] = now;
+      setProgress(prev => ({
+        ...prev,
+        [animeId]: nextEntry,
+      }));
+      pushAnimeToCloudRef.current?.(animeId, { episode, timestamp });
+      triggerDebouncedSyncRef.current?.();
+    }
   }, []);
 
   const getEpisodeProgress = useCallback((animeId, specificEp = null) => {

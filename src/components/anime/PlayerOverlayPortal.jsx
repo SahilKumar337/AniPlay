@@ -141,6 +141,7 @@ export default function PlayerOverlayPortal({
                 url={activeUrl}
                 title={`${title} - Episode ${epParam}`}
                 serverName={activeName}
+                isHLS={!!isActiveHLS}
                 isHardSub={!!activeServer?.isHardSub || (activeName || '').toLowerCase().includes('hardsub') || (activeName || '').toLowerCase().includes('hard')}
                 referer={activeServer?.referer}
                 embedUrl={activeServer?.embedUrl}

@@ -319,13 +319,13 @@ export default function AnimePage() {
   }, [anime, epParam, setEpisodeProgress, addToRecentlyViewed, getEpisodeProgress]);
 
   // Save within-episode position (called by AniPlayer on progress, pause, unmount)
-  const handleSeekProgress = useCallback((currentTime, duration) => {
+  const handleSeekProgress = useCallback((currentTime, duration, forceSync = false) => {
     if (!anime || !epParam) return;
     if (currentTime > 0) {
       playbackTimeRef.current = currentTime;
       if (duration > 0) durationRef.current = duration;
     }
-    setEpisodeProgress(anime.id, epParam, currentTime, duration);
+    setEpisodeProgress(anime.id, epParam, currentTime, duration, forceSync);
   }, [anime, epParam, setEpisodeProgress]);
 
   // Initial seek time: handles both server switching (exact second) and episode resume

@@ -118,18 +118,23 @@ export async function signMegaPlayCdnToken(m3u8Url) {
 export async function resolveMegaPlayStream(sourcesJson) {
   if (!sourcesJson || typeof sourcesJson !== 'object') return null;
 
-  let rawFile = sourcesJson.sources?.file ||
-    (Array.isArray(sourcesJson.sources) ? sourcesJson.sources[0]?.file : null);
+  let rawFile = sourcesJson.file ||
+    sourcesJson.url ||
+    sourcesJson.stream ||
+    sourcesJson.link ||
+    sourcesJson.sources?.file ||
+    sourcesJson.sources?.url ||
+    (Array.isArray(sourcesJson.sources) ? (sourcesJson.sources[0]?.file || sourcesJson.sources[0]?.url || (typeof sourcesJson.sources[0] === 'string' ? sourcesJson.sources[0] : null)) : null);
 
-  // If sources.file is missing, check if encrypted payload 'enc' is present
-  if (!rawFile && sourcesJson.enc) {
-    const decrypted = await decryptMegaPlayEnc(sourcesJson.enc);
-    if (decrypted?.file) {
-      rawFile = decrypted.file;
+  // If sources.file is missing, check if encrypted payload 'enc' or 'encrypted' is present
+  if (!rawFile && (sourcesJson.enc || sourcesJson.encrypted)) {
+    const decrypted = await decryptMegaPlayEnc(sourcesJson.enc || sourcesJson.encrypted);
+    if (decrypted) {
+      rawFile = decrypted.file || decrypted.url || decrypted.stream || (Array.isArray(decrypted.sources) ? decrypted.sources[0]?.file : null);
     }
   }
 
-  if (rawFile && typeof rawFile === 'string' && (rawFile.includes('.m3u8') || rawFile.includes('.mp4'))) {
+  if (rawFile && typeof rawFile === 'string' && (rawFile.includes('.m3u8') || rawFile.includes('.mp4') || rawFile.startsWith('http'))) {
     return await signMegaPlayCdnToken(rawFile);
   }
 

@@ -222,8 +222,15 @@ export function useAnimeStream({
       // preventing orientation flicker and preserving playback position across server switches.
 
       try {
+        // ⚡ Hard timeout: prevent any single server from hanging the UI forever
+        const RESOLVE_TIMEOUT_MS = 6000;
+        const withServerTimeout = (p) => Promise.race([
+          p,
+          new Promise((_, rej) => setTimeout(() => rej(new Error(`Server resolution timed out after ${RESOLVE_TIMEOUT_MS}ms`)), RESOLVE_TIMEOUT_MS))
+        ]);
+
         // Directly resolve the selected server with in-flight deduplication
-        const resolved = await resolveSingleServer(srv, anime, epParam);
+        const resolved = await withServerTimeout(resolveSingleServer(srv, anime, epParam));
 
         setExtracting(false);
 
@@ -450,18 +457,75 @@ export function useAnimeStream({
           const topName = (topServer.name || '').toLowerCase();
           const isVidstream = topName.includes('vidstream');
 
-          // Eager start: if nothing has been selected yet, start with ANY available server
-          // (including Waves). We no longer block on Waves — get video playing ASAP!
-          if (!eagerSelectionDone && !userSelectedServerRef.current) {
+          // ⚡ PARALLEL RESOLUTION — Race top-3 servers simultaneously.
+          // First winner plays instantly; much faster than sequential fallback.
+          if (!eagerSelectionDone && !userSelectedServerRef.current && !activeUrlRef.current) {
             eagerSelectionDone = true;
+
+            const RACE_TIMEOUT_MS = 6000;
+            const withRaceTimeout = (p) => Promise.race([
+              p,
+              new Promise((_, rej) => setTimeout(() => rej(new Error('race timeout')), RACE_TIMEOUT_MS))
+            ]);
+
+            const runCandidateRace = (candidatesList) => {
+              setExtracting(true);
+              inFlightServerRef.current = 'parallel-race';
+
+              Promise.any(
+                candidatesList.map(async (candidate) => {
+                  const resolved = await withRaceTimeout(resolveSingleServer(candidate, anime, epParam));
+                  if (!resolved?.videoUrl || !isDirectStreamUrl(resolved.videoUrl)) {
+                    throw new Error(`${candidate.name}: no valid URL resolved`);
+                  }
+                  return { candidate, resolved };
+                })
+              ).then(({ candidate, resolved }) => {
+                // Sequence guard: episode changed while resolving
+                if (lastFetchedRef.current !== fetchKey) return;
+                if (userSelectedServerRef.current) { setExtracting(false); return; }
+
+                const finalSubs = (resolved.subtitles?.length) ? resolved.subtitles : (candidate.subtitles || []);
+                const updatedSrv = { ...candidate, ...resolved, isHLS: Boolean(resolved.isHLS), subtitles: finalSubs };
+
+                setActiveServer(updatedSrv);
+                setActiveName(candidate.name);
+                setActiveType(candidate.type || 'sub');
+                currentPriorityRef.current = getServerSortPriority(candidate.name);
+                setActiveUrl(resolved.videoUrl);
+                activeUrlRef.current = resolved.videoUrl;
+                setIsActiveHLS(Boolean(resolved.isHLS));
+                setExtracting(false);
+                setLoadStream(false);
+                inFlightServerRef.current = null;
+
+                // Merge resolved server into the live list
+                const baseList = serversRef.current.length > 0 ? serversRef.current : enriched;
+                const updatedList = baseList.map(s =>
+                  (s.name === candidate.name && s.type === candidate.type) ? updatedSrv : s
+                );
+                const cachedSubsNow = getEpisodeSubtitles(anime?.id, epParam);
+                const freshEnriched = enrichDubSubtitles(updatedList, cachedSubsNow);
+                setServers(freshEnriched);
+                serversRef.current = freshEnriched;
+                setAllSubtitleTracks(buildAllSubtitleTracks(freshEnriched));
+              }).catch((err) => {
+                if (lastFetchedRef.current !== fetchKey) return;
+                console.warn('[useAnimeStream] Initial parallel candidates failed:', err);
+                inFlightServerRef.current = null;
+                const remaining = trackServers.slice(candidatesList.length);
+                if (remaining.length > 0 && !activeUrlRef.current && !userSelectedServerRef.current) {
+                  runCandidateRace(remaining.slice(0, 3));
+                } else {
+                  setExtracting(false);
+                  setLoadStream(false);
+                }
+              });
+            };
+
+            runCandidateRace(trackServers.slice(0, 3));
+          } else if (!userSelectedServerRef.current && !activeUrlRef.current && isVidstream) {
             selectServer(topServer, enriched, false).catch(() => {});
-          } else if (!userSelectedServerRef.current && isVidstream) {
-            // If a lower-priority server (e.g. Waves) was eagerly selected before Vidstream arrived,
-            // automatically upgrade to Vidstream (user's preferred default server)!
-            if (!activeUrlRef.current || currentPriorityRef.current > 1.2) {
-              console.log('[useAnimeStream] Upgrading to preferred default server: Vidstream');
-              selectServer(topServer, enriched, false).catch(() => {});
-            }
           }
         };
 
@@ -472,14 +536,29 @@ export function useAnimeStream({
 
         if (!srvList.length && serversRef.current.length === 0) {
           const elapsed = Date.now() - fetchStartTimeRef.current;
-          const remainingWait = Math.max(0, 10000 - elapsed);
+          const remainingWait = Math.max(0, 8000 - elapsed);
           setTimeout(() => {
             if (!activeUrlRef.current && serversRef.current.length === 0) {
               setStreamErr('No streaming servers available for this episode.');
+              setExtracting(false);
+              setLoadStream(false);
             }
           }, remainingWait);
           return;
         }
+
+        // ⚡ Safety net: if parallel race also failed to produce a URL after all scrapers done,
+        // show an error after a brief grace period instead of spinning forever.
+        setTimeout(() => {
+          if (lastFetchedRef.current !== fetchKey) return;
+          if (!activeUrlRef.current && !userSelectedServerRef.current) {
+            setExtracting(false);
+            setLoadStream(false);
+            if (serversRef.current.length > 0 && !inFlightServerRef.current) {
+              setStreamErr('Unable to connect to streaming servers. Please tap retry or pick a different server.');
+            }
+          }
+        }, 3000);
 
         // After ALL scrapers finish: combine srvList with any servers in serversRef.current
         const allKnown = [...srvList];
@@ -506,7 +585,7 @@ export function useAnimeStream({
           resolveSubSubtitlesForDub(anime, epParam);
         }
 
-        if (!userSelectedServerRef.current && (!activeUrlRef.current || currentPriorityRef.current > 1.2) && !inFlightServerRef.current) {
+        if (!userSelectedServerRef.current && !activeUrlRef.current && !inFlightServerRef.current) {
           const track = audioTrackRef.current || 'sub';
           let trackServers = finalEnriched.filter(s => s.type === track);
           if (!trackServers.length && isAdult) {
