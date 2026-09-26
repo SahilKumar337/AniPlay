@@ -363,184 +363,12 @@ function buildCapacitorHlsLoader(DefaultLoader, refererUrl, embedUrl) {
         }
       });
 
-      // On desktop browser or local offline file playback, use standard browser XHR loader
-      if (!isNativePlatform() || isLocalhost) {
-        return super.load(context, config, sanitizeCallbacks(callbacks));
-      }
-
-      this._aborted = false;
-      const t0 = performance.now();
-      if (this.stats) {
-        this.stats.loading.start = t0;
-      }
-
-      const isPlaylist = Boolean(
-        !context.frag &&
-        (
-          context.type === 'manifest' ||
-          context.type === 'level' ||
-          context.type === 'audioTrack' ||
-          context.type === 'subtitleTrack' ||
-          context.responseType !== 'arraybuffer' ||
-          url.includes('.m3u8')
-        )
-      );
-
-      // Check In-Memory Master Playlist Cache for 0ms instant startup
-      if (isPlaylist) {
-        const cachedText = getCachedPlaylistText(url);
-        if (cachedText) {
-          const now = performance.now();
-          const byteLen = cachedText.length;
-          if (this.stats) {
-            this.stats.loaded = byteLen;
-            this.stats.total = byteLen;
-            this.stats.bwEstimate = 50000000;
-            this.stats.loading.start = t0;
-            this.stats.loading.first = now;
-            this.stats.loading.end = now;
-            this.stats.aborted = false;
-          }
-          const stats = this.stats || {
-            aborted: false,
-            loaded: byteLen,
-            retry: 0,
-            total: byteLen,
-            chunkCount: 0,
-            bwEstimate: 50000000,
-            loading: { start: t0, first: now, end: now },
-            parsing: { start: now, end: now },
-            buffering: { start: now, first: now, end: now },
-          };
-          queueMicrotask(() => {
-            if (!this._aborted) {
-              callbacks.onSuccess({ data: cachedText, url, code: 200 }, stats, context, null);
-            }
-          });
-          return;
-        }
-      }
-
-      // ON NATIVE ANDROID: ALWAYS route via CapacitorHttp!
-      // Native WebView XHR sends 'Origin: https://localhost', triggering CDN 403 Forbidden.
-      // CapacitorHttp uses Android OS network stack with zero browser origin restrictions.
-      (async () => {
-        try {
-          const activeReferer = typeof refererUrl === 'function' ? refererUrl() : refererUrl;
-          const activeEmbed = typeof embedUrl === 'function' ? embedUrl() : embedUrl;
-          const fallbackRef = activeReferer || activeEmbed || '';
-          const effectiveReferer = getProperReferer(url, fallbackRef);
-
-          const reqHeaders = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
-            'Accept': isPlaylist ? 'application/vnd.apple.mpegurl, */*' : '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Connection': 'keep-alive',
-          };
-
-          if (effectiveReferer) {
-            reqHeaders['Referer'] = effectiveReferer;
-            try {
-              reqHeaders['Origin'] = new URL(effectiveReferer).origin;
-            } catch (_) {
-              reqHeaders['Origin'] = effectiveReferer.replace(/\/$/, '');
-            }
-          }
-
-          if (context.headers) {
-            Object.assign(reqHeaders, context.headers);
-          }
-          if (context.rangeEnd) {
-            reqHeaders['Range'] = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
-          }
-
-          if (isPlaylist && embedUrl && isNativePlatform()) {
-            try {
-              const targetHost = new URL(url).origin;
-              const cookies = await CapacitorCookies.getCookies({ url: targetHost });
-              if (cookies && Object.keys(cookies).length > 0) {
-                reqHeaders['Cookie'] = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-              }
-            } catch (_) {}
-          }
-
-          if (this._aborted) return;
-
-          const response = await CapacitorHttp.request({
-            url,
-            method: 'GET',
-            headers: reqHeaders,
-            responseType: isPlaylist ? 'text' : 'blob',
-            connectTimeout: isPlaylist ? 8000 : 12000,
-            readTimeout: isPlaylist ? 8000 : 15000,
-          });
-
-          if (this._aborted) return;
-
-          if (!response.status || response.status < 200 || response.status >= 400) {
-            const code = response.status || 0;
-            callbacks.onError(
-              { code, text: `HTTP ${code}` },
-              context, response, this.stats
-            );
-            return;
-          }
-
-          const tFirst = performance.now();
-          let data = response.data;
-
-          if (!isPlaylist) {
-            if (typeof data === 'string') {
-              data = base64ToArrayBuffer(data);
-            } else if (data instanceof Blob) {
-              data = await data.arrayBuffer();
-            }
-            // Strip obfuscated image headers before passing to Hls.js
-            data = stripObfuscatedHeader(data);
-          } else if (typeof data !== 'string') {
-            data = String(data || '');
-          }
-
-          const tEnd = performance.now();
-          const byteLen = (data && (data.byteLength || data.length)) || 0;
-          if (!isPlaylist && byteLen === 0) {
-            console.warn('[CapacitorHlsLoader] 0-byte media segment decoded for:', url);
-            callbacks.onError({ code: 0, text: 'Empty media segment' }, context, response, this.stats);
-            return;
-          }
-
-          const elapsedSec = Math.max(0.001, (tEnd - t0) / 1000);
-          const calculatedBw = Math.round((byteLen * 8) / elapsedSec);
-
-          if (this.stats) {
-            this.stats.loaded = byteLen;
-            this.stats.total = byteLen;
-            this.stats.bwEstimate = calculatedBw;
-            this.stats.loading.start = t0;
-            this.stats.loading.first = Math.max(t0 + 1, Math.min(tFirst, tEnd));
-            this.stats.loading.end = tEnd;
-            this.stats.aborted = false;
-          }
-
-          const stats = this.stats || {
-            aborted: false,
-            loaded: byteLen,
-            retry: 0,
-            total: byteLen,
-            chunkCount: 0,
-            bwEstimate: calculatedBw,
-            loading: { start: t0, first: Math.max(t0 + 1, Math.min(tFirst, tEnd)), end: tEnd },
-            parsing: { start: tEnd, end: tEnd },
-            buffering: { start: tEnd, first: tEnd, end: tEnd },
-          };
-
-          callbacks.onSuccess({ data, url: response.url || url, code: response.status || 200 }, stats, context, response);
-        } catch (err) {
-          if (this._aborted) return;
-          console.error('[CapacitorHlsLoader] Exception during load:', err);
-          callbacks.onError({ code: 0, text: err.message || String(err) }, context, null, this.stats);
-        }
-      })();
+      // ⚡ YOUTUBE-LEVEL STREAM LOADER:
+      // On Native Android, StreamInterceptor intercepts all XHR/Fetch requests at the WebView layer
+      // on a background thread and pipes the raw binary bytes directly into Chromium's C++ network stack.
+      // This means super.load() uses standard native XMLHttpRequest with raw ArrayBuffer.
+      // Zero Base64 strings, zero JSON serialization, zero main-thread freezing!
+      return super.load(context, config, sanitizeCallbacks(callbacks));
     }
   };
 }
@@ -1047,6 +875,16 @@ export default function AniPlayer({
         loader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
         pLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
         fLoader: isNativePlatform() ? buildCapacitorHlsLoader(Hls.DefaultConfig.loader, () => refererRef.current, () => embedUrlRef.current) : Hls.DefaultConfig.loader,
+        xhrSetup: (xhr, reqUrl) => {
+          const activeRef = typeof refererRef.current === 'function' ? refererRef.current() : (refererRef.current || referer || '');
+          const activeEmb = typeof embedUrlRef.current === 'function' ? embedUrlRef.current() : (embedUrlRef.current || embedUrl || '');
+          const reqRef = getProperReferer(reqUrl, activeRef || activeEmb || 'https://megaplay.buzz/');
+          if (reqRef) {
+            try {
+              xhr.setRequestHeader('X-AniPlay-Referer', reqRef);
+            } catch (_) {}
+          }
+        },
       });
 
       hlsRef.current = hls;

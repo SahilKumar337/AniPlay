@@ -8,6 +8,8 @@ import android.os.Bundle;
 import android.os.Build;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.view.Window;
 import android.view.WindowManager;
 import android.graphics.Bitmap;
@@ -17,6 +19,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.WindowCompat;
 import com.getcapacitor.BridgeWebChromeClient;
+import com.getcapacitor.BridgeWebViewClient;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -81,6 +84,19 @@ public class MainActivity extends BridgeActivity {
                     } catch (Exception e) {
                         return super.getDefaultVideoPoster();
                     }
+                }
+            });
+
+            // ⚡ YouTube-Level StreamInterceptor: Intercept video segments and playlists on background threads
+            // Eliminates Base64 serialization, JSON parsing, and main-thread freezing.
+            getBridge().setWebViewClient(new BridgeWebViewClient(getBridge()) {
+                @Override
+                public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                    WebResourceResponse intercepted = StreamInterceptor.intercept(request);
+                    if (intercepted != null) {
+                        return intercepted;
+                    }
+                    return super.shouldInterceptRequest(view, request);
                 }
             });
 
