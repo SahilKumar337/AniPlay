@@ -166,7 +166,7 @@ public class EmbedScraperPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-        getActivity().runOnUiThread(this::ensureWebView);
+        // WebView is lazily created on-demand in startScrape() to avoid UI overhead on startup
     }
 
     private void ensureWebView() {
@@ -237,13 +237,6 @@ public class EmbedScraperPlugin extends Plugin {
                 result.cancel();
                 return true;
             }
-            @Override
-            public void onProgressChanged(WebView view, int newProgress) {
-                super.onProgressChanged(view, newProgress);
-                if (newProgress >= 15 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                    view.evaluateJavascript(BOOSTER_JS, null);
-                }
-            }
         });
 
         scrapeWebView.setWebViewClient(new WebViewClient() {
@@ -258,14 +251,6 @@ public class EmbedScraperPlugin extends Plugin {
                     return true;
                 }
                 return false;
-            }
-
-            @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                super.onPageStarted(view, url, favicon);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                    view.evaluateJavascript(BOOSTER_JS, null);
-                }
             }
 
             @Override
@@ -384,11 +369,9 @@ public class EmbedScraperPlugin extends Plugin {
             }
         }
 
-        // Stop loading immediately to conserve mobile network bandwidth and CPU
+        // Stop and destroy scraping WebView immediately to free hardware video decoders and RAM
         getActivity().runOnUiThread(() -> {
-            if (scrapeWebView != null) {
-                scrapeWebView.stopLoading();
-            }
+            destroyWebView();
         });
 
         JSObject data = new JSObject();
@@ -430,7 +413,9 @@ public class EmbedScraperPlugin extends Plugin {
         seenSubUrls.clear();
 
         getActivity().runOnUiThread(() -> {
+            destroyWebView();
             ensureWebView();
+            scrapeWebView.onResume();
             scrapeWebView.stopLoading();
 
             Map<String, String> headers = new HashMap<>();
@@ -525,12 +510,10 @@ public class EmbedScraperPlugin extends Plugin {
     @PluginMethod
     public void stopScrape(final PluginCall call) {
         getActivity().runOnUiThread(() -> {
-            if (scrapeWebView != null) {
-                scrapeWebView.stopLoading();
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 android.webkit.CookieManager.getInstance().flush();
             }
+            destroyWebView();
             call.resolve();
         });
     }

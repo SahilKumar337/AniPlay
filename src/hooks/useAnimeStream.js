@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { getAniNekoServers, getCachedServers, resolvePlaceholderServer, prefetchNextEpisode, getServerSortPriority, resolveSingleServer, isDirectStreamUrl, getEpisodeSubtitles, saveEpisodeSubtitles, checkIsAdultAnime } from '../api/stream';
+import { getAniNekoServers, getCachedServers, saveCachedServers, updateCachedEpisodeServer, resolvePlaceholderServer, prefetchNextEpisode, getServerSortPriority, resolveSingleServer, isDirectStreamUrl, getEpisodeSubtitles, saveEpisodeSubtitles, checkIsAdultAnime, invalidateStreamCache } from '../api/stream';
 import { scrapeEmbedNative, scrapeEmbedDirectly } from '../api/embedScraper';
 import { enrichDubSubtitles, buildAllSubtitleTracks, sortServers, getAiredEpisodeCount } from '../utils/animeStreamUtils';
 
@@ -23,6 +23,7 @@ export function useAnimeStream({
   const [isActiveHLS, setIsActiveHLS] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [activeServer, setActiveServer] = useState(null);
+  const [serverSwitchToken, setServerSwitchToken] = useState(0);
 
   const resolvedEmbedCacheRef = useRef(new Map());
   const activeUrlRef = useRef('');
@@ -39,10 +40,25 @@ export function useAnimeStream({
   const inFlightSubSubsRef = useRef(null);
   const isScrapingRef = useRef(false);
   const fetchStartTimeRef = useRef(Date.now());
+  const serverSwitchTokenRef = useRef(0);
+  // Stores the backup server expander returned by getAniNekoServers.
+  // Called automatically when ALL primary server candidates fail to resolve,
+  // so backup servers appear in the UI without requiring a full page reload.
+  const expandBackupsRef = useRef(null);
 
   // Keep refs in sync with state
   useEffect(() => { serversRef.current = servers; }, [servers]);
+  // ⚡ CRITICAL: audioTrackRef is used in synchronous callbacks (selectServer) so it MUST be
+  // kept in sync both via useEffect AND via the setAudioTrack wrapper to prevent DUB/SUB mismatch.
   useEffect(() => { audioTrackRef.current = audioTrack; }, [audioTrack]);
+
+  // Synchronized audioTrack setter — updates ref immediately (synchronous) then schedules state update
+  const setAudioTrackSync = useCallback((trk) => {
+    audioTrackRef.current = trk;
+    setAudioTrack(trk);
+    userSelectedServerRef.current = false;
+  }, []);
+
 
   const subServers = servers.filter(s => s.type === 'sub');
   const dubServers = servers.filter(s => s.type === 'dub');
@@ -56,6 +72,7 @@ export function useAnimeStream({
     // 1. Check if we already have episode subtitles in persistent cache
     const cachedSubs = getEpisodeSubtitles(animeId, currentEp);
     if (cachedSubs && cachedSubs.length > 0) {
+      if (lastFetchedRef.current !== fetchKey) return;
       const enriched = enrichDubSubtitles(serversRef.current, cachedSubs);
       setServers(enriched);
       serversRef.current = enriched;
@@ -95,10 +112,16 @@ export function useAnimeStream({
       const sortedSubs = [...subList].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name));
       const targetSub = sortedSubs[0];
 
+      // ⚡ 3-second startup delay: let the main HLS stream initialize and buffer before
+      // firing a second resolveSingleServer call that competes for network & CPU.
+      // After the delay, abort if the user navigated to a different episode.
+      await new Promise(r => setTimeout(r, 3000));
+      if (inFlightSubSubsRef.current !== fetchKey || lastFetchedRef.current !== fetchKey) return; // superseded by a newer episode
+
       console.log(`[useAnimeStream] Resolving sub server "${targetSub.name}" in background to share subtitles with DUB...`);
       const resolved = await resolveSingleServer(targetSub, currentAnime, currentEp);
 
-      if (lastFetchedRef.current !== `${currentAnime.id}_${currentEp}`) return;
+      if (lastFetchedRef.current !== fetchKey) return;
 
       if (resolved?.subtitles && resolved.subtitles.length > 0) {
         saveEpisodeSubtitles(animeId, currentEp, resolved.subtitles);
@@ -141,16 +164,27 @@ export function useAnimeStream({
   // selectServer: reads serversRef.current as fallback — stable callback, no array dep
   const selectServer = useCallback(async (srv, srvList, isManual = false) => {
     if (!srv) return;
+    const fetchKeyAtStart = `${anime?.id}_${epParam}`;
+    const srvKey = `${srv.name}_${srv.type || 'sub'}`;
+
+    // Prevent duplicate in-flight resolution if user taps the same server while it is resolving
+    if (isManual && inFlightServerRef.current === srvKey) {
+      console.log(`[useAnimeStream] Server "${srvKey}" already resolving — ignoring duplicate tap`);
+      return;
+    }
+
+    const token = ++serverSwitchTokenRef.current;
     if (isManual) {
       userSelectedServerRef.current = true;
       userSelectedTrackRef.current = true;
+      setServerSwitchToken(token);
     }
-    inFlightServerRef.current = `${srv.name}_${srv.type || 'sub'}`;
+    inFlightServerRef.current = srvKey;
     currentPriorityRef.current = getServerSortPriority(srv.name);
     setActiveServer(srv);
     setActiveName(srv.name || '');
     setActiveType(srv.type || 'sub');
-    if (srv.type && srv.type !== audioTrackRef.current) {
+    if (isManual && srv.type && srv.type !== audioTrackRef.current) {
       setAudioTrack(srv.type);
       audioTrackRef.current = srv.type;
     }
@@ -172,6 +206,7 @@ export function useAnimeStream({
     };
 
     const tryNextServerOrFail = () => {
+      if (token !== serverSwitchTokenRef.current) return;
       srv._failed = true;
       const targetType = srv.type || 'sub';
       const remainingServers = listToUse.filter(s =>
@@ -187,8 +222,15 @@ export function useAnimeStream({
     };
 
     // Placeholder server
-    const isPlaceholder = srv.videoUrl && srv.videoUrl.includes('proxy/placeholder');
+    const isPlaceholder = Boolean(srv.isPlaceholder) || (Boolean(srv.videoUrl) && srv.videoUrl.includes('proxy/placeholder'));
     if (isPlaceholder) {
+      const prevType = audioTrackRef.current || 'sub';
+      const isTrackSwitch = srv.type && srv.type !== prevType;
+      if (isTrackSwitch || lastFetchedRef.current !== fetchKeyAtStart) {
+        // When switching audio tracks or episodes, clear old stream URL so old video doesn't linger
+        setActiveUrl('');
+        activeUrlRef.current = '';
+      }
       setExtracting(true);
       setActiveName(srv.name);
       setActiveType(srv.type || 'sub');
@@ -197,13 +239,13 @@ export function useAnimeStream({
         setExtracting(false);
         const updatedList = listToUse.map(s => {
           if (s.name === srv.name && s.type === srv.type) {
-            return { ...s, ...resolved };
+            return { ...s, ...resolved, isPlaceholder: false };
           }
           return s;
         });
         setServers(updatedList);
         serversRef.current = updatedList;
-        selectServer({ ...srv, ...resolved }, updatedList);
+        selectServer({ ...srv, ...resolved, isPlaceholder: false }, updatedList);
         return;
       } catch (err) {
         setExtracting(false);
@@ -215,10 +257,17 @@ export function useAnimeStream({
     // Unresolved / embed server — lazy resolution on demand
     const isUnresolved = !srv.isHLS || !isDirectStreamUrl(srv.videoUrl);
     if (isUnresolved) {
+      const prevType = audioTrackRef.current || 'sub';
+      const isTrackSwitch = srv.type && srv.type !== prevType;
+      if (isTrackSwitch || lastFetchedRef.current !== fetchKeyAtStart) {
+        // When switching audio tracks or episodes, clear old stream URL so old video/audio doesn't linger
+        setActiveUrl('');
+        activeUrlRef.current = '';
+      }
       setActiveName(srv.name);
       setActiveType(srv.type || 'sub');
       setExtracting(true);
-      // Keep existing activeUrl during extraction so AniPlayer stays mounted with loading overlay,
+      // Keep existing activeUrl during extraction if same track so AniPlayer stays mounted with loading overlay,
       // preventing orientation flicker and preserving playback position across server switches.
 
       try {
@@ -231,6 +280,11 @@ export function useAnimeStream({
 
         // Directly resolve the selected server with in-flight deduplication
         const resolved = await withServerTimeout(resolveSingleServer(srv, anime, epParam));
+
+        if (token !== serverSwitchTokenRef.current || lastFetchedRef.current !== fetchKeyAtStart) {
+          console.log(`[useAnimeStream] Server selection "${srv.name}" superseded by newer selection or episode switch — ignoring`);
+          return;
+        }
 
         setExtracting(false);
 
@@ -262,6 +316,8 @@ export function useAnimeStream({
           setServers(enriched);
           serversRef.current = enriched;
           setAllSubtitleTracks(buildAllSubtitleTracks(enriched));
+          updateCachedEpisodeServer(anime, epParam, updatedSrv);
+          saveCachedServers(anime, epParam, enriched, false);
           if (isDub) {
             resolveSubSubtitlesForDub(anime, epParam);
           }
@@ -290,6 +346,7 @@ export function useAnimeStream({
       setLoadStream(false);
       setExtracting(false);
       inFlightServerRef.current = null;
+      updateCachedEpisodeServer(anime, epParam, srv);
       if (isDub) {
         resolveSubSubtitlesForDub(anime, epParam);
       }
@@ -357,11 +414,17 @@ export function useAnimeStream({
     }
 
     if (lastFetchedRef.current !== fetchKey) {
+      serverSwitchTokenRef.current++;
       userSelectedServerRef.current = false;
+      const pref = localStorage.getItem('anilab_preferred_track') || 'sub';
+      audioTrackRef.current = pref;
+      setAudioTrack(pref);
       // ⚡ Netflix/YouTube Architecture: Isolate episode playback sessions completely.
-      // Purge old episode's servers, activeUrl, and priority so previous episode never leaks into the new one!
+      // Purge old episode's servers, activeUrl, subtitles, and priority so previous episode never leaks into the new one!
       serversRef.current = [];
       setServers([]);
+      setAllSubtitleTracks([]);
+      inFlightSubSubsRef.current = null;
       activeUrlRef.current = '';
       setActiveUrl('');
       setActiveServer(null);
@@ -394,15 +457,46 @@ export function useAnimeStream({
 
         const trackServers = enriched.filter(s => s.type === track);
         let chosen = trackServers.length > 0 ? trackServers[0] : null;
-        if (!chosen && enriched.length > 0) {
+        if (!chosen && enriched.length > 0 && track !== 'dub') {
           chosen = enriched[0];
         }
+        if (!chosen && enriched.length > 0 && track === 'dub') {
+          // If this episode has no DUB servers, auto-fallback to SUB and notify UI
+          chosen = enriched[0];
+          setAudioTrackSync('sub');
+        }
         if (chosen) {
-          if (chosen.type && chosen.type !== audioTrackRef.current) {
-            setAudioTrack(chosen.type);
-            audioTrackRef.current = chosen.type;
-          }
           await selectServer(chosen, enriched, false);
+        }
+
+        // ⚡ If cached servers are partial or have fewer than 3 servers, fetch remaining servers in background
+        const currentTrackCount = enriched.filter(s => s.type === (audioTrackRef.current || 'sub')).length;
+        if (cached?.isPartial || currentTrackCount < 3) {
+          getAniNekoServers(anime, epParam, (partialServers) => {
+            if (!partialServers?.length || lastFetchedRef.current !== fetchKey) return;
+            const existing = serversRef.current || [];
+            const merged = [...existing];
+            partialServers.forEach(ps => {
+              const psName = (ps.name || '').trim().toLowerCase();
+              const psType = (ps.type || 'sub').trim().toLowerCase();
+              const idx = merged.findIndex(x => 
+                (x.name || '').trim().toLowerCase() === psName && 
+                (x.type || 'sub').trim().toLowerCase() === psType
+              );
+              if (idx === -1) {
+                merged.push({ ...ps, name: ps.name, type: ps.type || 'sub' });
+              } else if (ps.isHLS && isDirectStreamUrl(ps.videoUrl) && !merged[idx].isHLS) {
+                merged[idx] = { ...merged[idx], ...ps };
+              }
+            });
+            const sorted = sortServers(merged);
+            const cachedSubs = getEpisodeSubtitles(anime?.id, epParam);
+            const reEnriched = enrichDubSubtitles(sorted, cachedSubs);
+            setServers(reEnriched);
+            serversRef.current = reEnriched;
+            setAllSubtitleTracks(buildAllSubtitleTracks(reEnriched));
+            saveCachedServers(anime, epParam, reEnriched, false);
+          }, false).catch(() => {});
         }
       } else {
         // ── Cold path: eager server selection ──
@@ -419,9 +513,17 @@ export function useAnimeStream({
           const existing = serversRef.current || [];
           const merged = [...existing];
           partialServers.forEach(ps => {
-            const idx = merged.findIndex(x => x.name === ps.name && x.type === ps.type);
+            const psName = (ps.name || '').trim().toLowerCase();
+            const psType = (ps.type || 'sub').trim().toLowerCase();
+            const idx = merged.findIndex(x => 
+              (x.name || '').trim().toLowerCase() === psName && 
+              (x.type || 'sub').trim().toLowerCase() === psType
+            );
             if (idx === -1) {
-              merged.push(ps);
+              merged.push({ ...ps, name: ps.name, type: ps.type || 'sub' });
+            } else if (!ps.isPlaceholder) {
+              // Replace placeholder with real discovered server
+              merged[idx] = { ...merged[idx], ...ps, isPlaceholder: false };
             } else if (ps.isHLS && isDirectStreamUrl(ps.videoUrl) && !merged[idx].isHLS) {
               merged[idx] = { ...merged[idx], ...ps };
             }
@@ -432,9 +534,10 @@ export function useAnimeStream({
           setServers(enriched);
           serversRef.current = enriched;
           setAllSubtitleTracks(buildAllSubtitleTracks(enriched));
+          saveCachedServers(anime, epParam, enriched, true);
           setLoadStream(false);
 
-          if (audioTrackRef.current === 'dub') {
+          if (audioTrackRef.current === 'dub' && !inFlightSubSubsRef.current) {
             resolveSubSubtitlesForDub(anime, epParam);
           }
 
@@ -456,6 +559,15 @@ export function useAnimeStream({
           const topServer = trackServers[0];
           const topName = (topServer.name || '').toLowerCase();
           const isVidstream = topName.includes('vidstream');
+
+          // ⚡ Immediate Direct Stream Selection:
+          // If any discovered server is ALREADY direct HLS (from cache or background resolution),
+          // immediately select and play it without starting an unnecessary candidate race!
+          const directReady = trackServers.find(s => s.isHLS && isDirectStreamUrl(s.videoUrl));
+          if (directReady && !activeUrlRef.current && !userSelectedServerRef.current) {
+            selectServer(directReady, enriched, false).catch(() => {});
+            return;
+          }
 
           // ⚡ PARALLEL RESOLUTION — Race top-3 servers simultaneously.
           // First winner plays instantly; much faster than sequential fallback.
@@ -516,6 +628,16 @@ export function useAnimeStream({
                 const remaining = trackServers.slice(candidatesList.length);
                 if (remaining.length > 0 && !activeUrlRef.current && !userSelectedServerRef.current) {
                   runCandidateRace(remaining.slice(0, 3));
+                } else if (!activeUrlRef.current && !userSelectedServerRef.current) {
+                  // No more candidates — trigger backup server expansion
+                  if (expandBackupsRef.current) {
+                    console.log('[useAnimeStream] All primary servers failed — expanding backup servers');
+                    expandBackupsRef.current();
+                    expandBackupsRef.current = null;
+                  } else {
+                    setExtracting(false);
+                    setLoadStream(false);
+                  }
                 } else {
                   setExtracting(false);
                   setLoadStream(false);
@@ -530,6 +652,10 @@ export function useAnimeStream({
         };
 
         const res = await getAniNekoServers(anime, epParam, onServersFound, false);
+        // Store the backup expander so we can trigger it if primary servers fail
+        if (res?.expandBackups) {
+          expandBackupsRef.current = res.expandBackups;
+        }
         // ⚡ Sequence guard: Discard result if user navigated to a different episode while scraping
         if (lastFetchedRef.current !== fetchKey) return;
         srvList = res?.servers || [];
@@ -561,25 +687,37 @@ export function useAnimeStream({
         }, 3000);
 
         // After ALL scrapers finish: combine srvList with any servers in serversRef.current
-        const allKnown = [...srvList];
+        const allKnown = [...srvList].filter(s => !s.isPlaceholder || (s.embedUrl || s.videoUrl));
         serversRef.current.forEach(ex => {
-          if (!allKnown.some(x => x.name === ex.name && x.type === ex.type)) {
+          if (ex.isPlaceholder && !ex.embedUrl && !ex.videoUrl) return; // DISCARD UNRESOLVED PLACEHOLDERS!
+          const exName = (ex.name || '').trim().toLowerCase();
+          const exType = (ex.type || 'sub').trim().toLowerCase();
+          if (!allKnown.some(x => 
+            (x.name || '').trim().toLowerCase() === exName && 
+            (x.type || 'sub').trim().toLowerCase() === exType
+          )) {
             allKnown.push(ex);
           }
         });
         const sortedFinal = sortServers(allKnown);
         const mergedFinal = sortedFinal.map(s => {
-          const existing = serversRef.current.find(x => x.name === s.name && x.type === s.type);
+          const sName = (s.name || '').trim().toLowerCase();
+          const sType = (s.type || 'sub').trim().toLowerCase();
+          const existing = serversRef.current.find(x => 
+            (x.name || '').trim().toLowerCase() === sName && 
+            (x.type || 'sub').trim().toLowerCase() === sType
+          );
           if (existing?.isHLS) {
             return { ...s, ...existing };
           }
           return s;
-        });
+        }).filter(s => !s.isPlaceholder || (s.embedUrl || s.videoUrl));
         const cachedSubs = getEpisodeSubtitles(anime?.id, epParam);
         const finalEnriched = enrichDubSubtitles(mergedFinal, cachedSubs);
         setServers(finalEnriched);
         serversRef.current = finalEnriched;
         setAllSubtitleTracks(buildAllSubtitleTracks(finalEnriched));
+        saveCachedServers(anime, epParam, finalEnriched, false);
 
         if (audioTrackRef.current === 'dub') {
           resolveSubSubtitlesForDub(anime, epParam);
@@ -593,13 +731,12 @@ export function useAnimeStream({
           }
           let chosen = trackServers.length > 0 ? trackServers[0] : null;
           if (!chosen && finalEnriched.length > 0) {
+            // User requested DUB, but this episode has no DUB servers!
+            // Auto-switch UI and player to SUB
             chosen = finalEnriched[0];
+            setAudioTrackSync('sub');
           }
           if (chosen && chosen.name !== activeName) {
-            if (chosen.type && chosen.type !== audioTrackRef.current) {
-              setAudioTrack(chosen.type);
-              audioTrackRef.current = chosen.type;
-            }
             await selectServer(chosen, finalEnriched, false);
           }
         }
@@ -670,12 +807,13 @@ export function useAnimeStream({
     activeName,
     activeType,
     audioTrack,
-    setAudioTrack,
+    setAudioTrack: setAudioTrackSync, // synchronized version — updates ref + state atomically
     loadStream,
     extracting,
     streamErr,
     isActiveHLS,
     setIsActiveHLS,
+    serverSwitchToken,
     allSubtitleTracks,
     selectServer,
     fetchStream,

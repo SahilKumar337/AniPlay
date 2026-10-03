@@ -14,6 +14,7 @@ import { resolveMegaPlayStream } from '../utils/megaplayDecrypt.js';
 import { resolveVidPlayStream, isVidPlayEmbed } from '../utils/vidplayDecrypt.js';
 import { scrapeEmbedDirectly, unpackUniversalJS } from './embedScraper.js';
 import { getNetworkProfile } from '../utils/networkSpeed.js';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 const clientStreamCache = new Map();
 const CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours cache life for provider metadata
@@ -24,21 +25,13 @@ if (typeof localStorage !== 'undefined') {
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      // Purge only OLD versioned entries
+      // Purge old versioned entries (v20 and older) to ensure complete isolation and prevent episode leaks
       if (k && (
-        k.startsWith('stream_v9_') ||
-        k.startsWith('stream_v10_') ||
-        k.startsWith('stream_v11_') ||
-        k.startsWith('stream_v12_') ||
-        k.startsWith('stream_v13_') ||
-        k.startsWith('stream_v14_') ||
-        k.startsWith('stream_v15_') ||
-        k.startsWith('stream_v16_') ||
-        k.startsWith('res_srv_v12_') ||
-        k.startsWith('res_srv_v13_') ||
-        k.startsWith('res_srv_v14_') ||
-        k.startsWith('res_srv_v15_') ||
-        k.startsWith('res_srv_v16_')
+        k.startsWith('stream_v') && !k.startsWith('stream_v21_') ||
+        k.startsWith('res_srv_') && !k.startsWith('res_srv_v21_') ||
+        k.startsWith('neko_ep_') && !k.startsWith('neko_ep_v21_') ||
+        k.startsWith('waves_servers_') && !k.startsWith('waves_servers_v21_') ||
+        k.startsWith('ep_subs_v1_')
       )) {
         localStorage.removeItem(k);
       }
@@ -70,10 +63,10 @@ export function isDirectStreamUrl(url) {
   );
 }
 
-// ── Slug Persistence Cache ─────────────────────────────────────────────────
+// â”€â”€ Slug Persistence Cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // After successfully resolving a slug for an anime on any scraper, persist it
 // in localStorage. Next time the scraper skips the slow title-search step and
-// jumps directly to the episode fetch — turns ~1.5s search → ~150ms direct.
+// jumps directly to the episode fetch â€” turns ~1.5s search â†’ ~150ms direct.
 const SLUG_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export function getPersistedSlug(animeId, provider) {
@@ -103,7 +96,7 @@ function runWithTimeout(promise, ms, name) {
 }
 
 /**
- * Adaptive timeout — scales based on real network speed.
+ * Adaptive timeout â€” scales based on real network speed.
  * On fast networks (4G/WiFi) keeps original fast timeouts for instant playback.
  * On slow networks (2G/3G/KBs) extends timeouts so scrapers can still complete.
  * This is how YouTube shows all quality options even on 2G.
@@ -111,26 +104,21 @@ function runWithTimeout(promise, ms, name) {
 function getAdaptiveTimeout(baseMs) {
   try {
     const net = getNetworkProfile();
-    if (net.isCriticalSlow) return baseMs * 5;   // 2G / < 0.8 Mbps → 5× (e.g. 4500 → 22500ms)
-    if (net.isSlow)         return baseMs * 3;   // 3G / < 2 Mbps  → 3× (e.g. 4500 → 13500ms)
-    return baseMs;                               // 4G / WiFi      → keep original
+    if (net.isCriticalSlow) return baseMs * 5;   // 2G / < 0.8 Mbps â†’ 5Ã— (e.g. 4500 â†’ 22500ms)
+    if (net.isSlow)         return baseMs * 3;   // 3G / < 2 Mbps  â†’ 3Ã— (e.g. 4500 â†’ 13500ms)
+    return baseMs;                               // 4G / WiFi      â†’ keep original
   } catch { return baseMs; }
 }
 
 /**
- * Known server placeholders — these are shown INSTANTLY in the UI while scraping runs.
+ * Known server placeholders â€” these are shown INSTANTLY in the UI while scraping runs.
  * Same approach YouTube uses: show all quality options immediately, resolve URLs lazily.
  * Placeholders have isPlaceholder=true so the UI can show a loading spinner on them.
  */
 const KNOWN_SERVER_PLACEHOLDERS = [
-  { name: 'Vidstream',  type: 'sub', isPlaceholder: true },
-  { name: 'Vidstream',  type: 'dub', isPlaceholder: true },
-  { name: 'HD-1',       type: 'sub', isPlaceholder: true },
-  { name: 'HD-2',       type: 'sub', isPlaceholder: true },
-  { name: 'Waves',      type: 'sub', isPlaceholder: true },
-  { name: 'Waves',      type: 'dub', isPlaceholder: true },
   { name: 'AniHD',      type: 'sub', isPlaceholder: true },
-  { name: 'AniVid',     type: 'sub', isPlaceholder: true },
+  { name: 'AniHD',      type: 'dub', isPlaceholder: true },
+  { name: 'WavesHD',    type: 'sub', isPlaceholder: true },
   { name: 'MegaPlay',   type: 'sub', isPlaceholder: true },
 ];
 
@@ -162,13 +150,76 @@ export function checkIsAdultAnime(anime) {
 
 export function getCachedServers(anime, episode) {
   const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
+
+  const validateResult = (data) => {
+    if (!data) return null;
+    const epNum = Number(episode);
+    if (data.episode && Number(data.episode) !== epNum) {
+      console.warn(`[getCachedServers] Episode mismatch in cache for ${cacheKey} (has ep ${data.episode}, requested ${epNum}) — invalidating`);
+      invalidateStreamCache(anime, episode);
+      return null;
+    }
+    if (epNum > 1 && data.servers?.length > 0) {
+      try {
+        const baseKey = anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown';
+        const checkEps = [1];
+        if (epNum > 2) checkEps.push(2);
+        if (epNum > 3 && epNum - 1 > 2) checkEps.push(epNum - 1);
+
+        for (const prevEp of checkEps) {
+          const prevKey = `${baseKey}-${prevEp}`;
+          const prevUrls = [];
+          if (clientStreamCache.has(prevKey)) {
+            const srvs = clientStreamCache.get(prevKey)?.data?.servers || [];
+            srvs.forEach(s => {
+              if (s.videoUrl) prevUrls.push(s.videoUrl);
+              if (s.embedUrl) prevUrls.push(s.embedUrl);
+            });
+          } else {
+            const raw = localStorage.getItem(`stream_v21_cache_${prevKey}`);
+            if (raw) {
+              const srvs = JSON.parse(raw)?.data?.servers || [];
+              srvs.forEach(s => {
+                if (s.videoUrl) prevUrls.push(s.videoUrl);
+                if (s.embedUrl) prevUrls.push(s.embedUrl);
+              });
+            }
+          }
+          if (prevUrls.length > 0) {
+            const contaminated = data.servers.some(s =>
+              (s.videoUrl && prevUrls.includes(s.videoUrl)) ||
+              (s.embedUrl && prevUrls.includes(s.embedUrl))
+            );
+            if (contaminated) {
+              console.warn(`[getCachedServers] Purging contaminated cache for episode ${episode} (matches ep ${prevEp} stream)`);
+              invalidateStreamCache(anime, episode);
+              return null;
+            }
+          }
+        }
+
+        // Check if any server stream URL explicitly contains a different episode number tag
+        for (const s of data.servers) {
+          const u = (s.videoUrl || '') + ' ' + (s.embedUrl || '');
+          const match = u.match(/(?:_Episode_|[\/-]episode[\/-]|[\/-]ep[\.\/-])(\d+)(?:[_\.\/-]|$)/i);
+          if (match && Number(match[1]) !== epNum && Number(match[1]) > 0) {
+            console.warn(`[getCachedServers] Purging cache for episode ${episode} (URL contains ep ${match[1]} tag)`);
+            invalidateStreamCache(anime, episode);
+            return null;
+          }
+        }
+      } catch (_) {}
+    }
+    return data;
+  };
+
   if (clientStreamCache.has(cacheKey)) {
     const cached = clientStreamCache.get(cacheKey);
     if (!cached.data?.isPartial) {
       const hasTokenizedUrl = cached.data?.servers?.some(s => s.videoUrl && (s.videoUrl.includes('token=') || s.videoUrl.includes('.m3u8')));
       const effectiveTtl = hasTokenizedUrl ? TOKEN_CACHE_TTL : CACHE_TTL;
       if (Date.now() - cached.timestamp < effectiveTtl) {
-        return cached.data;
+        return validateResult(cached.data);
       } else {
         clientStreamCache.delete(cacheKey);
       }
@@ -176,20 +227,20 @@ export function getCachedServers(anime, episode) {
   }
   // Check localStorage persistence (0.05ms instant hit across app restarts)
   try {
-    const raw = localStorage.getItem(`stream_v18_cache_${cacheKey}`);
+    const raw = localStorage.getItem(`stream_v21_cache_${cacheKey}`);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed.data?.isPartial) {
-        localStorage.removeItem(`stream_v18_cache_${cacheKey}`);
+        localStorage.removeItem(`stream_v21_cache_${cacheKey}`);
         return null;
       }
       const hasTokenizedUrl = parsed.data?.servers?.some(s => s.videoUrl && (s.videoUrl.includes('token=') || s.videoUrl.includes('.m3u8')));
       const effectiveTtl = hasTokenizedUrl ? TOKEN_CACHE_TTL : CACHE_TTL;
       if (Date.now() - parsed.timestamp < effectiveTtl) {
         clientStreamCache.set(cacheKey, parsed);
-        return parsed.data;
+        return validateResult(parsed.data);
       } else {
-        localStorage.removeItem(`stream_v18_cache_${cacheKey}`);
+        localStorage.removeItem(`stream_v21_cache_${cacheKey}`);
       }
     }
   } catch {}
@@ -201,16 +252,13 @@ export function invalidateStreamCache(anime, episode) {
   const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
   clientStreamCache.delete(cacheKey);
   try {
-    localStorage.removeItem(`stream_v18_cache_${cacheKey}`);
+    localStorage.removeItem(`stream_v21_cache_${cacheKey}`);
+    localStorage.removeItem(`stream_v20_cache_${cacheKey}`);
+    localStorage.removeItem(`stream_v19_cache_${cacheKey}`);
     localStorage.removeItem(`stream_v17_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v16_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v15_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v14_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v13_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v12_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v11_cache_${cacheKey}`);
-    localStorage.removeItem(`stream_v10_cache_${cacheKey}`);
-    sessionStorage.removeItem(`stream_v18_cache_${cacheKey}`);
+    sessionStorage.removeItem(`stream_v21_cache_${cacheKey}`);
+    sessionStorage.removeItem(`stream_v20_cache_${cacheKey}`);
+    sessionStorage.removeItem(`stream_v19_cache_${cacheKey}`);
     sessionStorage.removeItem(`stream_v17_cache_${cacheKey}`);
     sessionStorage.removeItem(`stream_v16_cache_${cacheKey}`);
     sessionStorage.removeItem(`stream_v15_cache_${cacheKey}`);
@@ -219,11 +267,119 @@ export function invalidateStreamCache(anime, episode) {
   console.log(`[ClientEngine] Invalidated stream cache for: ${cacheKey}`);
 }
 
+/**
+ * Persists an episode's servers, merging with already cached ones and keeping direct HLS streams.
+ */
+export function saveCachedServers(anime, episode, servers, isPartial = false) {
+  if (!anime || !episode || !servers || servers.length === 0) return;
+  const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
+  
+  let existingServers = [];
+  if (clientStreamCache.has(cacheKey)) {
+    existingServers = clientStreamCache.get(cacheKey)?.data?.servers || [];
+  } else {
+    try {
+      const raw = localStorage.getItem(`stream_v21_cache_${cacheKey}`);
+      if (raw) {
+        existingServers = JSON.parse(raw)?.data?.servers || [];
+      }
+    } catch {}
+  }
+
+  const merged = [...servers];
+  for (const ex of existingServers) {
+    const exName = (ex.name || '').trim().toLowerCase();
+    const exType = (ex.type || 'sub').trim().toLowerCase();
+    const matchIdx = merged.findIndex(m => 
+      (m.name || '').trim().toLowerCase() === exName && 
+      (m.type || 'sub').trim().toLowerCase() === exType
+    );
+    if (matchIdx === -1) {
+      merged.push(ex);
+    } else if (ex.isHLS && isDirectStreamUrl(ex.videoUrl) && !merged[matchIdx].isHLS) {
+      // Keep previously resolved direct HLS stream ONLY if embed URLs match or are absent
+      if (!ex.embedUrl || !merged[matchIdx].embedUrl || ex.embedUrl === merged[matchIdx].embedUrl) {
+        merged[matchIdx] = { ...merged[matchIdx], ...ex };
+      }
+    }
+  }
+
+  const resultData = {
+    ok: true,
+    episode: Number(episode),
+    servers: merged,
+    animeTitle: anime?.title?.romaji || anime?.title?.english || 'Anime',
+    isPartial,
+  };
+
+  const entry = { data: resultData, timestamp: Date.now() };
+  clientStreamCache.set(cacheKey, entry);
+  try {
+    localStorage.setItem(`stream_v21_cache_${cacheKey}`, JSON.stringify(entry));
+    sessionStorage.setItem(`stream_v21_cache_${cacheKey}`, JSON.stringify(entry));
+  } catch {}
+}
+
+/**
+ * Updates a single resolved direct server in the episode cache so reloads are 0ms instant!
+ */
+export function updateCachedEpisodeServer(anime, episode, resolvedServer) {
+  if (!anime || !episode || !resolvedServer?.videoUrl || !isDirectStreamUrl(resolvedServer.videoUrl)) return;
+  const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
+  
+  let entry = clientStreamCache.get(cacheKey);
+  if (!entry) {
+    try {
+      const raw = localStorage.getItem(`stream_v21_cache_${cacheKey}`);
+      if (raw) entry = JSON.parse(raw);
+    } catch {}
+  }
+
+  if (entry?.data?.servers) {
+    entry.data.episode = Number(episode);
+    const targetName = (resolvedServer.name || '').trim().toLowerCase();
+    const targetType = (resolvedServer.type || 'sub').trim().toLowerCase();
+    let updated = false;
+
+    entry.data.servers = entry.data.servers.map(s => {
+      const sName = (s.name || '').trim().toLowerCase();
+      const sType = (s.type || 'sub').trim().toLowerCase();
+      if (sName === targetName && sType === targetType) {
+        updated = true;
+        return {
+          ...s,
+          videoUrl: resolvedServer.videoUrl,
+          isHLS: Boolean(resolvedServer.isHLS),
+          subtitles: (resolvedServer.subtitles?.length > 0) ? resolvedServer.subtitles : s.subtitles,
+          referer: resolvedServer.referer || s.referer,
+          _subtitlesPending: false
+        };
+      }
+      return s;
+    });
+
+    if (!updated) {
+      entry.data.servers.push({
+        ...resolvedServer,
+        isHLS: Boolean(resolvedServer.isHLS),
+        _subtitlesPending: false
+      });
+    }
+
+    entry.timestamp = Date.now();
+    clientStreamCache.set(cacheKey, entry);
+    try {
+      localStorage.setItem(`stream_v21_cache_${cacheKey}`, JSON.stringify(entry));
+      sessionStorage.setItem(`stream_v21_cache_${cacheKey}`, JSON.stringify(entry));
+    } catch {}
+  }
+}
+
 // Persistent in-memory cache for lazily resolved single server streams
 const resolvedServerStreamCache = new Map();
 const inFlightResolutions = new Map();
 
-// ── Episode Subtitles Persistent Cache ──────────────────────────────────────
+// â”€â”€ Episode Subtitles Persistent Cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const episodeSubtitlesCache = new Map();
 const EPISODE_SUBS_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -234,7 +390,7 @@ export function getEpisodeSubtitles(animeId, episode) {
     return episodeSubtitlesCache.get(key);
   }
   try {
-    const raw = localStorage.getItem(`ep_subs_v1_${key}`);
+    const raw = localStorage.getItem(`ep_subs_v2_${key}`);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (!parsed.expires || Date.now() < parsed.expires) {
@@ -243,7 +399,7 @@ export function getEpisodeSubtitles(animeId, episode) {
           return parsed.subtitles;
         }
       } else {
-        localStorage.removeItem(`ep_subs_v1_${key}`);
+        localStorage.removeItem(`ep_subs_v2_${key}`);
       }
     }
   } catch (_) {}
@@ -267,7 +423,7 @@ export function saveEpisodeSubtitles(animeId, episode, subtitles) {
 
   episodeSubtitlesCache.set(key, merged);
   try {
-    localStorage.setItem(`ep_subs_v1_${key}`, JSON.stringify({
+    localStorage.setItem(`ep_subs_v2_${key}`, JSON.stringify({
       subtitles: merged,
       expires: Date.now() + EPISODE_SUBS_CACHE_TTL
     }));
@@ -286,23 +442,19 @@ export function invalidateServerStreamCache(server, anime, episode) {
   resolvedServerStreamCache.delete(cacheKey);
   inFlightResolutions.delete(cacheKey);
   try {
-    localStorage.removeItem(`res_srv_v18_${cacheKey}`);
+    localStorage.removeItem(`res_srv_v21_${cacheKey}`);
+    localStorage.removeItem(`res_srv_v20_${cacheKey}`);
+    localStorage.removeItem(`res_srv_v19_${cacheKey}`);
     localStorage.removeItem(`res_srv_v17_${cacheKey}`);
-    localStorage.removeItem(`res_srv_v14_${cacheKey}`);
-    localStorage.removeItem(`res_srv_v13_${cacheKey}`);
-    localStorage.removeItem(`res_srv_v12_${cacheKey}`);
-    localStorage.removeItem(`res_srv_v11_${cacheKey}`);
   } catch {}
   // Also clear the episode's stream cache so auto-failover/retry gets fresh servers
   const epCacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
   clientStreamCache.delete(epCacheKey);
   try {
-    localStorage.removeItem(`stream_v18_cache_${epCacheKey}`);
+    localStorage.removeItem(`stream_v21_cache_${epCacheKey}`);
+    localStorage.removeItem(`stream_v20_cache_${epCacheKey}`);
+    localStorage.removeItem(`stream_v19_cache_${epCacheKey}`);
     localStorage.removeItem(`stream_v17_cache_${epCacheKey}`);
-    localStorage.removeItem(`stream_v14_cache_${epCacheKey}`);
-    localStorage.removeItem(`stream_v13_cache_${epCacheKey}`);
-    localStorage.removeItem(`stream_v12_cache_${epCacheKey}`);
-    localStorage.removeItem(`stream_v11_cache_${epCacheKey}`);
   } catch {}
   console.log(`[StreamEngine] Invalidated server stream cache for: ${server.name} (ep ${episode})`);
 }
@@ -365,9 +517,19 @@ export async function resolveSingleServer(server, anime, episode) {
     return inFlightResolutions.get(cacheKey);
   }
 
+  const embedUrl = server.embedUrl || server.videoUrl;
+  if (!embedUrl || !embedUrl.startsWith('http')) return server;
+
+  // âš¡ CRITICAL FIX: URL-based dedup key MUST include episode to prevent cross-episode stream contamination.
+  // Without the episode, ep1 and ep12 sharing the same embed URL would return ep1's resolved stream for ep12!
+  const urlKey = `url_ep${episode}_${embedUrl}`;
+  if (inFlightResolutions.has(urlKey)) {
+    return inFlightResolutions.get(urlKey);
+  }
+
   // 3. LocalStorage persistence check (0.05ms instant hit across app restarts)
   try {
-    const sess = localStorage.getItem(`res_srv_v18_${cacheKey}`);
+    const sess = localStorage.getItem(`res_srv_v21_${cacheKey}`);
     if (sess) {
       const parsed = JSON.parse(sess);
       const isFresh = !parsed.expires || Date.now() < parsed.expires;
@@ -383,10 +545,8 @@ export async function resolveSingleServer(server, anime, episode) {
     }
   } catch {}
 
-  const embedUrl = server.embedUrl || server.videoUrl;
-  if (!embedUrl || !embedUrl.startsWith('http')) return server;
-
-  const resolutionPromise = (async () => {
+  let resolutionPromise;
+  resolutionPromise = (async () => {
     console.log(`[StreamEngine] Lazily resolving single server "${server.name}" (${embedUrl.slice(0, 80)})...`);
 
   let resolvedStreamUrl = null;
@@ -398,16 +558,27 @@ export async function resolveSingleServer(server, anime, episode) {
     const urlObj = new URL(embedUrl);
     serverReferer = serverReferer || `${urlObj.origin}/`;
 
-    // ── Handler A: MegaPlay / MegaCloud embeds ──
-    const isMega = embedUrl.includes('megaplay') || embedUrl.includes('megacloud') || embedUrl.includes('anineko.es');
+    // â”€â”€ Handler A: MegaPlay / MegaCloud embeds (including Akirax, DokiCloud, etc.) â”€â”€
+    const lowEmbed = embedUrl.toLowerCase();
+    const isMega = lowEmbed.includes('megaplay') || lowEmbed.includes('megacloud') || lowEmbed.includes('anineko.es')
+      || lowEmbed.includes('rabbitstream') || lowEmbed.includes('mfast') || lowEmbed.includes('rapid-cloud')
+      || lowEmbed.includes('kryntal') || lowEmbed.includes('norami') || lowEmbed.includes('imgnex')
+      || lowEmbed.includes('dokicloud') || lowEmbed.includes('akirax') || lowEmbed.includes('shiora')
+      || lowEmbed.includes('mikora') || lowEmbed.includes('quavex') || lowEmbed.includes('nexabloom')
+      || lowEmbed.includes('streamzone') || lowEmbed.includes('silverorbit') || lowEmbed.includes('midnightvale')
+      || lowEmbed.includes('hiddenvertex') || lowEmbed.includes('vertex');
     if (isMega) {
       serverReferer = 'https://megaplay.buzz/';
       let dataId = null;
 
-      const megaHost = urlObj.origin.includes('anineko.es') ? 'https://megaplay.buzz' : urlObj.origin;
-      const sParam = urlObj.searchParams.get('s');
+      const megaHost = (urlObj.origin.includes('anineko.es') || lowEmbed.includes('megaplay')) ? 'https://megaplay.buzz' : urlObj.origin;
+      const rawSParam = urlObj.searchParams.get('s');
+      // âš¡ CRITICAL: Never pass 'tcdn' (TikTok CDN). In India and other countries, *.tiktokcdn.com is blocked
+      // by ISPs at the network firewall level, causing Hls.js to hang at 0:00/0:00 indefinitely.
+      // Omitting s=tcdn forces MegaPlay to return the fast global CDN (nexabloom.top / midnightvale.top).
+      const sParam = (rawSParam && rawSParam !== 'tcdn') ? rawSParam : null;
 
-      // ── ROOT-CAUSE FIX FOR WRONG ANIME PLAYBACK ──
+      // â”€â”€ ROOT-CAUSE FIX FOR WRONG ANIME PLAYBACK â”€â”€
       // On MegaPlay, URL path segments (e.g. /stream/s-2/3303/sub) contain the host site's
       // internal episode index (realid=3303), NOT MegaPlay's source file ID!
       // Passing that episode index to /stream/getSources?id=3303 loads a completely different, random anime.
@@ -417,6 +588,11 @@ export async function resolveSingleServer(server, anime, episode) {
           referer: serverReferer,
           timeout: 6000
         });
+
+        if (!pageHtml || pageHtml.includes('Oops! Something went wrong') || pageHtml.includes('Error Code: <span>404</span>')) {
+          console.warn(`[StreamEngine] Embed ${embedUrl} returned 404 error page â€” skipping`);
+          return server;
+        }
 
         const idMatch = pageHtml.match(/data-id="(\d+)"/i) || 
                         pageHtml.match(/id="player"\s+data-id="(\d+)"/i) || 
@@ -445,7 +621,22 @@ export async function resolveSingleServer(server, anime, episode) {
           });
 
           const sourcesData = typeof sourcesResp === 'string' ? JSON.parse(sourcesResp) : sourcesResp;
-          const directM3u8 = await resolveMegaPlayStream(sourcesData);
+          let directM3u8 = await resolveMegaPlayStream(sourcesData);
+          if (directM3u8 && directM3u8.includes('tiktokcdn.com')) {
+            // Guard: If it ever returns a TikTok CDN URL, retry without s parameter to get clean CDN
+            try {
+              const fbResp = await clientFetch(`${megaHost}/stream/getSources?id=${dataId}`, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                referer: embedUrl,
+                timeout: 5000
+              });
+              const fbData = typeof fbResp === 'string' ? JSON.parse(fbResp) : fbResp;
+              const cleanM3u8 = await resolveMegaPlayStream(fbData);
+              if (cleanM3u8 && !cleanM3u8.includes('tiktokcdn.com')) {
+                directM3u8 = cleanM3u8;
+              }
+            } catch (_) {}
+          }
           if (directM3u8) {
             resolvedStreamUrl = directM3u8;
             isHls = true;
@@ -475,7 +666,7 @@ export async function resolveSingleServer(server, anime, episode) {
       }
     }
 
-    // ── Handler B: EchoVideo / AniWaves embeds ──
+    // â”€â”€ Handler B: EchoVideo / AniWaves embeds â”€â”€
     if (!resolvedStreamUrl && (embedUrl.includes('echovideo') || embedUrl.includes('waves') || server.name.includes('Waves'))) {
       const wavesRes = await extractWavesDirectStream(embedUrl);
       if (wavesRes?.videoUrl) {
@@ -484,8 +675,8 @@ export async function resolveSingleServer(server, anime, episode) {
       }
     }
 
-    // ── Handler C.5: VidPlay / VidTube (AniVid) ──
-    // Dedicated futoken-based request-signing decryptor — like MegaPlay but for VidPlay.
+    // â”€â”€ Handler C.5: VidPlay / VidTube (AniVid) â”€â”€
+    // Dedicated futoken-based request-signing decryptor â€” like MegaPlay but for VidPlay.
     // Replaces the slow iframe proxy fallback with a direct <500ms API call.
     if (!resolvedStreamUrl && isVidPlayEmbed(embedUrl)) {
       console.log(`[StreamEngine] VidPlay detected, using dedicated decryptor for: ${embedUrl.slice(0, 80)}`);
@@ -500,21 +691,25 @@ export async function resolveSingleServer(server, anime, episode) {
           }
           console.log(`[StreamEngine] VidPlay decryptor SUCCESS: ${resolvedStreamUrl.slice(0, 80)}`);
         } else {
-          console.warn('[StreamEngine] VidPlay decryptor returned no URL — falling back to universal scraper');
+          console.warn('[StreamEngine] VidPlay decryptor returned no URL â€” falling back to universal scraper');
         }
       } catch (vidErr) {
         console.warn('[StreamEngine] VidPlay decryptor threw:', vidErr.message);
       }
     }
 
-    // ── Handler C: Universal Direct Embed Scraper Fallback ──
+    // â”€â”€ Handler C: Universal Direct Embed Scraper Fallback â”€â”€
     if (!resolvedStreamUrl) {
-      const direct = await scrapeEmbedDirectly(embedUrl, serverReferer);
-      if (direct?.videoUrl || direct?.url) {
-        resolvedStreamUrl = direct.videoUrl || direct.url;
-        isHls = direct.isHLS !== undefined ? direct.isHLS : (resolvedStreamUrl.includes('.m3u8'));
-        if (direct.subtitles?.length) {
-          resolvedSubtitles = direct.subtitles;
+      const low = (embedUrl || '').toLowerCase();
+      // Skip dead endpoints and 404s to prevent mobile WebView freeze
+      if (!low.includes('megaplay.buzz/stream/mal') && !low.includes('/404') && !server.videoUrl?.includes('404')) {
+        const direct = await scrapeEmbedDirectly(embedUrl, serverReferer);
+        if (direct?.videoUrl || direct?.url) {
+          resolvedStreamUrl = direct.videoUrl || direct.url;
+          isHls = direct.isHLS !== undefined ? direct.isHLS : (resolvedStreamUrl.includes('.m3u8'));
+          if (direct.subtitles?.length) {
+            resolvedSubtitles = direct.subtitles;
+          }
         }
       }
     }
@@ -544,7 +739,7 @@ export async function resolveSingleServer(server, anime, episode) {
     saveEpisodeSubtitles(animeId, episode, resolvedSubtitles);
   }
 
-  // Persist resolved data — always update cache with latest subtitles even if
+  // Persist resolved data â€” always update cache with latest subtitles even if
   const isValidDirectStream = isDirectStreamUrl(resolvedStreamUrl);
   const resolvedData = {
     videoUrl: isValidDirectStream ? resolvedStreamUrl : server.videoUrl,
@@ -557,17 +752,23 @@ export async function resolveSingleServer(server, anime, episode) {
     resolvedServerStreamCache.set(cacheKey, resolvedData);
     try {
       const storageEntry = { ...resolvedData, expires: Date.now() + TOKEN_CACHE_TTL }; // 20 min TTL — CDN tokens expire fast
-      localStorage.setItem(`res_srv_v18_${cacheKey}`, JSON.stringify(storageEntry));
+      localStorage.setItem(`res_srv_v21_${cacheKey}`, JSON.stringify(storageEntry));
     } catch {}
+
+    // âš¡ Instant Reload: Update the episode's cached server list so reloads are 0ms!
+    updateCachedEpisodeServer(anime, episode, {
+      ...server,
+      ...resolvedData,
+      isHLS: Boolean(isHls),
+      _subtitlesPending: false
+    });
   }
 
   if (isValidDirectStream) {
-    // Pre-fetch master playlist, level playlist, and Fragment 0 in background for 0ms instant playback
-    prefetchM3U8AndFirstSegment(resolvedStreamUrl, serverReferer).catch(() => {});
     return { ...server, ...resolvedData, _subtitlesPending: false };
   }
 
-  // Stream URL not resolved but subtitles were fetched — return merged
+  // Stream URL not resolved but subtitles were fetched â€” return merged
   if (resolvedSubtitles.length > 0) {
     return { ...server, subtitles: resolvedSubtitles, _subtitlesPending: false };
   }
@@ -576,16 +777,18 @@ export async function resolveSingleServer(server, anime, episode) {
   })();
 
   inFlightResolutions.set(cacheKey, resolutionPromise);
+  inFlightResolutions.set(urlKey, resolutionPromise);
   try {
     return await resolutionPromise;
   } finally {
     inFlightResolutions.delete(cacheKey);
+    inFlightResolutions.delete(urlKey);
   }
 }
 
 /**
  * Priority lineup strictly requested by user:
- * AniHD (1) → AniVid (2) → Neko-HD-2 (3) → WavesHD (4) → NekoHD (5)
+ * AniHD (1) â†’ AniVid (2) â†’ Neko-HD-2 (3) â†’ WavesHD (4) â†’ NekoHD (5)
  * HardSub variants are placed immediately after their softsub counterparts (+0.5).
  * DUB variants are placed after SUB servers (+100).
  */
@@ -597,11 +800,11 @@ export function getServerSortPriority(name) {
 
   let base = 6;
   if (low.includes('hstream') || low.includes('hentaicity') || low.includes('hentai') || low.includes('adult')) {
-    base = low.includes('hstream') ? 0.5 : 0.6; // Dedicated adult CDNs — top priority
+    base = low.includes('hstream') ? 0.5 : 0.6; // Dedicated adult CDNs â€” top priority
   } else if (n.startsWith('AniHD') || low.includes('anihd')) {
-    base = 1.0; // AniHD (PRIMARY DEFAULT SERVER — 1080p multi-quality HLS + 13 subtitles)
+    base = 1.0; // AniHD (PRIMARY DEFAULT SERVER â€” 1080p multi-quality HLS + 13 subtitles)
   } else if (n.startsWith('MegaPlay') || low.includes('megaplay')) {
-    base = 1.2; // MegaPlay (PRIMARY DEFAULT SERVER — 1080p clean HLS)
+    base = 1.2; // MegaPlay (PRIMARY DEFAULT SERVER â€” 1080p clean HLS)
   } else if (low.includes('vidstream-2') || low.includes('vidstream') || low.includes('neko-vidstream') || low.includes('vidstreaming')) {
     base = 1.4; // Vidstream / Vidstream-2 (1080p clean video)
   } else if (n.startsWith('AniVid') || low.includes('anivid')) {
@@ -615,7 +818,7 @@ export function getServerSortPriority(name) {
   } else if (low.includes('earnvids') || low.includes('neko-earnvids')) {
     base = 4.0; // Earnvids (otakuvid direct 1080p HLS via unpackUniversalJS)
   } else if (low === 'hd-1' || low.startsWith('hd-1') || low.includes('nekohd')) {
-    base = 5.0; // HD-1 (AniNeko MP4 fallback — never default!)
+    base = 5.0; // HD-1 (AniNeko MP4 fallback â€” never default!)
   } else if (low.includes('vivibebe') || low.includes('bibiemb')) {
     base = 9.0; // Deprecated/broken servers (ibyteimg 403)
   }
@@ -636,45 +839,35 @@ export function prefetchNextEpisode(anime, currentEpisode, totalEps) {
   if (!anime || !currentEpisode) return;
   // On slow/congested networks, skip prefetching to preserve bandwidth for currently playing video
   if (getNetworkProfile().isSlow) {
-    console.log('[Prefetch] Network is slow/congested — skipping next-episode prefetch to prevent rebuffering');
+    console.log('[Prefetch] Network is slow/congested â€” skipping next-episode prefetch to prevent rebuffering');
     return;
   }
-  const nextEp = currentEpisode + 1;
-  if (totalEps && nextEp > totalEps) return; // already at last episode
+  const epNum = Number(currentEpisode);
+  if (isNaN(epNum) || epNum <= 0) return;
+  const nextEp = epNum + 1;
+  if (totalEps && nextEp > Number(totalEps)) return; // already at last episode
 
   const cacheKey = `${anime.id || anime.idMal || anime.title?.romaji || 'unknown'}-${nextEp}`;
   if (clientStreamCache.has(cacheKey)) {
     const cached = clientStreamCache.get(cacheKey);
     if (Date.now() - cached.timestamp < CACHE_TTL) {
-      console.log(`[Prefetch] Episode ${nextEp} already cached — warming video stream...`);
-      const top = cached.data?.servers?.find(s => s.type === 'sub') || cached.data?.servers?.[0];
-      if (top) {
-        resolveSingleServer(top, anime, nextEp).then(streamResult => {
-          if (streamResult?.videoUrl) {
-            prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
-          }
-        }).catch(() => {});
-      }
+      console.log(`[Prefetch] Episode ${nextEp} already cached â€” skipping network prefetch`);
       return;
     }
   }
 
-  console.log(`[Prefetch] Warming all scrapers & top stream for episode ${nextEp}...`);
-  // Fire-and-forget: errors are swallowed, this is best-effort
-  // onlyNeko=false → pre-warms AniNeko + AniWaves + AniKoto simultaneously
-  getAniNekoServers(anime, nextEp, null, false).then(res => {
+  console.log(`[Prefetch] Warming fast server list for episode ${nextEp}...`);
+  // âš¡ CRITICAL FIX: onlyNeko = true!
+  // Fast, lightweight query using AniNeko mapped slug or Cloudflare KV cache (<50ms).
+  // NEVER fire heavy 3-scraper passes (AniWaves, AniKoto) or spawn WebViews in the background while video is actively playing!
+  getAniNekoServers(anime, nextEp, null, true).then(res => {
     if (res?.servers?.length > 0) {
-      const top = res.servers.find(s => s.type === 'sub') || res.servers[0];
-      if (top) {
-        resolveSingleServer(top, anime, nextEp).then(streamResult => {
-          if (streamResult?.videoUrl) {
-            prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
-          }
-        }).catch(() => {});
-      }
+      console.log(`[Prefetch] Successfully pre-warmed ${res.servers.length} servers for episode ${nextEp}`);
     }
   }).catch(() => {});
 }
+
+const inFlightScrapes = new Map();
 
 export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko = false) {
   const cacheKey = `${anime?.id || anime?.idMal || anime?.title?.romaji || 'unknown'}-${episode}`;
@@ -685,6 +878,19 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
     console.log(`[ClientEngine] [Cache Hit] Serving cached servers instantly (0.05ms) for: ${cacheKey}`);
     if (onServersFound) onServersFound(cachedServers.servers);
     return cachedServers;
+  }
+
+  // Deduplicate concurrent scrape requests for the same anime + episode
+  const scrapeKey = `${cacheKey}_${onlyNeko}`;
+  if (inFlightScrapes.has(scrapeKey)) {
+    console.log(`[ClientEngine] Deduplicating concurrent scrape for: ${scrapeKey}`);
+    const inFlightPromise = inFlightScrapes.get(scrapeKey);
+    return inFlightPromise.then(res => {
+      if (onServersFound && res?.servers?.length > 0) {
+        onServersFound(res.servers);
+      }
+      return res;
+    });
   }
 
   // Collect all title variants (romaji, english, native) plus useful synonyms
@@ -734,51 +940,134 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
   let activeSlug = '';
   const isMovie = anime.format === 'MOVIE';
 
-  const handleScraperResult = (data) => {
+  // â”€â”€ Smart Primary/Backup Server System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // PRIMARY servers: one best server per scraper (AniNeko top-ranked, WavesHD, AniHD from AniKoto)
+  // BACKUP servers:  all remaining servers from each scraper, stored and expanded lazily
+  //                  only when the user clicks a primary server that fails to resolve.
+  // This drastically reduces scraping load (3 requests â†’ shown immediately)
+  // and prevents app freeze from massive parallel scrapes.
+
+  // PRIMARY server names per scraper (ordered by preference)
+  const NEKO_PRIMARY_SERVERS = ['Vidstream', 'Vidstream-2'];
+  const WAVES_PRIMARY_SERVERS = ['WavesHD'];
+  const KOTO_PRIMARY_SERVERS = ['AniHD', 'MegaPlay', 'AniVid'];
+
+  // Backup server registry: cacheKey â†’ Array of remaining servers not yet shown
+  // These are only injected into the UI when a primary server fails
+  const backupServerRegistry = new Map();
+
+  /**
+   * Picks primary servers from a scraper's server list based on primaryNames.
+   * Multiple distinct primary servers (e.g. AniHD + MegaPlay) are preserved.
+   * Remaining servers are stored in backupServerRegistry for lazy expansion.
+   */
+  const selectPrimaryServer = (scraperLabel, allScraperServers, primaryNames) => {
+    const validServers = allScraperServers.filter(s => {
+      const sNameLow = (s.name || '').toLowerCase();
+      const sEmbedLow = (s.embedUrl || '').toLowerCase();
+      const sVideoLow = (s.videoUrl || '').toLowerCase();
+      if (sNameLow.includes('dood') || sNameLow.includes('playmogo') || sEmbedLow.includes('dood') || sEmbedLow.includes('playmogo')) return false;
+      if (sEmbedLow.includes('bibiemb') || sVideoLow.includes('bibiemb') || sVideoLow.includes('vibevibe.workers.dev')) return false;
+      if (sEmbedLow.includes('vivibebe') || sVideoLow.includes('vivibebe') || sVideoLow.includes('ibyteimg')) return false;
+      return true;
+    });
+
+    const subServers = validServers.filter(s => s.type !== 'dub');
+    const dubServers = validServers.filter(s => s.type === 'dub');
+
+    // Collect all designated primary sub servers
+    const primarySubs = [];
+    for (const pName of primaryNames) {
+      const found = subServers.find(s => {
+        const base = (s.name || '').replace(/\s*\(DUB\)\s*/i, '').trim();
+        return base === pName || base.startsWith(pName);
+      });
+      if (found && !primarySubs.some(x => x.name === found.name)) {
+        primarySubs.push(found);
+      }
+    }
+    if (primarySubs.length === 0 && subServers.length > 0) {
+      primarySubs.push([...subServers].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name))[0]);
+    }
+
+    // Collect all designated primary dub servers
+    const primaryDubs = [];
+    for (const pName of primaryNames) {
+      const found = dubServers.find(s => {
+        const base = (s.name || '').replace(/\s*\(DUB\)\s*/i, '').trim();
+        return base === pName || base.startsWith(pName);
+      });
+      if (found && !primaryDubs.some(x => x.name === found.name)) {
+        primaryDubs.push(found);
+      }
+    }
+    if (primaryDubs.length === 0 && dubServers.length > 0) {
+      primaryDubs.push([...dubServers].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name))[0]);
+    }
+
+    const primarySet = [...primarySubs, ...primaryDubs].filter(Boolean);
+    const primaryNames_ = new Set(primarySet.map(s => `${s.name}_${s.type}`));
+    const backups = validServers.filter(s => !primaryNames_.has(`${s.name}_${s.type}`));
+
+    // Store backups for this scraper â€” will be injected later if needed
+    if (backups.length > 0) {
+      const existing = backupServerRegistry.get(cacheKey) || [];
+      backupServerRegistry.set(cacheKey, [...existing, ...backups]);
+    }
+
+    console.log(`[ClientEngine] [${scraperLabel}] Primary: [${primarySet.map(s=>s.name+'('+s.type+')').join(', ')}] | Backups stored: ${backups.length}`);
+    return primarySet;
+  };
+
+  const handleScraperResult = (data, primaryNames, scraperLabel) => {
     if (data?.servers?.length) {
-      data.servers.forEach(s => {
+      // Select primary servers and store backups
+      const primaryServers = primaryNames
+        ? selectPrimaryServer(scraperLabel, data.servers, primaryNames)
+        : data.servers; // onlyNeko path: use all
+
+      primaryServers.forEach(s => {
         const baseName = s.name.replace(/\s*\(DUB\)\s*/i, '').trim().split(' ')[0];
         const sNameLow = (s.name || '').toLowerCase();
-        const sEmbedLow = (s.embedUrl || '').toLowerCase();
-        const sVideoLow = (s.videoUrl || '').toLowerCase();
 
-        // Block dead/poisoned hosts: dood/playmogo (DMCA-gone), bibiemb (dead), vivibebe/ibyteimg (ByteDance 403 Forbidden)
-        if (sNameLow.includes('dood') || sNameLow.includes('playmogo') || sEmbedLow.includes('dood') || sEmbedLow.includes('playmogo')) return;
-        if (sEmbedLow.includes('bibiemb') || sVideoLow.includes('bibiemb') || sVideoLow.includes('vibevibe.workers.dev')) return;
-        if (sEmbedLow.includes('vivibebe') || sVideoLow.includes('vivibebe') || sVideoLow.includes('ibyteimg')) return;
-
-        // 🔞 Adult vs Mainstream strict server isolation:
-        // For adult anime: strictly permit ONLY dedicated Hentai servers (HStream, HentaiCity).
-        // Mainstream anime servers must NEVER be added to adult anime!
+        // ðŸ”ž Adult vs Mainstream strict server isolation
         if (isAdultAnime) {
           const isAdultServer = sNameLow.includes('hstream') || sNameLow.includes('hentaicity') || sNameLow.includes('hentai');
           if (!isAdultServer) return;
         } else {
-          // For regular anime: strictly prevent adult servers from leaking into regular anime
           const isAdultServer = sNameLow.includes('hstream') || sNameLow.includes('hentaicity');
           if (isAdultServer) return;
         }
 
         const isAllowed = onlyNeko
           ? (baseName.startsWith('Neko') || baseName.startsWith('Vidstream') || baseName.startsWith('HD-') || baseName.startsWith('HStream') || baseName.startsWith('HentaiCity'))
-          : (baseName.startsWith('Neko') || baseName.startsWith('Waves') || baseName.startsWith('HStream') || baseName.startsWith('HentaiCity') || ['WavesHD', 'AniHD', 'AniVid', 'MegaPlay', 'Vidstream-2', 'HD-1', 'HD-2', 'HStream-HD', 'HentaiCity'].includes(baseName));
-        if (!isAllowed) return; // skip non-allowed servers
+          : (baseName.startsWith('Neko') || baseName.startsWith('Waves') || baseName.startsWith('HStream') || baseName.startsWith('HentaiCity') || ['WavesHD', 'AniHD', 'AniVid', 'MegaPlay', 'Vidstream', 'Vidstream-2', 'HD-1', 'HD-2', 'HStream-HD', 'HentaiCity'].includes(baseName));
+        if (!isAllowed) return;
 
-        // Prevent duplicate server items by name+type
-        const isDuplicate = combinedServers.some(x => 
-          x.name === s.name && x.type === s.type
+        // Prevent duplicate server items by normalized name + type
+        const normName = (s.name || '').trim().toLowerCase();
+        const normType = (s.type || 'sub').trim().toLowerCase();
+
+        // 1. Check if same server name & type exists
+        const existingIdx = combinedServers.findIndex(x =>
+          (x.name || '').trim().toLowerCase() === normName &&
+          (x.type || 'sub').trim().toLowerCase() === normType
         );
-        if (!isDuplicate) {
-          combinedServers.push({ ...s, name: s.name });
-          // NOTE: AniNeko's official servers (Vidstream-2, HD-1) load directly from anineko.es.
-          // Vidstream-2 resolves to Nexabloom (fetch.nexabloom.top), and HD-1 resolves to
-          // Norami/TikTok CDN (megap.norami.top). Both are 100% clean with no watermark.
+
+        if (existingIdx === -1) {
+          combinedServers.push({ ...s, name: s.name, type: s.type || 'sub', _isBackupAvailable: (backupServerRegistry.get(cacheKey) || []).length > 0 });
+        } else {
+          // If already present, upgrade to HLS direct if the new entry has direct HLS
+          if (s.isHLS && isDirectStreamUrl(s.videoUrl) && !combinedServers[existingIdx].isHLS) {
+            combinedServers[existingIdx] = { ...combinedServers[existingIdx], ...s };
+          }
         }
       });
+
       if (data.animeTitle) mainTitle = data.animeTitle;
       if (data.slug) activeSlug = data.slug;
 
-      // ⚡ Sort strictly by user-specified CDN priority: AniHD → AniVid → Neko-HD-2 → WavesHD → NekoHD
+      // âš¡ Sort by CDN priority: AniHD â†’ MegaPlay â†’ AniVid â†’ WavesHD â†’ HD-2 â†’ HD-1
       combinedServers.sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name));
 
       if (onServersFound) {
@@ -786,32 +1075,46 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
       }
 
       // ⚡ Instant Scraper-to-Stream Pipeline:
-      // Immediately resolve the top 2 servers in parallel background.
-      // The moment the top server's direct M3U8 is decrypted (39ms), re-notify onServersFound
-      // with the direct HLS stream so the player begins playing immediately without waiting
-      // for any secondary lazy resolution roundtrip!
-      const unresolvedCandidates = combinedServers.filter(s => !s.isHLS && s.embedUrl).slice(0, 2);
+      // Immediately resolve BOTH top primary SUB and DUB servers in background.
+      // When decrypted, re-notify onServersFound with direct HLS for instant playback and 0ms SUB <-> DUB switching!
+      const topSub = combinedServers.find(s => s.type !== 'dub' && !s.isHLS && s.embedUrl && !s._resolving);
+      const topDub = combinedServers.find(s => s.type === 'dub' && !s.isHLS && s.embedUrl && !s._resolving);
+      const unresolvedCandidates = [topSub, topDub].filter(Boolean);
+
       unresolvedCandidates.forEach(srv => {
+        srv._resolving = true;
         resolveSingleServer(srv, anime, episode).then(resolved => {
+          srv._resolving = false;
           if (resolved?.videoUrl && isDirectStreamUrl(resolved.videoUrl)) {
             const idx = combinedServers.findIndex(x => x.name === srv.name && x.type === srv.type);
             if (idx !== -1) {
-              combinedServers[idx] = { ...combinedServers[idx], ...resolved, isHLS: true };
+              const isHlsStream = Boolean(resolved.isHLS !== undefined ? resolved.isHLS : (resolved.videoUrl?.includes('.m3u8')));
+              combinedServers[idx] = { ...combinedServers[idx], ...resolved, isHLS: isHlsStream };
               if (onServersFound) {
                 onServersFound([...combinedServers]);
               }
             }
-            // ⚡ Instant Speculative Pre-Buffering: Pre-load playlist & Fragment 0 into RAM immediately!
-            prefetchM3U8AndFirstSegment(resolved.videoUrl, srv.headers || resolved.headers);
+            // ⚡ Instant Speculative Pre-Buffering: Pre-load playlist text into RAM immediately!
+            if (resolved.isHLS || resolved.videoUrl?.includes('.m3u8')) {
+              prefetchM3U8AndFirstSegment(resolved.videoUrl, srv.headers || resolved.headers);
+            }
+          } else {
+            // Primary failed — expand backups now so user has alternatives
+            expandBackupServers(cacheKey, combinedServers, onServersFound);
           }
-        }).catch(() => {});
+        }).catch(() => {
+          srv._resolving = false;
+          // Primary failed — expand backups
+          expandBackupServers(cacheKey, combinedServers, onServersFound);
+        });
       });
 
-      // Update stream cache with newly augmented servers (marked partial while other scrapers run)
+      // Update stream cache with primary servers (marked partial)
       try {
         const entry = {
           data: {
             ok: true,
+            episode: Number(episode),
             servers: [...combinedServers],
             animeTitle: mainTitle,
             slug: activeSlug,
@@ -821,20 +1124,50 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
           timestamp: Date.now()
         };
         clientStreamCache.set(cacheKey, entry);
-        sessionStorage.setItem(`stream_v18_cache_${cacheKey}`, JSON.stringify(entry));
-        localStorage.setItem(`stream_v18_cache_${cacheKey}`, JSON.stringify(entry));
+        sessionStorage.setItem(`stream_v21_cache_${cacheKey}`, JSON.stringify(entry));
+        localStorage.setItem(`stream_v21_cache_${cacheKey}`, JSON.stringify(entry));
       } catch (_) {}
     }
   };
 
-  // Single call per scraper — each scraper already handles all title variants internally
-  // via its allTitles param. Firing N calls was redundant and multiplied network requests.
+  /**
+   * Expands backup servers into the active server list when a primary fails.
+   * Injects stored backup servers and notifies the UI callback.
+   * Idempotent â€” safe to call multiple times.
+   */
+  const expandBackupServers = (epCacheKey, activeServers, notifyFn) => {
+    const backups = backupServerRegistry.get(epCacheKey);
+    if (!backups || backups.length === 0) return;
+    backupServerRegistry.delete(epCacheKey); // consume once
+
+    let added = 0;
+    for (const srv of backups) {
+      const normName = (srv.name || '').trim().toLowerCase();
+      const normType = (srv.type || 'sub').trim().toLowerCase();
+      const alreadyPresent = activeServers.some(x =>
+        (x.name || '').trim().toLowerCase() === normName &&
+        (x.type || 'sub').trim().toLowerCase() === normType
+      );
+      if (!alreadyPresent) {
+        activeServers.push({ ...srv, _fromBackup: true });
+        added++;
+      }
+    }
+
+    if (added > 0) {
+      activeServers.sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name));
+      console.log(`[ClientEngine] Backup expansion: +${added} servers added for episode ${episode}`);
+      if (notifyFn) notifyFn([...activeServers]);
+    }
+  };
+
+  // Single call per scraper â€” each scraper handles all title variants internally.
   const primaryTitle = anime.title?.romaji || anime.title?.english || titles[0];
-  const tryScraper = async (scraperFn, scraperName) => {
+  const tryScraper = async (scraperFn, scraperName, primaryNames) => {
     try {
       console.log(`[ClientEngine] ${scraperName} scraping ep ${episode} (primary: "${primaryTitle}")`);
       const data = await scraperFn(primaryTitle, episode, isMovie, anime.id, allTitles, 'english', anime.idMal);
-      if (data?.servers?.length) { handleScraperResult(data); return data; }
+      if (data?.servers?.length) { handleScraperResult(data, primaryNames, scraperName); return data; }
       errors.push(`${scraperName}: returned no servers`);
       return null;
     } catch (e) {
@@ -844,47 +1177,51 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
     }
   };
 
-  // ── 🔞 Adult / Hentai anime disabled ──
+  // â”€â”€ ðŸ”ž Adult / Hentai anime disabled â”€â”€
   if (isAdultAnime) {
     console.warn('[ClientEngine] Adult/Hentai anime playback is currently disabled.');
     throw new Error('ADULT_CONTENT_DISABLED: Adult (18+) content is currently disabled in the app.');
   }
 
-  // ── Mainstream Non-Adult Anime Scraper Pipeline ──
-  const nekoTimeout    = getAdaptiveTimeout(5000);
-  const wavesTimeout   = getAdaptiveTimeout(4500);
-  const anikotoTimeout = getAdaptiveTimeout(4500);
+  // â”€â”€ Mainstream Non-Adult Anime Scraper Pipeline (Primary/Backup Tier System) â”€â”€
+  // Phase 1: Fire all 3 scrapers in parallel but surface only ONE primary server
+  //          per scraper. Backup servers are stored and injected lazily on failure.
+  const nekoTimeout    = getAdaptiveTimeout(9000);
+  const wavesTimeout   = getAdaptiveTimeout(8000);
+  const anikotoTimeout = getAdaptiveTimeout(8000);
 
-  // Mainstream placeholder injection (Vidstream, HD-1, Waves, MegaPlay)
+  // Inject minimal placeholders on slow networks so UI is not empty
   if (!onlyNeko && onServersFound) {
     const net = getNetworkProfile();
     if (net.isSlow || net.isCriticalSlow) {
-      console.log('[ClientEngine] Slow network detected — injecting mainstream placeholder servers');
+      console.log('[ClientEngine] Slow network detected â€” injecting primary placeholder servers');
       onServersFound(KNOWN_SERVER_PLACEHOLDERS);
     }
   }
 
-  const nekoPromise = tryScraper(scrapeAniNeko, 'AniNeko');
+  const nekoPromise = tryScraper(scrapeAniNeko, 'AniNeko', NEKO_PRIMARY_SERVERS);
 
   let results;
+  let raceWinner = 'all';
   if (onlyNeko) {
-    // Fast path: fetch AniNeko
+    // Fast path: fetch AniNeko only (prefetch path)
     results = await Promise.allSettled([
-      runWithTimeout(nekoPromise, getAdaptiveTimeout(8000), 'AniNeko').catch(e => { console.warn(e.message); return null; })
+      runWithTimeout(nekoPromise, getAdaptiveTimeout(10000), 'AniNeko').catch(e => { console.warn(e.message); return null; })
     ]);
-    // Graceful fallback: If AniNeko had no servers for this anime, immediately query AniKoto & AniWaves
+    // Graceful fallback: If AniNeko had no servers for this anime, query AniKoto & AniWaves
     if (combinedServers.length === 0) {
-      const wavesPromise2   = tryScraper(scrapeAniWaves,  'AniWaves');
-      const anikotoPromise2 = tryScraper(scrapeAniKoto,   'AniKoto');
+      const wavesPromise2   = tryScraper(scrapeAniWaves, 'AniWaves', WAVES_PRIMARY_SERVERS);
+      const anikotoPromise2 = tryScraper(scrapeAniKoto, 'AniKoto', KOTO_PRIMARY_SERVERS);
       const fallbackResults = await Promise.allSettled([
-        runWithTimeout(anikotoPromise2, getAdaptiveTimeout(5000), 'AniKoto').catch(() => null),
-        runWithTimeout(wavesPromise2,   getAdaptiveTimeout(5000), 'AniWaves').catch(() => null),
+        runWithTimeout(anikotoPromise2, getAdaptiveTimeout(8000), 'AniKoto').catch(() => null),
+        runWithTimeout(wavesPromise2,   getAdaptiveTimeout(8000), 'AniWaves').catch(() => null),
       ]);
       results.push(...fallbackResults);
     }
   } else {
-    const wavesPromise   = tryScraper(scrapeAniWaves,  'AniWaves');
-    const anikotoPromise = tryScraper(scrapeAniKoto,   'AniKoto');
+    // â”€â”€ Phase 1: Primary server scrape (all 3 scrapers in parallel) â”€â”€
+    const wavesPromise   = tryScraper(scrapeAniWaves, 'AniWaves', WAVES_PRIMARY_SERVERS);
+    const anikotoPromise = tryScraper(scrapeAniKoto, 'AniKoto', KOTO_PRIMARY_SERVERS);
 
     const allScrapers = [
       runWithTimeout(nekoPromise,    nekoTimeout,    'AniNeko').catch(e  => { console.warn(e.message); return null; }),
@@ -892,21 +1229,18 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
       runWithTimeout(anikotoPromise, anikotoTimeout, 'AniKoto').catch(e  => { console.warn(e.message); return null; }),
     ];
 
-    // ⚡ Adaptive Multi-Server Resolution:
-    // Ensure all scrapers (AniNeko, AniKoto, AniWaves) have time to complete so users get ALL servers (AniHD, AniVid, MegaPlay, WavesHD, HD-1).
-    // If we have Vidstream, AniHD, or 4+ servers, give a 300ms grace window for the rest.
-    // Otherwise wait up to 2500ms so AniKoto and AniWaves have time to contribute!
+    // âš¡ Adaptive Early Resolution:
+    // Return to UI as soon as we have â‰¥1 primary server from each scraper OR
+    // after a short grace window â€” whichever comes first.
+    // This prevents blocking the user while waiting for slow scrapers.
     const eagerResolutionPromise = new Promise((resolve) => {
       let timer = null;
       const onScraperDone = () => {
         if (combinedServers.length > 0 && !timer) {
-          const hasVidstream = combinedServers.some(s => s.name.toLowerCase().includes('vidstream'));
-          const hasAniHD = combinedServers.some(s => s.name.toLowerCase().includes('anihd'));
-          const hasMultiServers = combinedServers.length >= 4;
-          const delay = (hasVidstream || hasAniHD || hasMultiServers) ? 300 : 2500;
-          timer = setTimeout(() => {
-            resolve('eager');
-          }, delay);
+          const subCount = combinedServers.filter(s => s.type === 'sub').length;
+          const hasMultipleSources = subCount >= 2;
+          const delay = hasMultipleSources ? 400 : 2000;
+          timer = setTimeout(() => resolve('eager'), delay);
         }
       };
 
@@ -915,40 +1249,49 @@ export async function getAniNekoServers(anime, episode, onServersFound, onlyNeko
       anikotoPromise.then(onScraperDone).catch(() => {});
     });
 
-    await Promise.race([
-      Promise.allSettled(allScrapers),
+    raceWinner = await Promise.race([
+      Promise.allSettled(allScrapers).then(() => 'all'),
       eagerResolutionPromise
     ]);
+
+    // âš¡ Background Merge: Ensure late-finishing scrapers persist their primaries AND notify UI!
+    Promise.allSettled(allScrapers).then(() => {
+      if (combinedServers.length > 0) {
+        saveCachedServers(anime, episode, combinedServers, false);
+        if (onServersFound) {
+          onServersFound([...combinedServers]);
+        }
+      }
+    }).catch(() => {});
 
     if (combinedServers.length === 0) {
       results = await Promise.allSettled(allScrapers);
     }
   }
 
+  // â”€â”€ Phase 2 Safety Net: If we have fewer than 2 sub servers (e.g. AniWaves or AniKoto missing), expand backups â”€â”€
+  const currentSubCount = combinedServers.filter(s => s.type === 'sub').length;
+  if (currentSubCount < 2) {
+    expandBackupServers(cacheKey, combinedServers, onServersFound);
+  }
+
   if (combinedServers.length === 0) {
     throw new Error(`Failed to resolve any video servers. Details:\n${errors.join('\n')}`);
   }
 
-  const resultData = {
+  const isPartial = raceWinner === 'eager';
+  saveCachedServers(anime, episode, combinedServers, isPartial);
+
+  return {
     ok: true,
     servers: combinedServers,
     animeTitle: mainTitle,
     slug: activeSlug,
-    isPartial: false,
-    errors
+    isPartial,
+    errors,
+    // Expose backup expander so the player can trigger it on server failure
+    expandBackups: () => expandBackupServers(cacheKey, combinedServers, onServersFound)
   };
-
-  // Only cache if we successfully retrieved some servers
-  if (combinedServers.length > 0) {
-    const entry = { data: resultData, timestamp: Date.now() };
-    clientStreamCache.set(cacheKey, entry);
-    try {
-      localStorage.setItem(`stream_v18_cache_${cacheKey}`, JSON.stringify(entry));
-      sessionStorage.setItem(`stream_v18_cache_${cacheKey}`, JSON.stringify(entry));
-    } catch {}
-  }
-
-  return resultData;
 }
 
 export async function checkProxy() {
@@ -1149,16 +1492,14 @@ export async function resolvePlaceholderServer(anime, episode, serverName, serve
   const cached = clientStreamCache.get(cacheKey);
   const servers = cached?.data?.servers || [];
 
-  // Find the specific server by name + type (exact match first, type-only fallback)
-  const srv = servers.find(s => s.name === serverName && s.type === serverType)
-           || servers.find(s => s.type === serverType);
+  // Find the specific server by exact name + type, ensuring it is a real resolved server
+  const srv = servers.find(s => s.name === serverName && s.type === serverType && !s.isPlaceholder && (s.embedUrl || s.videoUrl));
 
   if (!srv) {
-    // Server not in cache — re-fetch all servers and try again
+    // Server not in cache or still unresolved — re-fetch all servers and try again
     console.log(`[StreamEngine] resolvePlaceholderServer: server "${serverName}" not in cache, fetching...`);
     const freshData = await getAniNekoServers(anime, episode, null, false);
-    const freshSrv = freshData?.servers?.find(s => s.name === serverName && s.type === serverType)
-                  || freshData?.servers?.find(s => s.type === serverType);
+    const freshSrv = freshData?.servers?.find(s => s.name === serverName && s.type === serverType && !s.isPlaceholder && (s.embedUrl || s.videoUrl));
     if (!freshSrv) throw new Error(`Server "${serverName}" not found after re-fetch`);
     return resolveSingleServer(freshSrv, anime, episode);
   }
@@ -1166,7 +1507,7 @@ export async function resolvePlaceholderServer(anime, episode, serverName, serve
   return resolveSingleServer(srv, anime, episode);
 }
 
-// ── M3U8 Prefetch Cache ──────────────────────────────────────────────────────
+// â”€â”€ M3U8 Prefetch Cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Stores pre-fetched and pre-parsed HLS playlist variants keyed by videoUrl.
 // TTL: 20 minutes (playlist segments typically expire in ~30 min).
 const m3u8PrefetchCache = new Map();
@@ -1180,79 +1521,17 @@ const M3U8_PREFETCH_TTL = 20 * 60 * 1000;
  * Called fire-and-forget: errors are silently swallowed.
  */
 export const playlistTextCache = new Map(); // url -> { text, timestamp }
-export const mediaSegmentCache = new Map();  // fragUrl -> { buffer, timestamp }
-const MAX_SEGMENT_CACHE_ITEMS = 3;
 
 /**
- * Fetch raw media segment (TS / image / fMP4 chunk) with proper referer/headers.
- * Uses CapacitorHttp for protected clusters (quavex, akirax) and line-speed fetch for open CDNs.
- */
-export async function fetchMediaSegment(fragUrl, referer) {
-  if (!fragUrl || !fragUrl.startsWith('http')) return null;
-  const isCapacitor = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform();
-  const isProtected = fragUrl.includes('quavex') || fragUrl.includes('akirax') || fragUrl.includes('imgnex') || fragUrl.includes('nexabloom');
-
-  if (isCapacitor && isProtected) {
-    try {
-      const { CapacitorHttp } = await import('@capacitor/core');
-      const resp = await CapacitorHttp.request({
-        url: fragUrl,
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-          'Referer': referer || 'https://megaplay.buzz/'
-        },
-        responseType: 'blob'
-      });
-      if (resp.status >= 200 && resp.status < 400 && resp.data) {
-        if (typeof resp.data === 'string') {
-          let clean = resp.data.replace(/^data:.*?,/, '').replace(/[\r\n\s]/g, '');
-          if (!clean) return null;
-          const rem = clean.length % 4;
-          if (rem === 2) clean += '==';
-          else if (rem === 3) clean += '=';
-          try {
-            const bin = window.atob(clean);
-            const len = bin.length;
-            const u8 = new Uint8Array(len);
-            for (let i = 0; i < len; i++) u8[i] = bin.charCodeAt(i);
-            return u8.buffer;
-          } catch (_) {
-            return null;
-          }
-        } else if (resp.data instanceof Blob) {
-          return await resp.data.arrayBuffer();
-        }
-        return resp.data;
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  try {
-    const res = await fetch(fragUrl, {
-      headers: {
-        'Origin': 'http://localhost',
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36'
-      }
-    });
-    if (res.ok) {
-      return await res.arrayBuffer();
-    }
-  } catch (_) {}
-  return null;
-}
-
-/**
- * ⚡ True Pinpoint Fast Streaming: Pre-fetches Master Playlist, Level Playlist, AND Fragment 0.
- * Injects initial frames into RAM before user even mounts the player for <20ms playback start!
+ * âš¡ Fast Streaming: Pre-fetches Master Playlist and Level Playlist text.
+ * Warms playlist text in RAM for 0ms HLS initialization without downloading media chunks.
  */
 export async function prefetchM3U8AndFirstSegment(videoUrl, referer) {
   if (!videoUrl || !videoUrl.startsWith('http')) return;
   if (getNetworkProfile().isSlow) return;
 
   try {
-    // 1. Fetch & cache Master Playlist
+    // 1. Fetch & cache Master Playlist text
     const playlistText = await fetchM3U8Playlist(videoUrl, referer);
     if (!playlistText || typeof playlistText !== 'string') return;
     playlistTextCache.set(videoUrl, { text: playlistText, timestamp: Date.now() });
@@ -1262,7 +1541,7 @@ export async function prefetchM3U8AndFirstSegment(videoUrl, referer) {
       m3u8PrefetchCache.set(videoUrl, { variants, timestamp: Date.now() });
     }
 
-    // 2. Fetch & cache primary Level Playlist (align with AniPlayer fast-start)
+    // 2. Fetch & cache primary Level Playlist text (align with AniPlayer fast-start)
     let levelUrl = null;
     if (variants && variants.length > 0) {
       const fastVariant = variants.find(v => v.label?.includes('480p') || v.label?.includes('360p')) || variants.find(v => v.label?.includes('720p')) || variants[0];
@@ -1280,35 +1559,48 @@ export async function prefetchM3U8AndFirstSegment(videoUrl, referer) {
     if (!levelText || typeof levelText !== 'string') return;
     playlistTextCache.set(levelUrl, { text: levelText, timestamp: Date.now() });
 
-    // 3. Extract Fragment 0 and pre-load into RAM (Instant Frame Injection!)
-    const levelLines = levelText.split('\n');
-    let fragUrl = null;
-    for (const l of levelLines) {
-      const t = l.trim();
-      if (t && !t.startsWith('#')) {
-        fragUrl = t.startsWith('http') ? t : new URL(t, levelUrl).href;
-        break;
-      }
-    }
-    if (!fragUrl) return;
-
-    if (mediaSegmentCache.has(fragUrl)) return;
-    if (mediaSegmentCache.size >= MAX_SEGMENT_CACHE_ITEMS) {
-      const oldestKey = mediaSegmentCache.keys().next().value;
-      mediaSegmentCache.delete(oldestKey);
-    }
-
-    const isMega = (fragUrl.includes('quavex') || fragUrl.includes('nexabloom') || fragUrl.includes('streamzone') || fragUrl.includes('silverorbit') || fragUrl.includes('mikora') || fragUrl.includes('akirax') || fragUrl.includes('imgnex') || fragUrl.includes('norami') || fragUrl.includes('shiora') || fragUrl.includes('megaplay') || fragUrl.includes('megacloud') || fragUrl.includes('anihd'));
-    const effectiveReferer = isMega ? 'https://megaplay.buzz/' : (referer || 'https://megaplay.buzz/');
-
-    const fragBuf = await fetchMediaSegment(fragUrl, effectiveReferer);
-    if (fragBuf && fragBuf.byteLength > 1000) {
-      console.log(`[InstantFrameInjection] Fragment 0 preloaded into RAM: ${fragUrl.slice(0, 60)} (${(fragBuf.byteLength / 1024 / 1024).toFixed(2)} MB)`);
-      mediaSegmentCache.set(fragUrl, { buffer: fragBuf, timestamp: Date.now() });
+    // 3. Speculatively pre-warm segment 0 for instant 0ms playback
+    const segLines = levelText.split('\n');
+    const firstSegLine = segLines.find(l => {
+      const trimmed = l.trim();
+      return trimmed && !trimmed.startsWith('#') && (trimmed.includes('.ts') || trimmed.includes('.m4s') || trimmed.includes('.mp4') || trimmed.includes('/'));
+    });
+    if (firstSegLine) {
+      const segUrl = new URL(firstSegLine.trim(), levelUrl).href;
+      fetchFirstSegmentBuffer(segUrl, referer);
     }
   } catch (err) {
     // Silent non-blocking fail for background prefetch
   }
+}
+
+export const mediaSegmentCache = new Map(); // url -> { buffer, timestamp }
+const MAX_MEDIA_SEGMENTS = 2; // Keep at most 2 segment buffers in RAM to avoid Android OOM
+const SEGMENT_CACHE_TTL = 3 * 60 * 1000; // 3 min TTL
+
+async function fetchFirstSegmentBuffer(segUrl, referer) {
+  if (!segUrl || mediaSegmentCache.has(segUrl)) return;
+  // âš¡ On native Android: Skip background segment binary downloads!
+  // Downloading multi-megabyte Base64 strings across the Capacitor bridge while video is playing
+  // exhausts the Dalvik/V8 heap and freezes the UI thread. AniPlayer's HlsLoader loads segments on demand.
+  if (Capacitor.isNativePlatform?.()) return;
+
+  try {
+    const isMega = (segUrl.includes('quavex') || segUrl.includes('nexabloom') || segUrl.includes('streamzone') || segUrl.includes('silverorbit') || segUrl.includes('midnightvale') || segUrl.includes('hiddenvertex') || segUrl.includes('vertex') || segUrl.includes('mikora') || segUrl.includes('akirax') || segUrl.includes('imgnex') || segUrl.includes('norami') || segUrl.includes('shiora') || segUrl.includes('megaplay') || segUrl.includes('megacloud') || segUrl.includes('anihd'));
+    const effectiveReferer = isMega ? 'https://megaplay.buzz/' : (referer || 'https://megaplay.buzz/');
+
+    const resp = await fetch(segUrl, { headers: { Referer: effectiveReferer } });
+    if (resp.ok) {
+      const buf = await resp.arrayBuffer();
+      if (buf && buf.byteLength > 0) {
+        if (mediaSegmentCache.size >= MAX_MEDIA_SEGMENTS) {
+          const oldestKey = mediaSegmentCache.keys().next().value;
+          if (oldestKey) mediaSegmentCache.delete(oldestKey);
+        }
+        mediaSegmentCache.set(segUrl, { buffer: buf, timestamp: Date.now() });
+      }
+    }
+  } catch (_) {}
 }
 
 export function prefetchM3U8(videoUrl, referer) {
@@ -1321,21 +1613,21 @@ export function prefetchM3U8(videoUrl, referer) {
  */
 export function getCachedPlaylistText(videoUrl) {
   if (!videoUrl) return null;
-  const cached = playlistTextCache.get(videoUrl);
+  const target = Array.isArray(videoUrl) ? videoUrl[0] : (typeof videoUrl === 'string' ? videoUrl : '');
+  if (!target) return null;
+  const cached = playlistTextCache.get(target);
   if (cached && Date.now() - cached.timestamp < M3U8_PREFETCH_TTL) {
     return cached.text;
   }
   return null;
 }
 
-/**
- * Returns pre-fetched Fragment 0 ArrayBuffer from RAM.
- * Allows Hls.js loader to inject the first video chunk in 0.00ms!
- */
 export function getCachedMediaSegment(fragUrl) {
   if (!fragUrl) return null;
-  const cached = mediaSegmentCache.get(fragUrl);
-  if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+  const target = Array.isArray(fragUrl) ? fragUrl[0] : (typeof fragUrl === 'string' ? fragUrl : '');
+  if (!target) return null;
+  const cached = mediaSegmentCache.get(target);
+  if (cached && Date.now() - cached.timestamp < SEGMENT_CACHE_TTL) {
     return cached.buffer;
   }
   return null;
@@ -1349,8 +1641,10 @@ export function getPrefetchedM3U8Variants(videoUrl) {
   if (!videoUrl) return null;
   const cached = m3u8PrefetchCache.get(videoUrl);
   if (cached && Date.now() - cached.timestamp < M3U8_PREFETCH_TTL) {
-    console.log(`[Prefetch] M3U8 cache HIT — serving ${cached.variants.length} variants instantly`);
+    console.log(`[Prefetch] M3U8 cache HIT â€” serving ${cached.variants.length} variants instantly`);
     return cached.variants;
   }
   return null;
 }
+
+

@@ -1,3 +1,32 @@
+# AniPlay v1.6.1: Playback & Stream Precision Update 🚀
+
+We are excited to release **AniPlay v1.6.1** — a precision maintenance update focused on rock-solid player behavior, cross-episode stream isolation, and smart server failover!
+
+---
+
+## ⏸️ 1. STRICT PLAYER PAUSE LOCK
+* **Removed Segment Buffer Auto-Play**: Fixed a bug where `Hls.Events.BUFFER_APPENDED` called `.play()` upon every buffered segment download, causing the player to automatically unpause itself after the user explicitly paused.
+* **Persistent Pause State**: Player strictly honors explicit user pauses across buffer updates, ad transitions, and loading states.
+
+## 🎯 2. CROSS-EPISODE STREAM ISOLATION
+* **Eliminated Episode Contamination**: Fixed an issue where switching episodes (e.g. from Episode 2 to Episode 14) allowed the previous episode's stream URL or in-flight data to bleed over.
+* **Multi-Episode Cache Validation**: `getCachedServers` now inspects prior episodes (Ep 1, Ep 2, Ep N-1) and checks URL episode tags to immediately detect and purge contaminated stream entries.
+* **Zero-Latency Active Stream Cleanup**: Changing episodes or audio tracks clears active video immediately so previous episode video never continues playing in the background.
+
+## 👻 3. GHOST SERVER AUTO-PURGE & SCRAPER FAILOVER
+* **Ghost Placeholder Elimination**: When a provider (such as AniKoto/MegaPlay) has not released a newly aired episode, unresolvable placeholder buttons (`AniHD`, `MegaPlay`) are cleanly removed from the UI rather than lingering as non-functional or misrouted buttons.
+* **Smart Failover to Genuine Streams**: Immediately prioritizes genuine active streams (e.g., `HD-1` from AniNeko or `WavesHD` from AniWaves).
+* **Strict Server Resolution**: `resolvePlaceholderServer` now matches strictly on server name and type, eliminating type-only fallback bugs that loaded wrong streams.
+
+## 🔄 4. DYNAMIC EPISODE CACHE REFRESH
+* **Bypass Stale Episode Lists**: AniKoto scraping automatically bypasses and refreshes cached episode manifests when a newly aired episode is requested, ensuring new episodes resolve instantly.
+
+## 💎 5. APP-WIDE v1.6.1 PARITY & SETTINGS VISIBILITY
+* **Settings Page Version Card**: Settings now features a dedicated `Version & Release Fixes` card highlighting v1.6.1 with an inline summary of fixes and a direct link to full release notes.
+* **Profile What's New Parity**: Profile menu updated to `What's New (v1.6.1)` with full modal highlights.
+
+---
+
 # AniPlay v1.6.0 Grand Release: The Precision & Stability Update 🚀
 
 We are proud to present **AniPlay v1.6.0** — our most refined, thoroughly tested, and dependable release to date! This grand release introduces real-time social & episode notifications, fixes optimistic UI race conditions in My List, provides multi-part franchise resolvers for popular anime, and solidifies streaming playback stability.

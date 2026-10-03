@@ -8,7 +8,17 @@ import './index.css'
 // Expose Capacitor globally on window so all isNativePlatform checks succeed reliably
 if (typeof window !== 'undefined') {
   window.Capacitor = Capacitor;
+
+  // ⚡ High-Performance Android: Silence non-critical console logging in production
+  // Eliminates synchronous Android Logcat JNI IPC bridge stalls during video playback.
+  if (import.meta.env.PROD) {
+    const noop = () => {};
+    console.log = noop;
+    console.debug = noop;
+    console.info = noop;
+  }
 }
+
 
 // Tell CapGo this bundle loaded successfully — prevents auto-rollback.
 const withTimeout = (promise, ms = 3000) =>

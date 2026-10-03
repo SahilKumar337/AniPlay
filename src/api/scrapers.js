@@ -1,6 +1,7 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { scrapeEmbedNative, solveCloudflareNative, getCookiesForUrlNative, fetchViaWebViewNative, extractEmbedIdsNative, unpackUniversalJS } from './embedScraper.js';
 import { resolveMegaPlayStream } from '../utils/megaplayDecrypt.js';
+import { resolveVidPlayStream, isVidPlayEmbed } from '../utils/vidplayDecrypt.js';
 import {
   norm,
   cleanAnimeTitle,
@@ -473,7 +474,12 @@ function isDatabaseOutage(text) {
 
 // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Generic Fetch Helper with Headers ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
 
-export async function clientFetch(url, opts = {}) {
+const clientFetchInFlight = new Map();
+const clientFetchCache = new Map();
+const CLIENT_FETCH_CACHE_TTL = 30 * 1000; // 30s cache for scraper responses
+const MAX_CLIENT_FETCH_CACHE = 120;
+
+async function doClientFetch(url, opts = {}) {
   if (isCapacitorApp) {
     const useWebView = opts.useWebView;
     if (useWebView) {
@@ -567,6 +573,41 @@ export async function clientFetch(url, opts = {}) {
   if (isCloudflareChallenge(fText)) throw new Error('Cloudflare challenge detected');
   if (isDatabaseOutage(fText)) throw new Error('Upstream provider database outage (SQLSTATE / Connection refused)');
   return fText;
+}
+
+export async function clientFetch(url, opts = {}) {
+  const isGet = !opts.method || opts.method.toUpperCase() === 'GET';
+  const shouldCache = isGet && !opts.noCache;
+  const cacheKey = `${url}__${opts.referer || ''}__${opts.useWebView ? 'wv' : 'direct'}`;
+
+  if (shouldCache) {
+    const cached = clientFetchCache.get(cacheKey);
+    if (cached && (Date.now() - cached.ts) < CLIENT_FETCH_CACHE_TTL) {
+      return cached.data;
+    }
+    if (clientFetchInFlight.has(cacheKey)) {
+      return await clientFetchInFlight.get(cacheKey);
+    }
+  }
+
+  const fetchPromise = doClientFetch(url, opts).then(data => {
+    if (shouldCache && data) {
+      if (clientFetchCache.size >= MAX_CLIENT_FETCH_CACHE) {
+        const oldest = clientFetchCache.keys().next().value;
+        clientFetchCache.delete(oldest);
+      }
+      clientFetchCache.set(cacheKey, { data, ts: Date.now() });
+    }
+    return data;
+  }).finally(() => {
+    clientFetchInFlight.delete(cacheKey);
+  });
+
+  if (shouldCache) {
+    clientFetchInFlight.set(cacheKey, fetchPromise);
+  }
+
+  return await fetchPromise;
 }
 
 async function awSearch(title, isMovie = false) {
@@ -679,7 +720,7 @@ const WAVES_CACHE_TTL_MS = 25 * 60 * 1000;
 
 function getWavesServersCache(animeId, episode) {
   try {
-    const key = `waves_servers_${animeId}_${episode}`;
+    const key = `waves_servers_v21_${animeId}_${episode}`;
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const { data, expires } = JSON.parse(raw);
@@ -691,7 +732,7 @@ function getWavesServersCache(animeId, episode) {
 
 function setWavesServersCache(animeId, episode, data) {
   try {
-    const key = `waves_servers_${animeId}_${episode}`;
+    const key = `waves_servers_v21_${animeId}_${episode}`;
     localStorage.setItem(key, JSON.stringify({ data, expires: Date.now() + WAVES_CACHE_TTL_MS }));
   } catch {}
 }
@@ -916,8 +957,16 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
     if (serverMapping?.waves && (serverMapping.status === 'verified' || serverMapping.status === 'partial')) {
       const idMatch = serverMapping.waves.match(/-(\d+)$/);
       if (idMatch) {
-        console.log(`[AniWaves] 🌐 Server slug HIT for ${animeId}: "${serverMapping.waves}" (id: ${idMatch[1]})`);
-        searchResult = { slug: serverMapping.waves, animeId: idMatch[1], animeTitle: title };
+        const candSeason = extractSeasonNumber(serverMapping.waves);
+        const qSeason = extractSeasonNumber(title);
+        const allKnown = Array.from(new Set([title, ...(allTitles || [])].filter(Boolean)));
+        const score = Math.max(...allKnown.map(qt => calculateMatchScore({ title: serverMapping.waves.replace(/-/g, ' '), slug: serverMapping.waves }, qt, isMovie)));
+        if (candSeason === qSeason && score >= 0.75) {
+          console.log(`[AniWaves] 🌐 Server slug HIT for ${animeId}: "${serverMapping.waves}" (id: ${idMatch[1]})`);
+          searchResult = { slug: serverMapping.waves, animeId: idMatch[1], animeTitle: title };
+        } else {
+          console.warn(`[AniWaves] 🌐 Server slug REJECTED for ${animeId}: "${serverMapping.waves}" (score: ${score.toFixed(2)}, season: ${candSeason} vs ${qSeason})`);
+        }
       }
     }
   }
@@ -972,10 +1021,21 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
   // Parallelize sub and dub server resolution with direct HLS extraction
   const [subRes, dubRes] = await Promise.all([
     (async () => {
-      const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 2);
+      const subServers = rawServers.filter(s => s.type === 'sub').slice(0, 3);
       for (const s of subServers) {
         try {
           const embedUrl = await awGetEmbedUrl(s.linkId, slug);
+          if (!embedUrl) continue;
+
+          // ⚡ Skip known dead 404 MegaPlay links from AniWaves
+          if (embedUrl.includes('megaplay.buzz/stream/mal/')) {
+            const probe = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 2000 }).catch(() => null);
+            if (!probe || probe.includes('Oops! Something went wrong') || probe.includes('Error Code: <span>404</span>')) {
+              console.warn(`[AniWaves] Sub server ${s.serverName} embed returned 404 — skipping to next server`);
+              continue;
+            }
+          }
+
           let directHls = false;
           let finalVideoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
 
@@ -988,8 +1048,19 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
             }
           } catch (_) {}
 
-          // 2. Fallback: Packed JS unpacking
-          if (!directHls) {
+          // 2. VidPlay direct decryption
+          if (!directHls && isVidPlayEmbed(embedUrl)) {
+            try {
+              const vidRes = await resolveVidPlayStream(embedUrl, `${AW}/watch/${slug}`);
+              if (vidRes?.videoUrl) {
+                finalVideoUrl = vidRes.videoUrl;
+                directHls = vidRes.isHLS !== false;
+              }
+            } catch (_) {}
+          }
+
+          // 3. Fallback: Packed JS unpacking (skip on megaplay)
+          if (!directHls && !embedUrl.includes('megaplay')) {
             try {
               const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 3500 });
               const unpacked = unpackUniversalJS(embedHtml);
@@ -1017,10 +1088,21 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
       return null;
     })(),
     (async () => {
-      const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 2);
+      const dubServers = rawServers.filter(s => s.type === 'dub').slice(0, 3);
       for (const s of dubServers) {
         try {
           const embedUrl = await awGetEmbedUrl(s.linkId, slug);
+          if (!embedUrl) continue;
+
+          // ⚡ Skip known dead 404 MegaPlay links from AniWaves
+          if (embedUrl.includes('megaplay.buzz/stream/mal/')) {
+            const probe = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 2000 }).catch(() => null);
+            if (!probe || probe.includes('Oops! Something went wrong') || probe.includes('Error Code: <span>404</span>')) {
+              console.warn(`[AniWaves] Dub server ${s.serverName} embed returned 404 — skipping to next server`);
+              continue;
+            }
+          }
+
           let directHls = false;
           let finalVideoUrl = formatIframeProxyUrl(embedUrl, `${AW}/watch/${slug}`);
 
@@ -1033,10 +1115,21 @@ export async function scrapeAniWaves(title, episode, isMovie = false, animeId = 
             }
           } catch (_) {}
 
-          // 2. Fallback: Packed JS unpacking
-          if (!directHls) {
+          // 2. VidPlay direct decryption
+          if (!directHls && isVidPlayEmbed(embedUrl)) {
             try {
-              const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 5000 });
+              const vidRes = await resolveVidPlayStream(embedUrl, `${AW}/watch/${slug}`);
+              if (vidRes?.videoUrl) {
+                finalVideoUrl = vidRes.videoUrl;
+                directHls = vidRes.isHLS !== false;
+              }
+            } catch (_) {}
+          }
+
+          // 3. Fallback: Packed JS unpacking (skip on megaplay)
+          if (!directHls && !embedUrl.includes('megaplay')) {
+            try {
+              const embedHtml = await clientFetch(embedUrl, { referer: `${AW}/watch/${slug}`, timeout: 3500 });
               const unpacked = unpackUniversalJS(embedHtml);
               if (unpacked) {
                 finalVideoUrl = unpacked;
@@ -1081,7 +1174,7 @@ const NEKO_CACHE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 function getNekoEpisodeCache(slug, episode) {
   try {
-    const key = `neko_ep_${slug}_${episode}`;
+    const key = `neko_ep_v21_${slug}_${episode}`;
     const raw = localStorage.getItem(key) || sessionStorage.getItem(key);
     if (!raw) return null;
     const { data, expires } = JSON.parse(raw);
@@ -1097,7 +1190,7 @@ function getNekoEpisodeCache(slug, episode) {
 
 function setNekoEpisodeCache(slug, episode, servers) {
   try {
-    const key = `neko_ep_${slug}_${episode}`;
+    const key = `neko_ep_v21_${slug}_${episode}`;
     localStorage.setItem(key, JSON.stringify({ data: servers, expires: Date.now() + NEKO_CACHE_TTL_MS }));
   } catch {}
 }
@@ -1142,10 +1235,17 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
   if (!isFallback && animeId) {
     serverMapping = await getSlugMapping(animeId);
     if (serverMapping?.neko && (serverMapping.status === 'verified' || serverMapping.status === 'partial')) {
-      console.log(`[AniNeko] 🌐 Server slug HIT for ${animeId}: "${serverMapping.neko}" (status: ${serverMapping.status})`);
-      // Use server mapping directly — skip ALL local matching
-      best = { slug: serverMapping.neko, title };
-      results = [best];
+      const candSeason = extractSeasonNumber(serverMapping.neko);
+      const qSeason = extractSeasonNumber(title);
+      const allKnown = Array.from(new Set([title, ...(allTitles || [])].filter(Boolean)));
+      const score = Math.max(...allKnown.map(qt => calculateMatchScore({ title: serverMapping.neko.replace(/-/g, ' '), slug: serverMapping.neko }, qt, isMovie)));
+      if (candSeason === qSeason && score >= 0.75) {
+        console.log(`[AniNeko] 🌐 Server slug HIT for ${animeId}: "${serverMapping.neko}" (score: ${score.toFixed(2)})`);
+        best = { slug: serverMapping.neko, title };
+        results = [best];
+      } else {
+        console.warn(`[AniNeko] 🌐 Server slug REJECTED for ${animeId}: "${serverMapping.neko}" (score: ${score.toFixed(2)}, season: ${candSeason} vs ${qSeason})`);
+      }
     }
   }
 
@@ -1501,6 +1601,20 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
     const primaryWatchUrl = `${ANINEKO}/watch/${best.slug}/ep-${episode}`;
     try {
       primaryHtml = await clientFetch(primaryWatchUrl, { referer: ANINEKO, timeout: 8000 });
+      if (primaryHtml) {
+        const pageTitleMatch = primaryHtml.match(/<title>([^<]+)<\/title>/i);
+        const pageH1Match = primaryHtml.match(/<h1[^>]*class="[^"]*(?:title|name|anime)[^"]*"[^>]*>([^<]+)<\/h1>/i)
+          || primaryHtml.match(/<h2[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\/h2>/i);
+        const pageTitleRaw = (pageH1Match?.[1] || pageTitleMatch?.[1] || '').replace(/\s*[-–—|]\s*Episode.*$/i, '').replace(/\s*[-–—|]\s*(AniNeko|Watch|Stream).*$/i, '').trim();
+        if (pageTitleRaw && !pageTitleRaw.toLowerCase().includes('not found') && !pageTitleRaw.toLowerCase().includes('404')) {
+          const allKnown = Array.from(new Set([title, ...(allTitles || [])].filter(Boolean)));
+          const titleMatchScore = Math.max(...allKnown.map(qt => calculateMatchScore({ title: pageTitleRaw, jp: '', slug: best.slug }, qt, isMovie)));
+          if (titleMatchScore < 0.65) {
+            console.warn(`[AniNeko] Primary page title "${pageTitleRaw}" does NOT match "${title}" (score: ${titleMatchScore.toFixed(2)} < 0.65) — WRONG ANIME DETECTED, discarding AniNeko page`);
+            primaryHtml = null;
+          }
+        }
+      }
     } catch (err) {
       console.warn(`[scrapeAniNeko] Primary watch page fetch failed:`, err.message);
     }
@@ -1606,13 +1720,13 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
   const cleanServerName = (rawText, isDub, isHardSub) => {
     const low = rawText.toLowerCase();
     let base = 'HD-1';
-    if (low.includes('vidstream-2') || low.includes('vidstream')) base = 'Vidstream-2';
+    if (low.includes('vidstream-2') || low.includes('vidstream')) base = 'Vidstream';
     else if (low.includes('hd-1')) base = 'HD-1';
     else if (low.includes('hd-2')) base = 'HD-2';
     else if (low.includes('megaplay') || low.includes('mega')) base = 'MegaPlay';
     else if (low.includes('streamhg')) base = 'StreamHG';
     else if (low.includes('earnvid')) base = 'Earnvids';
-    else base = rawText.split(' ')[0] || 'Vidstream-2';
+    else base = rawText.split(' ')[0] || 'Vidstream';
 
     if (isDub) return `${base} (DUB)`;
     if (isHardSub) return `${base}-HardSub`;
@@ -1669,16 +1783,16 @@ export async function scrapeAniNeko(title, episode, isMovie = false, animeId = n
     // Subtitles are resolved on-demand via resolveSingleServer → getSources tracks[].
     // The _subtitlesPending flag instructs the resolver to always fetch them even when
     // a cached stream URL is returned.
-    const subtitles = [];
-    const proxiedUrl = formatIframeProxyUrl(s.videoUrl, serverReferer);
+    const cleanEmbedUrl = (s.videoUrl || '').replace(/[?&]s=tcdn/g, '');
+    const proxiedUrl = formatIframeProxyUrl(cleanEmbedUrl, serverReferer);
 
     servers.push({
       name: serverDisplayName,
       videoUrl: proxiedUrl,
-      embedUrl: s.videoUrl,
+      embedUrl: cleanEmbedUrl,
       referer: serverReferer,
       type: s.isDub ? 'dub' : 'sub',
-      subtitles,
+      subtitles: [],
       // Flag: instructs resolveSingleServer to always extract subtitle tracks from
       // the getSources API response even when a cached stream URL is available.
       _subtitlesPending: !s.isDub && !s.isHardSub,
@@ -1767,8 +1881,16 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
   if (animeId) {
     const serverMapping = await getSlugMapping(animeId);
     if (serverMapping?.koto && (serverMapping.status === 'verified' || serverMapping.status === 'partial')) {
-      console.log(`[AniKoto] 🌐 Server slug HIT for ${animeId}: "${serverMapping.koto}" (id: ${serverMapping.kotoId || 'resolve'})`);
-      best = { slug: serverMapping.koto, animeTitle: title, animeId: serverMapping.kotoId || null };
+      const candSeason = extractSeasonNumber(serverMapping.koto);
+      const qSeason = extractSeasonNumber(title);
+      const allKnown = Array.from(new Set([title, ...(allTitles || [])].filter(Boolean)));
+      const score = Math.max(...allKnown.map(qt => calculateMatchScore({ title: serverMapping.koto.replace(/-/g, ' '), slug: serverMapping.koto }, qt, isMovie)));
+      if (candSeason === qSeason && score >= 0.75) {
+        console.log(`[AniKoto] 🌐 Server slug HIT for ${animeId}: "${serverMapping.koto}" (id: ${serverMapping.kotoId || 'resolve'})`);
+        best = { slug: serverMapping.koto, animeTitle: title, animeId: serverMapping.kotoId || null };
+      } else {
+        console.warn(`[AniKoto] 🌐 Server slug REJECTED for ${animeId}: "${serverMapping.koto}" (score: ${score.toFixed(2)}, season: ${candSeason} vs ${qSeason})`);
+      }
     }
   }
 
@@ -2013,20 +2135,27 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
     targetIds = epMap.get(Number(episode));
   }
 
-  // Episode list cache (only fetched if targetIds not already in epMap!)
+  // If not found in epMap, the episode might have recently aired (stale cache).
+  // Always fetch fresh HTML from AniKoto if the episode is missing or higher than cached max!
   let epsHtml = '';
   if (!targetIds) {
-    epsHtml = kotoEpListCache.get(kotoId) || '';
-    if (!epsHtml) {
-      const lsEps = lsGet(`koto_eplist_${kotoId}`);
-      if (lsEps) {
-        epsHtml = typeof lsEps === 'object' && lsEps?.html ? lsEps.html : (typeof lsEps === 'string' ? lsEps : '');
-        if (epsHtml) kotoEpListCache.set(kotoId, epsHtml);
+    const maxCachedEp = epMap && epMap.size > 0 ? Math.max(...epMap.keys()) : 0;
+    const isPotentiallyStale = Number(episode) > maxCachedEp;
+
+    if (!isPotentiallyStale) {
+      epsHtml = kotoEpListCache.get(kotoId) || '';
+      if (!epsHtml) {
+        const lsEps = lsGet(`koto_eplist_${kotoId}`);
+        if (lsEps) {
+          epsHtml = typeof lsEps === 'object' && lsEps?.html ? lsEps.html : (typeof lsEps === 'string' ? lsEps : '');
+          if (epsHtml) kotoEpListCache.set(kotoId, epsHtml);
+        }
       }
     }
-    if (!epsHtml) {
+
+    if (!epsHtml || isPotentiallyStale) {
       const epsUrl = `${domain}/ajax/episode/list/${kotoId}`;
-      console.log(`[AniKoto] Fetching episode list: ${epsUrl}`);
+      console.log(`[AniKoto] Fetching fresh episode list (requested ep ${episode}, cached max ${maxCachedEp}): ${epsUrl}`);
       const epsResp = await clientFetch(epsUrl, {
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
         referer: watchUrl,
@@ -2056,23 +2185,21 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
     }
 
     // Parse & index all episodes into kotoEpMapCache & localStorage for 0ms future lookups
-    if (!epMap) {
-      epMap = new Map();
-      const looserRe = /data-num="(\d+)"[^>]*data-ids="([^"]+)"|data-ids="([^"]+)"[^>]*data-num="(\d+)"/g;
-      let lMatch;
-      while ((lMatch = looserRe.exec(epsHtml)) !== null) {
-        const num = parseInt(lMatch[1] || lMatch[4], 10);
-        const ids = lMatch[2] || lMatch[3];
-        if (!isNaN(num) && ids) {
-          epMap.set(num, ids);
-        }
+    epMap = new Map();
+    const looserRe = /data-num="(\d+)"[^>]*data-ids="([^"]+)"|data-ids="([^"]+)"[^>]*data-num="(\d+)"/g;
+    let lMatch;
+    while ((lMatch = looserRe.exec(epsHtml)) !== null) {
+      const num = parseInt(lMatch[1] || lMatch[4], 10);
+      const ids = lMatch[2] || lMatch[3];
+      if (!isNaN(num) && ids) {
+        epMap.set(num, ids);
       }
-      if (epMap.size > 0) {
-        kotoEpMapCache.set(kotoId, epMap);
-        lsSet(`koto_epmap_${kotoId}`, Object.fromEntries(epMap));
-        if (!targetIds && epMap.has(Number(episode))) {
-          targetIds = epMap.get(Number(episode));
-        }
+    }
+    if (epMap.size > 0) {
+      kotoEpMapCache.set(kotoId, epMap);
+      lsSet(`koto_epmap_${kotoId}`, Object.fromEntries(epMap));
+      if (!targetIds && epMap.has(Number(episode))) {
+        targetIds = epMap.get(Number(episode));
       }
     }
 
@@ -2092,11 +2219,8 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
   }
 
   if (!targetIds) {
-    // Episode not found — clear any cached match for this title so a bad match
-    // doesn't persist across app restarts via localStorage
-    kotoSearchCache.delete(title);
-    try { localStorage.removeItem(lsSearchKey('koto', title)); } catch {}
-    throw new Error(`Episode ${episode} not found on AniKoto (matched: "${animeTitle}") — server hidden`);
+    const maxEpFound = epMap && epMap.size > 0 ? Math.max(...epMap.keys()) : 0;
+    throw new Error(`Episode ${episode} not found on AniKoto (max available is ${maxEpFound}) — server hidden`);
   }
 
   // Get server list
@@ -2134,17 +2258,21 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
   }
 
   // Resolve AniHD, MegaPlay, and AniVid from distinct server streams
-  const hasHd1 = rawServers.some(s => s.serverName === 'HD-1');
+  // ⚡ NEVER prioritize or map to HD-1 (s=tcdn / TikTok CDN is blocked in multiple regions like India)
+  // Instead, AniHD maps to Vidstream-2 (standard clean MegaPlay CDN) or HD-2 (Akirax)
   const ALLOWED_SERVERS = [
-    { match: name => hasHd1 ? name === 'HD-1' : /vidstream-?2/i.test(name), label: 'AniHD', isHLS: false },
-    { match: name => /vidstream-?2/i.test(name) || (!hasHd1 && /vidstream/i.test(name)), label: 'MegaPlay', isHLS: false },
+    { match: name => /vidstream-?2/i.test(name) || name === 'HD-2', label: 'AniHD', isHLS: false },
+    { match: name => (/vidstream/i.test(name) && !/vidstream-?2/i.test(name)) || /mega/i.test(name) || name === 'HD-1', label: 'MegaPlay', isHLS: false },
     { match: name => /vidstream-?1/i.test(name) || /vidplay|vidtube/i.test(name), label: 'AniVid', isHLS: false },
   ];
 
   const filteredServers = [];
+  const assignedLinks = new Set();
   for (const allowed of ALLOWED_SERVERS) {
     for (const s of rawServers) {
-      if (allowed.match(s.serverName)) {
+      const key = `${s.type}_${s.linkId}`;
+      if (!assignedLinks.has(key) && allowed.match(s.serverName)) {
+        assignedLinks.add(key);
         filteredServers.push({ ...s, label: allowed.label, isHLS: allowed.isHLS });
       }
     }
@@ -2164,7 +2292,7 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
           timeout: 3000
         });
         const parsed = JSON.parse(resp);
-        const embedUrl = parsed.result?.url || '';
+        let embedUrl = (parsed.result?.url || '').replace(/[?&]s=tcdn/g, '');
         if (!embedUrl) return null;
 
         let serverReferer = domain + '/';
@@ -2197,7 +2325,11 @@ export async function scrapeAniKoto(title, episode, isMovie = false, animeId = n
     .filter(srv => {
       const k = `${srv.name}_${srv.type}`;
       if (seenKeys.has(k)) return false;
+      const u = (srv.embedUrl || srv.videoUrl || '').trim();
+      const uKey = `${srv.type}_${u}`;
+      if (u && seenUrls.has(uKey)) return false;
       seenKeys.add(k);
+      if (u) seenUrls.add(uKey);
       return true;
     });
 

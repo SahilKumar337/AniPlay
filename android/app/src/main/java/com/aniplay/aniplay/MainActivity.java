@@ -27,6 +27,19 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.JSObject;
 import android.content.pm.ActivityInfo;
+import android.util.Log;
+import java.io.InputStream;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
+import java.net.URL;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.concurrent.TimeUnit;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import okhttp3.ConnectionPool;
 
 public class MainActivity extends BridgeActivity {
     public static boolean isImmersiveMode = false;
@@ -312,5 +325,111 @@ public class MainActivity extends BridgeActivity {
         // Hide native scrollbars completely (CSS can't hide Android WebView scrollbars)
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
+    }
+
+    // ─── Native OkHttp Streaming Engine (YouTube Architecture) ───────────────
+    private static final OkHttpClient streamClient = new OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .connectionPool(new ConnectionPool(16, 5, TimeUnit.MINUTES))
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build();
+
+    private WebResourceResponse handleNativeStreamRequest(WebResourceRequest request) {
+        android.net.Uri uri = request.getUrl();
+        if (uri == null) return null;
+
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Access-Control-Allow-Origin", "*");
+            headers.put("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+            headers.put("Access-Control-Allow-Headers", "*");
+            headers.put("Access-Control-Max-Age", "86400");
+            return new WebResourceResponse("text/plain", "UTF-8", 200, "OK", headers, new ByteArrayInputStream(new byte[0]));
+        }
+
+        String targetUrl = uri.getQueryParameter("url");
+        String referer = uri.getQueryParameter("referer");
+        if (targetUrl == null || targetUrl.isEmpty()) {
+            return null;
+        }
+
+        try {
+            Request.Builder reqBuilder = new Request.Builder()
+                .url(targetUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
+                .header("Accept", "*/*");
+
+            if (referer != null && !referer.isEmpty()) {
+                reqBuilder.header("Referer", referer);
+                try {
+                    reqBuilder.header("Origin", new URL(referer).getProtocol() + "://" + new URL(referer).getHost());
+                } catch (Exception ignored) {}
+            }
+
+            // Forward Range header if present (crucial for video scrubbing & seeking)
+            Map<String, String> reqHeaders = request.getRequestHeaders();
+            if (reqHeaders != null && reqHeaders.containsKey("Range")) {
+                reqBuilder.header("Range", reqHeaders.get("Range"));
+            }
+
+            Response response = streamClient.newCall(reqBuilder.build()).execute();
+            int statusCode = response.code();
+            ResponseBody body = response.body();
+            if (body == null) {
+                response.close();
+                return null;
+            }
+
+            InputStream is = body.byteStream();
+
+            // Detect and strip dummy PNG header if present
+            // MegaPlay / MegaCloud / TikTok CDN segments disguise MPEG-TS with a 252-byte PNG header
+            BufferedInputStream bis = new BufferedInputStream(is, 8192);
+            bis.mark(500);
+            byte[] checkHeader = new byte[380];
+            int nRead = bis.read(checkHeader, 0, 380);
+            if (nRead >= 256 && (checkHeader[0] & 0xFF) != 0x47) {
+                // If byte 252 is 0x47 (sync byte of MPEG-TS), strip 252 dummy PNG bytes
+                if ((checkHeader[252] & 0xFF) == 0x47 && nRead >= 380 && (checkHeader[252 + 188] & 0xFF) == 0x47) {
+                    bis.reset();
+                    bis.skip(252);
+                } else {
+                    bis.reset();
+                }
+            } else {
+                bis.reset();
+            }
+
+            String mimeType = "video/MP2T";
+            String lowerUrl = targetUrl.toLowerCase();
+            if (lowerUrl.contains(".m3u8") || lowerUrl.contains("/master") || lowerUrl.contains("/index")) {
+                mimeType = "application/vnd.apple.mpegurl";
+            } else if (lowerUrl.contains(".mp4") || lowerUrl.contains(".m4s") || lowerUrl.contains(".m4v")) {
+                mimeType = "video/mp4";
+            } else if (lowerUrl.contains(".vtt")) {
+                mimeType = "text/vtt";
+            }
+
+            Map<String, String> respHeaders = new HashMap<>();
+            respHeaders.put("Access-Control-Allow-Origin", "*");
+            respHeaders.put("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+            respHeaders.put("Access-Control-Allow-Headers", "*");
+            respHeaders.put("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
+            respHeaders.put("Cache-Control", "no-cache");
+
+            String cr = response.header("Content-Range");
+            if (cr != null) respHeaders.put("Content-Range", cr);
+            String cl = response.header("Content-Length");
+            if (cl != null) respHeaders.put("Content-Length", cl);
+            String ar = response.header("Accept-Ranges");
+            if (ar != null) respHeaders.put("Accept-Ranges", ar);
+
+            return new WebResourceResponse(mimeType, null, statusCode, statusCode == 206 ? "Partial Content" : "OK", respHeaders, bis);
+        } catch (Exception e) {
+            Log.e("MainActivity", "Error in native stream interceptor for " + targetUrl, e);
+            return null;
+        }
     }
 }

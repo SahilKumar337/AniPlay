@@ -132,26 +132,35 @@ export async function scrapeHStream(primaryTitle, episode = 1, isMovie = false, 
       epNum === 1 ? `${BASE_URL}/hentai/${slug}` : null
     ].filter(Boolean);
 
-    for (const cand of candidateUrls) {
+    const probePromises = candidateUrls.map(async (cand) => {
       try {
         const res = await adultHttp(cand, { timeout: 4000 });
         if (res.status === 200) {
           const text = await res.text();
           if (text.includes('id="e_id"') || text.includes('id=\'e_id\'')) {
-            targetUrl = cand;
-            pageHtml = text;
-            cookiesHeader = res.cookies.map(c => c.split(';')[0]).join('; ');
+            const cookies = res.cookies.map(c => c.split(';')[0]).join('; ');
+            let token = '';
             for (const c of res.cookies) {
               const m = c.match(/XSRF-TOKEN=([^;]+)/);
-              if (m) { xsrfToken = decodeURIComponent(m[1]); break; }
+              if (m) { token = decodeURIComponent(m[1]); break; }
             }
-            console.log(`[scrapeHStream] Direct hit on candidate: ${cand}`);
-            break;
+            return { cand, text, cookies, token };
           }
         }
       } catch (_) {}
+      return null;
+    });
+
+    const probeResults = await Promise.all(probePromises);
+    const hit = probeResults.find(r => r !== null);
+    if (hit) {
+      targetUrl = hit.cand;
+      pageHtml = hit.text;
+      cookiesHeader = hit.cookies;
+      xsrfToken = hit.token;
+      console.log(`[scrapeHStream] Direct hit on candidate: ${targetUrl}`);
+      break;
     }
-    if (targetUrl) break;
   }
 
   // 2. Search fallback if direct candidate probe missed

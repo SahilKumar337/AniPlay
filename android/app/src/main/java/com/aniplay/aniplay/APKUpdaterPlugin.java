@@ -139,7 +139,7 @@ public class APKUpdaterPlugin extends Plugin {
                     conn.setInstanceFollowRedirects(true);
                     conn.setConnectTimeout(20000);
                     conn.setReadTimeout(30000);
-                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AniPlay/1.6.0");
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AniPlay/1.6.1");
                     conn.connect();
                     int code = conn.getResponseCode();
                     if (code == java.net.HttpURLConnection.HTTP_MOVED_PERM 

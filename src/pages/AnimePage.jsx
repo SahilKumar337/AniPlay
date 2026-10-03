@@ -6,6 +6,7 @@ import { useAnimeDetail } from '../hooks/useAnimeDetail';
 import { useAnimeStream } from '../hooks/useAnimeStream';
 import { useAnimeDownload } from '../hooks/useAnimeDownload';
 import { getAniNekoServers, getCachedServers, resolveSingleServer, prefetchM3U8AndFirstSegment, checkIsAdultAnime } from '../api/stream';
+import { getNetworkProfile } from '../utils/networkSpeed';
 import { getAiredEpisodeCount } from '../utils/animeStreamUtils';
 import { discoverAdultEpisodeCount } from '../api/adultScraper';
 import { registerBackButtonHandler } from '../utils/backButton';
@@ -116,6 +117,7 @@ export default function AnimePage() {
     streamErr,
     isActiveHLS,
     setIsActiveHLS,
+    serverSwitchToken,
     allSubtitleTracks,
     selectServer,
     fetchStream,
@@ -175,43 +177,66 @@ export default function AnimePage() {
     return null;
   });
 
-  // Pre-warm stream cache in background & discover DUB availability
+  // Synchronize DUB availability if stream cache already exists in storage
   useEffect(() => {
     if (!anime || !resumeEp || isNotYetReleased) return;
     const ep = resumeEp || 1;
     const cached = getCachedServers(anime, ep);
     if (cached?.servers?.length > 0) {
       setAnimeDubAvailable(cached.servers.some(s => s.type === 'dub'));
-      return;
     }
-    let cancelled = false;
-    getAniNekoServers(anime, ep, null, false).then(async res => {
-      if (!cancelled && res?.servers?.length > 0) {
-        setAnimeDubAvailable(res.servers.some(s => s.type === 'dub'));
-        // ⚡ Netflix Speculative Pre-Resolution: Pre-resolve top server in background
-        // so when user taps Play or Resume, the stream URL, playlist & Fragment 0 are ALREADY in RAM!
-        const trk = audioTrack || 'sub';
-        const top = res.servers.find(s => s.type === trk) || res.servers[0];
-        if (top) {
-          resolveSingleServer(top, anime, ep).then(streamResult => {
+  }, [anime?.id, resumeEp, isNotYetReleased]);
+
+  // ⚡ Speculative Eager Pre-Warming for the Target/Resume Episode on AnimePage mount:
+  // When user opens AnimePage without an active episode, resolve resume episode's server list in background.
+  // When user taps "Play" or "Episode 1", the stream and playlists are already in RAM → 0ms instant playback!
+  useEffect(() => {
+    if (!anime || isNotYetReleased) return;
+    if (getNetworkProfile().isSlow) return;
+    // ⚡ If an episode is already actively selected or playing, useAnimeStream is handling it in foreground.
+    // Avoid double-scraping and CPU lockup by skipping pre-warming for active playback!
+    if (epParam) return;
+    const targetEp = Number(resumeEp || 1);
+    if (!targetEp || targetEp <= 0) return;
+
+    const trk = audioTrack || 'sub';
+
+    (async () => {
+      try {
+        let srvs = getCachedServers(anime, targetEp)?.servers;
+        if (!srvs || srvs.length === 0) {
+          const res = await getAniNekoServers(anime, targetEp, null, false);
+          srvs = res?.servers;
+        }
+        if (srvs && srvs.length > 0) {
+          const top = srvs.find(s => s.type === trk) || srvs[0];
+          if (top) {
+            const streamResult = await resolveSingleServer(top, anime, targetEp);
             if (streamResult?.videoUrl) {
               prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
             }
-          }).catch(() => {});
+          }
         }
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [anime?.id, resumeEp, isNotYetReleased]);
+      } catch (_) {}
+    })();
+  }, [anime?.id, epParam, resumeEp, isNotYetReleased, audioTrack]);
 
   // Synchronize DUB availability whenever active video stream servers are updated
   useEffect(() => {
     if (dubServers.length > 0) {
       setAnimeDubAvailable(true);
-    } else if (servers.length > 0 && subServers.length > 0 && dubServers.length === 0) {
+    } else if (servers.length > 0 && subServers.length > 0 && dubServers.length === 0 && !loadStream && !extracting) {
       setAnimeDubAvailable(false);
+      // ⚡ If current episode has no DUB servers and scraping is complete, automatically switch UI to SUB
+      if (audioTrack === 'dub') {
+        console.log(`[AnimePage] Episode ${epParam} has no DUB servers. Auto-switching UI to SUB.`);
+        setAudioTrack('sub');
+        if (subServers.length > 0) {
+          selectServer(subServers[0], servers, false);
+        }
+      }
     }
-  }, [dubServers.length, servers.length, subServers.length]);
+  }, [dubServers.length, servers.length, subServers.length, loadStream, extracting, audioTrack, setAudioTrack, selectServer, servers, epParam]);
 
   // Synchronize DUB availability when episode download servers are fetched
   useEffect(() => {
@@ -382,6 +407,11 @@ export default function AnimePage() {
       : (currentProgress?.seekPosition > 2 ? currentProgress.seekPosition : 0);
 
     if (trk === 'dub' && dubServers.length === 0) {
+      if (loadStream || extracting) {
+        showToast('Switching to Dub when servers arrive...');
+        setAudioTrack('dub');
+        return;
+      }
       showToast('No English Dub available for this anime');
       return;
     }
@@ -396,7 +426,7 @@ export default function AnimePage() {
     setAudioTrack(trk);
     const targetList = trk === 'dub' ? dubServers : subServers;
     if (targetList.length > 0) selectServer(targetList[0], servers, true);
-  }, [anime, epParam, dubServers, subServers, selectServer, servers, setAudioTrack, setEpisodeProgress, getEpisodeProgress, showToast]);
+  }, [anime, epParam, dubServers, subServers, selectServer, servers, setAudioTrack, setEpisodeProgress, getEpisodeProgress, showToast, loadStream, extracting]);
 
   const handleExitPlayer = useCallback(() => {
     if (playbackTimeRef.current > 2 && anime && epParam) {
@@ -447,8 +477,7 @@ export default function AnimePage() {
     setSearchParams(nextParams, { replace: true });
   }, [anime, epParam, setEpisodeProgress, setSearchParams, isDirectPlay]);
 
-  // ⚡ Speculative Pre-Resolution & Instant Frame Injection on Touch/Hover:
-  // Pre-warms the stream URL, M3U8 playlists, and Fragment 0 in RAM during the 100-200ms finger tap / hover window!
+  // ⚡ Speculative Pre-Resolution on Touch/Hover for episodes:
   const prefetchingEpsRef = useRef(new Set());
   const handlePrefetchEp = useCallback((newEp) => {
     if (!anime || !newEp || isNotYetReleased) return;
@@ -457,28 +486,24 @@ export default function AnimePage() {
     prefetchingEpsRef.current.add(epNum);
 
     const trk = audioTrack || 'sub';
-    const cached = getCachedServers(anime, epNum);
-    if (cached?.servers?.length > 0) {
-      const top = cached.servers.find(s => s.type === trk) || cached.servers[0];
-      if (top) {
-        resolveSingleServer(top, anime, epNum).then(streamResult => {
-          if (streamResult?.videoUrl) {
-            prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
-          }
-        }).catch(() => {});
-      }
-    } else {
-      getAniNekoServers(anime, epNum, null, false).then(res => {
-        const top = res?.servers?.find(s => s.type === trk) || res?.servers?.[0];
-        if (top) {
-          resolveSingleServer(top, anime, epNum).then(streamResult => {
+    (async () => {
+      try {
+        let srvs = getCachedServers(anime, epNum)?.servers;
+        if (!srvs || srvs.length === 0) {
+          const res = await getAniNekoServers(anime, epNum, null, false);
+          srvs = res?.servers;
+        }
+        if (srvs && srvs.length > 0) {
+          const top = srvs.find(s => s.type === trk) || srvs[0];
+          if (top) {
+            const streamResult = await resolveSingleServer(top, anime, epNum);
             if (streamResult?.videoUrl) {
               prefetchM3U8AndFirstSegment(streamResult.videoUrl, top.headers || streamResult.headers);
             }
-          }).catch(() => {});
+          }
         }
-      }).catch(() => {});
-    }
+      } catch (_) {}
+    })();
   }, [anime, isNotYetReleased, audioTrack]);
 
   // Direct Play Mode (e.g. from Continue Watching): render only player portal without mounting the anime info page
@@ -542,6 +567,7 @@ export default function AnimePage() {
           initialSeekTime={initialSeekTime}
           onSeekProgress={handleSeekProgress}
           sessionDownloadedEps={downloadedSet}
+          serverSwitchToken={serverSwitchToken}
         />
 
         {/* Drawers for Offline Downloads */}
@@ -903,6 +929,7 @@ export default function AnimePage() {
           initialSeekTime={initialSeekTime}
           onSeekProgress={handleSeekProgress}
           sessionDownloadedEps={downloadedSet}
+          serverSwitchToken={serverSwitchToken}
         />
       )}
 

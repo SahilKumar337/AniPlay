@@ -1,4 +1,4 @@
-﻿/**
+/**
  * VidPlay / VidTube Stream Decryptor
  *
  * VidPlay (vidplay.online / vidtube.site) uses a 2-step authentication protocol:
@@ -16,6 +16,7 @@ import { CapacitorHttp, Capacitor } from '@capacitor/core';
 export const VIDPLAY_DOMAINS = [
   'vidplay.online', 'vidplay.site', 'vidtube.site', 'vidtube.online',
   'vidsrc.nl', 'vidsrc.pm', 'vidsrc.me', 'filemoon.sx',
+  'myvidplay.com', 'vidplay.cc', 'vidplay.to',
 ];
 
 const futokenCache = new Map(); // domain -> { token, ts }
@@ -25,7 +26,7 @@ export function isVidPlayEmbed(url) {
   if (!url || typeof url !== 'string') return false;
   try {
     const host = new URL(url).hostname.toLowerCase();
-    return VIDPLAY_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+    return VIDPLAY_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || host.includes('vidplay') || host.includes('vidtube');
   } catch { return false; }
 }
 

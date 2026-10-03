@@ -57,10 +57,20 @@ function ServerPickerDrawer({
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {[...servers].sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name)).map((srv, idx) => {
-          const isSelected = currentServer && (srv.name === currentServer.name || srv.id === currentServer.id);
-          const isFast = srv.name?.toLowerCase().includes('neko') || srv.name?.toLowerCase().includes('waves') || srv.name?.toLowerCase().includes('anihd');
-          const isPlaceholder = !!srv.isPlaceholder;
+        {(() => {
+          const seen = new Set();
+          const uniqueServers = [];
+          for (const s of servers) {
+            const norm = (s.name || '').trim().toLowerCase();
+            if (!seen.has(norm)) {
+              seen.add(norm);
+              uniqueServers.push(s);
+            }
+          }
+          return uniqueServers.sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name)).map((srv, idx) => {
+            const isSelected = currentServer && (srv.name === currentServer.name || srv.id === currentServer.id);
+            const isFast = srv.name?.toLowerCase().includes('neko') || srv.name?.toLowerCase().includes('waves') || srv.name?.toLowerCase().includes('anihd');
+            const isPlaceholder = !!srv.isPlaceholder;
 
           return (
             <motion.div
@@ -164,7 +174,8 @@ function ServerPickerDrawer({
               )}
             </motion.div>
           );
-        })}
+        });
+      })()}
       </div>
     </AppDrawer>
   );

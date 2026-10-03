@@ -1,19 +1,17 @@
 {
-  "latestVersion": "1.6.0",
-  "versionCode": 60,
+  "latestVersion": "1.6.1",
+  "versionCode": 61,
   "apkUrl": "https://sahilkumar337.github.io/AniPlay/",
-  "directApkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/AniPlay.apk",
-  "releasePageUrl": "https://github.com/SahilKumar337/AniPlay/releases/tag/v1.6.0",
+  "directApkUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.1/AniPlay.apk",
+  "releasePageUrl": "https://github.com/SahilKumar337/AniPlay/releases/tag/v1.6.1",
   "forceUpdate": false,
-  "changelog": "AniPlay v1.6.0 \u2014 Mega Release (Realtime Comment Alerts, Airing Push Engine, Multi-Part Matcher & Glass UI)",
+  "changelog": "AniPlay v1.6.1 — Playback & Stream Precision Update (Strict Pause Control, Stream Isolation & Ghost Purge)",
   "changelogItems": [
-    "\ud83d\udd14 YouTube-Style Notification System: In-app Bell with live unread badge, dedicated inbox tabs (All, Releases, Reminders), and native Android status bar alerts",
-    "\ud83d\udcac Realtime Comment & Like Alerts: Instant notifications when someone likes your comments or replies to your discussion in the community",
-    "\ud83c\udfac Universal Multi-Part & Season Stream Matcher: Seamless playback support for complex titled anime (e.g. 86 Part 2, Roman numerals, number-word titles) via Cloudflare KV slug map",
-    "\ud83c\udfa8 Tactile Liquid Glass Header: Fixed icon transparency on mobile tap; navigation pills remain solid and responsive with haptic scaling",
-    "\ud83d\udee1\ufe0f Anti-Random-Anime Shield & DUB Parity: Precision keyword coverage guarantees 100% correct streams and downloads across AniNeko, AniKoto, and AniWaves",
-    "\ud83e\uddca GPU Decoder Freeze Watchdog: Hardware-level recovery prevents video freezing while audio continues playing on weak decoders",
-    "\u2728 Butter-Smooth 120Hz Animations: Fluid visionOS/iOS 18 glassmorphism, zero-jitter transitions, and persistent orientation locks"
+    "⏸️ Strict Player Pause Lock: Fixed auto-play bug where playback resumed automatically after pressing pause due to HLS fragment buffer triggers",
+    "🎯 Cross-Episode Stream Isolation: Solved episode mismatch (e.g. Ep 14 playing Ep 2) with multi-episode contamination checks and immediate active video cleanup",
+    "👻 Ghost Server Purge: Discarded unresolved scraper placeholders (AniHD, MegaPlay) when episodes haven't aired on those providers, auto-routing to active streams (WavesHD, HD-1)",
+    "🔄 Dynamic Episode Cache Bypass: Automatically invalidates stale episode lists on newly released episodes so fresh streams resolve without delay",
+    "⚡ Zero-Latency Track Switching: Active video URL resets instantly upon episode or audio track changes, eliminating prior episode audio or video leakage"
   ],
   "domains": {
     "neko": "https://anineko.es",
@@ -31,7 +29,7 @@
     }
   },
   "maintenanceMessage": null,
-  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.0/bundle.zip",
+  "bundleUrl": "https://github.com/SahilKumar337/AniPlay/releases/download/v1.6.1/bundle.zip",
   "ads": {
     "enabled": false,
     "directLink": {

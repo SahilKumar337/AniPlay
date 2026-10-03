@@ -289,7 +289,7 @@ function SettingsCard({ title, emoji, children, zIndex = 1 }) {
 
 
 /* ── Full Settings Panel ─────────────────────────────────────────────────── */
-function SettingsPanel({ onBack }) {
+function SettingsPanel({ onBack, onShowReleaseNotes, appVersion }) {
   const { settings, updateSettings, watchlist, favorites, progress } = useApp();
   const [showAdultModal, setShowAdultModal] = useState(false);
 
@@ -621,6 +621,76 @@ function SettingsPanel({ onBack }) {
           </SettingRow>
         </SettingsCard>
 
+        {/* 🚀 Version & Fixes in v1.6.1 */}
+        <SettingsCard title="Version & Release Fixes" emoji="🚀" zIndex={5}>
+          <div style={{ padding: "14px 16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>AniPlay v{appVersion || "1.6.1"}</span>
+                  <span style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    background: "rgba(34,197,94,0.15)",
+                    color: "#22c55e",
+                    border: "1px solid rgba(34,197,94,0.3)",
+                    padding: "2px 6px",
+                    borderRadius: 6
+                  }}>
+                    Latest Release
+                  </span>
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2 }}>
+                  Playback & Stream Precision Update
+                </div>
+              </div>
+              {onShowReleaseNotes && (
+                <button
+                  onClick={onShowReleaseNotes}
+                  style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    borderRadius: 8,
+                    padding: "6px 12px",
+                    color: "var(--accent)",
+                    fontWeight: 700,
+                    fontSize: 12,
+                    cursor: "pointer"
+                  }}
+                >
+                  Full Notes ↗
+                </button>
+              )}
+            </div>
+
+            <div style={{
+              background: "rgba(255,255,255,0.02)",
+              border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 12,
+              padding: "10px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Fixes Done in v1.6.1:
+              </div>
+              {[
+                { icon: "⏸️", text: "Fixed AniPlayer auto-playing after clicking pause (removed HLS buffer segment triggers)." },
+                { icon: "🎯", text: "Fixed episode mismatch (e.g. Episode 14 playing Episode 2) with multi-episode isolation." },
+                { icon: "👻", text: "Purged ghost server placeholders (AniHD/MegaPlay) when episode is unreleased on that provider." },
+                { icon: "🔄", text: "Auto-refresh stale episode cache on newly released episodes for instant stream resolution." },
+                { icon: "⚡", text: "Instant active stream cleanup on episode/track switch to eliminate prior episode frame leakage." }
+              ].map((fix, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                  <span style={{ fontSize: 13, flexShrink: 0, marginTop: -1 }}>{fix.icon}</span>
+                  <span>{fix.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SettingsCard>
+
         {/* 🔞 Adult Content (18+) - Temporarily disabled */}
         {false && (
           <SettingsCard title="Adult Content (18+)" emoji="🔞" zIndex={6}>
@@ -751,7 +821,7 @@ export default function Profile() {
   const [showSignOut, setShowSignOut] = useState(false);
   const [showCloudLogOut, setShowCloudLogOut] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
-  const [appVersion, setAppVersion] = useState("1.6.0");
+  const [appVersion, setAppVersion] = useState("1.6.1");
   const [devTaps, setDevTaps] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -924,10 +994,10 @@ export default function Profile() {
     return completedIds.size + activeSet.size;
   }, [recentlyViewed, progress, watchlist, favorites]);
 
-  if (showSettings) return <SettingsPanel onBack={() => setShowSettings(false)} />;
+  if (showSettings) return <SettingsPanel onBack={() => setShowSettings(false)} onShowReleaseNotes={() => setShowReleaseNotes(true)} appVersion={appVersion} />;
 
   const MENU = [
-    { icon: Sparkles, label: "What's New (v1.6.0)", action: () => setShowReleaseNotes(true), color: "#f59e0b" },
+    { icon: Sparkles, label: "What's New (v1.6.1)", action: () => setShowReleaseNotes(true), color: "#f59e0b" },
     { icon: Settings, label: "Settings", action: () => setShowSettings(true), color: "var(--accent)" },
     { icon: Bell, label: "Notifications", action: () => navigate('/notifications') },
     { icon: Info, label: "About AniPlay", action: () => setShowAbout(true) },
@@ -1236,52 +1306,42 @@ export default function Profile() {
       )}
 
       {showReleaseNotes && (
-        <Modal title="What's New in v1.6.0" onClose={() => setShowReleaseNotes(false)}>
+        <Modal title="What's New in v1.6.1" onClose={() => setShowReleaseNotes(false)}>
           <div style={{ maxHeight: "65vh", overflowY: "auto", paddingRight: 4, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ textAlign: "center", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div style={{ fontSize: 13, fontWeight: 800, color: "var(--accent)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                Grand Release · Ultra-Stability Update
+                Precision & Playback Stability Update
               </div>
               <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                Version 1.6.0 · The Most Stable AniPlay Ever
+                Version 1.6.1 · Playback Reliability & Stream Isolation
               </div>
             </div>
 
             {[
               {
-                icon: "🛡️",
-                title: "Anti-Random-Anime Shield",
-                desc: "Strict 60%+ significant keyword coverage eliminates wrong anime or random titles when streaming or downloading DUB."
+                icon: "⏸️",
+                title: "Strict Player Pause Lock",
+                desc: "Fixed auto-play glitch where video unpaused automatically after clicking pause due to segment buffer events."
               },
               {
-                icon: "🧊",
-                title: "Silent Video Freeze Watchdog",
-                desc: "Auto-detects GPU hardware decoder stalls where picture froze while sound continued, instantly recovering playback without interruption."
+                icon: "🎯",
+                title: "Cross-Episode Stream Isolation",
+                desc: "Resolved episode mismatch (e.g. Episode 14 playing Episode 2) with multi-episode contamination checks and immediate active video cleanup."
               },
               {
-                icon: "📺",
-                title: "Adaptive Low-Network Engine",
-                desc: "Intelligent YouTube & Netflix inspired stream loader automatically falls back to lower resolutions on slow networks for instant startup."
+                icon: "👻",
+                title: "Ghost Server Auto-Purge",
+                desc: "Unresolved placeholders (AniHD, MegaPlay) are cleanly discarded when an episode has not aired on those providers, routing straight to working streams (WavesHD, HD-1)."
+              },
+              {
+                icon: "🔄",
+                title: "Dynamic Episode Cache Refresh",
+                desc: "AniKoto episode manifests now bypass stale cache on newly released episodes so fresh streams resolve without delay."
               },
               {
                 icon: "⚡",
-                title: "Mega-Series 1000+ Ep Acceleration",
-                desc: "Direct provider ID mapping and cached episode manifests enable sub-second episode jumping for giant anime like One Piece."
-              },
-              {
-                icon: "🎧",
-                title: "Unified DUB Availability Parity",
-                desc: "Dynamic 3-state DUB discovery ensures download drawers and player controls reflect genuine DUB availability with auto-fallback."
-              },
-              {
-                icon: "📅",
-                title: "Airing Episode Synchronizer",
-                desc: "Strict global airing validation prevents unreleased future episodes or unreleased sequel seasons from triggering scraper errors."
-              },
-              {
-                icon: "✨",
-                title: "120Hz Fluid Animations & Persistence",
-                desc: "Seamless fullscreen orientation persistence when switching episodes and ultra-smooth glassmorphic transitions."
+                title: "Zero-Latency Track & Episode Switching",
+                desc: "Active video URL resets instantly upon episode or audio track changes, preventing prior episode audio or video frames from leaking."
               }
             ].map((item, idx) => (
               <div key={idx} style={{

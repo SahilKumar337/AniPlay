@@ -9,6 +9,7 @@
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true"
+        android:largeHeap="true"
         android:theme="@style/AppTheme">
 
         <activity

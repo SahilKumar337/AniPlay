@@ -16,6 +16,7 @@ export default function PlayerOverlayPortal({
   servers = [],
   subServers = [],
   dubServers = [],
+  hasDub = true,
   activeServer,
   activeName = '',
   activeUrl,
@@ -47,10 +48,18 @@ export default function PlayerOverlayPortal({
   onSeekProgress = null,
   onPrefetchEp = null,
   onAutoFailoverServer = null,
+  serverSwitchToken = 0,
 }) {
   const title = getTitle(anime);
 
 
+
+  const [hasMountedPlayer, setHasMountedPlayer] = useState(false);
+  useEffect(() => {
+    if (activeUrl && (isActiveHLS || isDirectStreamUrl(activeUrl))) {
+      setHasMountedPlayer(true);
+    }
+  }, [activeUrl, isActiveHLS]);
 
   // Windowed episode list: show EP_PAGE_SIZE episodes at a time, centered around current
   const epPage = useMemo(() => {
@@ -94,15 +103,7 @@ export default function PlayerOverlayPortal({
           overflow: fsActive ? 'visible' : 'hidden',
         }}
       >
-        {loadStream && servers.length === 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
-            <LoadingWheel size={44} text="Searching servers..." />
-          </div>
-        ) : !activeUrl && extracting ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
-            <LoadingWheel size={44} text="Resolving stream sources..." />
-          </div>
-        ) : streamErr && !activeUrl ? (
+        {streamErr && !activeUrl ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', gap: 12, padding: 20, overflowY: 'auto' }}>
             <AlertCircle size={32} color={streamErr.includes('Adult Mode') ? '#f43f5e' : (streamErr.includes('not aired') ? '#eab308' : '#e50914')} />
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 280, lineHeight: 1.5 }}>{streamErr}</p>
@@ -131,51 +132,16 @@ export default function PlayerOverlayPortal({
               </button>
             )}
           </div>
+        ) : (!hasMountedPlayer && (!activeUrl || (loadStream && servers.length === 0))) ? (
+          // Initial cold load: before first stream URL is ever found
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
+            <LoadingWheel size={44} text={servers.length === 0 ? "Searching servers..." : "Finding stream..."} />
+          </div>
         ) : (
-          // ── ALWAYS keep AniPlayer mounted once we have a URL, even during server switching.
-          // Unmounting causes ScreenOrientation/ImmersiveMode teardown → portrait flash.
-          // Instead we keep the player alive and show a translucent overlay while loading.
-          activeUrl && (isActiveHLS || isDirectStreamUrl(activeUrl)) ? (
-            <>
-              <AniPlayer
-                url={activeUrl}
-                title={`${title} - Episode ${epParam}`}
-                serverName={activeName}
-                isHLS={!!isActiveHLS}
-                isHardSub={!!activeServer?.isHardSub || (activeName || '').toLowerCase().includes('hardsub') || (activeName || '').toLowerCase().includes('hard')}
-                referer={activeServer?.referer}
-                embedUrl={activeServer?.embedUrl}
-                subtitles={activeServer?.subtitles || []}
-                extraSubtitles={allSubtitleTracks}
-                onBack={onBack}
-                onFullscreenChange={(isFs) => {
-                  setFsActive(isFs);
-                  if (fsActiveRef) fsActiveRef.current = isFs;
-                  if (isFs && setEpTransitionFs) setEpTransitionFs(false);
-                }}
-                currentEpisode={epParam}
-                totalEpisodes={totalEps}
-                onEpisodeChange={onEpisodeChange}
-                autoplay={settings?.autoplay !== false}
-                subtitleSettings={settings || null}
-                loading={loadStream || extracting}
-                startInFs={epTransitionFs}
-                keepFsOnEpChange={keepFsRef}
-                initialSeekTime={initialSeekTime}
-                onSeekProgress={onSeekProgress}
-                onStreamExpired={() => {
-                  const fallbackServer = servers.find(s => s.name !== activeServer?.name && s.type === (activeServer?.type || 'sub'));
-                  if (fallbackServer) {
-                    onSelectServer(fallbackServer, servers, true);
-                  } else if (activeServer) {
-                    onSelectServer(activeServer, servers, true);
-                  }
-                }}
-              />
-              {/* No overlay — AniPlayer silently loads the new episode in background.
-                  The old episode frame stays visible until the new stream is ready. */}
-            </>
-          ) : activeUrl && !isActiveHLS && !isDirectStreamUrl(activeUrl) ? (
+          // ── ALWAYS keep AniPlayer mounted once we have a URL, even during episode/server switching.
+          // Unmounting causes ScreenOrientation/ImmersiveMode teardown → surface ANR and freeze.
+          // Instead we keep the player alive and show the in-player spinner while loading.
+          (activeUrl && !isActiveHLS && !isDirectStreamUrl(activeUrl)) ? (
             <IframePlayer
               src={activeUrl}
               onBack={onBack}
@@ -189,10 +155,46 @@ export default function PlayerOverlayPortal({
               }}
             />
           ) : (
-            // No URL yet — initial load spinner (before first server is found)
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', padding: 24 }}>
-              <LoadingWheel size={44} text="Finding stream..." />
-            </div>
+            <AniPlayer
+              url={activeUrl}
+              title={`${title} - Episode ${epParam}`}
+              serverName={activeName}
+              audioTrack={audioTrack || activeServer?.type || 'sub'}
+              isHLS={!!isActiveHLS}
+              isHardSub={!!activeServer?.isHardSub || (activeName || '').toLowerCase().includes('hardsub') || (activeName || '').toLowerCase().includes('hard')}
+              referer={activeServer?.referer}
+              embedUrl={activeServer?.embedUrl}
+              subtitles={activeServer?.subtitles || []}
+              extraSubtitles={allSubtitleTracks}
+              onBack={onBack}
+              onFullscreenChange={(isFs) => {
+                setFsActive(isFs);
+                if (fsActiveRef) fsActiveRef.current = isFs;
+                if (isFs && setEpTransitionFs) setEpTransitionFs(false);
+              }}
+              currentEpisode={epParam}
+              totalEpisodes={totalEps}
+              onEpisodeChange={onEpisodeChange}
+              autoplay={settings?.autoplay !== false}
+              subtitleSettings={settings || null}
+              loading={loadStream || extracting || !activeUrl}
+              startInFs={epTransitionFs}
+              keepFsOnEpChange={keepFsRef}
+              initialSeekTime={initialSeekTime}
+              onSeekProgress={onSeekProgress}
+              serverSwitchToken={serverSwitchToken}
+              onStreamExpired={() => {
+                if (activeServer) {
+                  invalidateServerStreamCache(activeServer, anime, epParam);
+                }
+                const fallbackServer = servers.find(s => s.name !== activeServer?.name && s.type === (activeServer?.type || 'sub'));
+                if (fallbackServer) {
+                  onSelectServer(fallbackServer, servers, true);
+                } else if (activeServer) {
+                  onSelectServer(activeServer, servers, true);
+                }
+              }}
+            />
           )
         )}
       </div>
@@ -276,54 +278,72 @@ export default function PlayerOverlayPortal({
                 >
                   Subtitled (SUB)
                 </button>
-                <button
-                  disabled={dubServers.length === 0}
-                  onClick={() => dubServers.length > 0 && onAudioTrackChange('dub')}
-                  style={{
-                    flex: 1,
-                    padding: '5px 0',
-                    border: 'none',
-                    background: 'transparent',
-                    position: 'relative',
-                    zIndex: 1,
-                    color: dubServers.length === 0 ? 'rgba(255,255,255,0.25)' : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
-                    fontSize: 10,
-                    fontWeight: 700,
-                    borderRadius: 20,
-                    transition: 'color 0.25s ease',
-                    opacity: dubServers.length === 0 ? 0.35 : 1,
-                    cursor: dubServers.length === 0 ? 'not-allowed' : 'pointer',
-                    pointerEvents: dubServers.length === 0 ? 'none' : 'auto',
-                  }}
-                >
-                  {dubServers.length === 0 ? 'DUB (No Dub)' : 'Dubbed (DUB)'}
-                </button>
+                {(() => {
+                  const isDubDisabled = dubServers.length === 0 && !loadStream && !extracting;
+                  return (
+                    <button
+                      disabled={isDubDisabled}
+                      onClick={() => !isDubDisabled && onAudioTrackChange('dub')}
+                      style={{
+                        flex: 1,
+                        padding: '5px 0',
+                        border: 'none',
+                        background: 'transparent',
+                        position: 'relative',
+                        zIndex: 1,
+                        color: isDubDisabled ? 'rgba(255,255,255,0.25)' : (audioTrack === 'dub' ? '#fff' : 'var(--text-secondary)'),
+                        fontSize: 10,
+                        fontWeight: 700,
+                        borderRadius: 20,
+                        transition: 'color 0.25s ease, opacity 0.25s ease',
+                        opacity: isDubDisabled ? 0.35 : 1,
+                        cursor: isDubDisabled ? 'not-allowed' : 'pointer',
+                        pointerEvents: isDubDisabled ? 'none' : 'auto',
+                      }}
+                    >
+                      {isDubDisabled ? 'DUB (No Dub)' : (dubServers.length === 0 ? 'DUB (Loading...)' : 'Dubbed (DUB)')}
+                    </button>
+                  );
+                })()}
               </div>
 
               {/* Active Track Server List */}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 60, overflowY: 'auto' }}>
-                {[...(audioTrack === 'sub' ? subServers : dubServers)]
-                  .sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name))
-                  .map((s, idx) => {
-                  const active = (activeName && activeName === s.name) || (activeServer?.name === s.name);
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => onSelectServer(s, servers)}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 20,
-                        background: active ? 'var(--accent)' : 'var(--bg-card)',
-                        border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                        color: active ? '#fff' : 'var(--text-secondary)',
-                        fontSize: 10,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {s.name}
-                    </button>
-                  );
-                })}
+                {(() => {
+                  const rawList = audioTrack === 'sub' ? subServers : dubServers;
+                  const seenNames = new Set();
+                  const uniqueList = [];
+                  for (const s of rawList) {
+                    const norm = (s.name || '').trim().toLowerCase();
+                    if (!seenNames.has(norm)) {
+                      seenNames.add(norm);
+                      uniqueList.push(s);
+                    }
+                  }
+                  return uniqueList
+                    .sort((a, b) => getServerSortPriority(a.name) - getServerSortPriority(b.name))
+                    .map((s) => {
+                      const active = (activeName && activeName.trim().toLowerCase() === (s.name || '').trim().toLowerCase()) ||
+                                     ((activeServer?.name || '').trim().toLowerCase() === (s.name || '').trim().toLowerCase());
+                      return (
+                        <button
+                          key={s.name}
+                          onClick={() => onSelectServer(s, servers)}
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: 20,
+                            background: active ? 'var(--accent)' : 'var(--bg-card)',
+                            border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                            color: active ? '#fff' : 'var(--text-secondary)',
+                            fontSize: 10,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {s.name}
+                        </button>
+                      );
+                    });
+                })()}
               </div>
             </div>
           )}
@@ -359,13 +379,11 @@ export default function PlayerOverlayPortal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {visibleEps.map(n => {
                 const isWatched = prog?.episode > n;
-                const isCurrent = epParam === n;
+                const isCurrent = Number(epParam) === Number(n);
                 return (
                   <div
                     key={n}
                     onClick={() => onEpisodeChange(n)}
-                    onMouseEnter={() => onPrefetchEp?.(n)}
-                    onTouchStart={() => onPrefetchEp?.(n)}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
