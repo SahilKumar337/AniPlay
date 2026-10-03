@@ -18,10 +18,18 @@ android {
     }
     signingConfigs {
         release {
+            def localProperties = new Properties()
+            def localPropertiesFile = rootProject.file('local.properties')
+            if (localPropertiesFile.exists()) {
+                localPropertiesFile.withReader('UTF-8') { reader ->
+                    localProperties.load(reader)
+                }
+            }
+
             storeFile file('release.keystore')
-            storePassword 'anilab123'
-            keyAlias 'anilabkey'
-            keyPassword 'anilab123'
+            storePassword System.getenv("KEYSTORE_PASSWORD") ?: localProperties.getProperty("keystore.password", "")
+            keyAlias System.getenv("KEY_ALIAS") ?: localProperties.getProperty("key.alias", "")
+            keyPassword System.getenv("KEY_PASSWORD") ?: localProperties.getProperty("key.password", "")
             v1SigningEnabled true
             v2SigningEnabled true
         }
