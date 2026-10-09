@@ -3,7 +3,7 @@
  */
 
 export const PROXY = 'https://anilab-backend.onrender.com';
-export const API_KEY = 'shadowloq333-anilab-key';
+export const API_KEY = import.meta.env.VITE_ANILAB_API_KEY || '';
 
 export function formatServerUrl(url) {
   if (!url) return '';
